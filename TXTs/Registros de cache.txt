@@ -1,0 +1,46 @@
+﻿El archivo Register-Cache.c nos muestra exactamente cómo el emulador maneja la asfixia de registros al traducir de MIPS a PowerPC.
+
+
+Efectivamente, la política de desalojo es un algoritmo LRU (Least Recently Used / Menos Recientemente Usado) puro y estricto. Así es como funciona bajo el capó:
+
+
+1. El Reloj Global (nextLRUVal) El emulador mantiene una variable estática llamada nextLRUVal (y nextLRUValFPR para los registros de punto flotante). Cada vez que el traductor pide mapear, leer o reasignar un registro MIPS mediante funciones como mapRegister o mapRegisterNew, el código hace lo siguiente:
+
+
+C
+regMap[gpr].lru = nextLRUVal++;
+
+
+Esto le asigna al registro una "marca de tiempo" (timestamp) secuencial. Como el contador global se incrementa en cada uso, los números más altos siempre representan a los registros que se acaban de utilizar, mientras que los números más bajos quedan atrapados en los registros inactivos.
+
+
+2. La piscina de registros (availableRegsDefault) Antes de desalojar, el emulador intenta usar un registro libre. En availableRegsDefault, el código mapea explícitamente cuáles de los 32 registros del PowerPC le pertenecen al caché:
+
+
+* 0 (Ocupados/Sistemas): r0, r1 (sp), r2, r13, y los registros no volátiles del r14 al r31.
+* * 1 (Libres para el Caché): Solo los registros volátiles y de argumentos del r3 al r12.
+* La función getAvailableHWReg() recorre este arreglo; si encuentra un 1, lo cambia a 0 y entrega ese registro físico sin tocar a los demás.
+
+
+3. El Verdugo: La política LRU (flushLRURegister) Cuando getAvailableHWReg() devuelve -1 (lo que significa que la pequeña piscina de ~10 registros se agotó), el emulador no tiene más opción que sacrificar uno. Llama a flushLRURegister().
+
+
+Esta función recorre el mapa de los 34 registros emulados de MIPS (regMap[34]) y ejecuta una búsqueda lineal básica:
+
+
+C
+int i, lru_i = 0, lru_v = 0x7fffffff; // Inicia con un valor altísimo
+for(i=1; i<34; ++i){
+        if(regMap[i].map.lo >= 0 && regMap[i].lru < lru_v){
+                lru_i = i; lru_v = regMap[i].lru;
+        }
+}
+
+
+Busca el registro MIPS que esté mapeado en ese momento (>= 0) y que tenga el valor de .lru más bajo de todos. Una vez encontrado, ejecuta _flushRegister(lru_i).
+
+
+4. El "Derramamiento" (Spilling) La función _flushRegister es la que hace el trabajo sucio. Checa si el registro MIPS expulsado estaba marcado como "sucio" (dirty == 1). Si lo estaba (es decir, el emulador calculó un nuevo valor para ese registro pero aún no lo ha guardado en la memoria de la N64), el emulador inyecta una instrucción PowerPC GEN_STW (Store Word) para escribir físicamente ese valor desde el registro PowerPC sacrificado hacia la memoria RDRAM emulada (SDAREL(reg) + gpr*8).
+
+
+Finalmente, el registro PowerPC es despojado de su dueño MIPS (regMap[lru_i].map.lo = -1;) y entregado limpio y fresco a la nueva instrucción que lo solicitó.

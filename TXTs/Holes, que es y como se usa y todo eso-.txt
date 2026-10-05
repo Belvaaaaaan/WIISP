@@ -1,0 +1,21 @@
+﻿su verdadero propósito arquitectónico se revela en Recompile.c.
+
+
+En el contexto de este emulador, los "holes" (agujeros) se utilizan para resolver el problema de la superposición de funciones (overlapping functions). En los juegos de N64, a veces el código salta hacia la mitad de una función que el emulador ya había traducido previamente, o viceversa, creando bloques de código que se "tragan" a otros.
+
+
+Analizando el archivo Recompile.c, así es exactamente como se usa la estructura PowerPC_func_hole_node:
+
+
+1. Detección y creación de "Agujeros" (handle_overlap) Dentro de la función recompile_block, existe una rutina llamada handle_overlap que escanea el árbol de funciones compiladas buscando choques de direcciones. Se usa de dos formas principales:
+
+
+* Si una función vieja queda atrapada dentro de la nueva: Si el bloque que se está traduciendo actualmente (func) cubre completamente a una función que ya existía ((*node)->function), la función vieja se convierte en un "agujero" dentro de la nueva. El emulador reserva memoria (malloc(sizeof(PowerPC_func_hole_node))), guarda la dirección de inicio de la función vieja en hole->addr y añade este nodo a la lista func->holes. Además, fusiona cualquier agujero que la función vieja ya tuviera hacia la nueva, y manda la función vieja a la lista de basura (freed_funcs) para liberar su caché.
+* * Si la función nueva es solo un pedazo de una vieja: Si el código que se intenta compilar resulta estar contenido enteramente dentro de los límites de una función ya existente, el emulador invierte los papeles. Convierte la función nueva en un nodo hole, la inserta en la lista holes de la función vieja, y procede a re-compilar el bloque exterior grande para incorporar este nuevo camino.
+* 2. Forzar puntos de entrada seguros (isJmpDst) Este es el uso más crítico. Una vez que se han procesado las superposiciones, y justo antes de empezar a traducir instrucción por instrucción, el emulador recorre toda la lista enlazada func->holes.
+
+
+* Por cada hole que encuentra, toma su dirección (hole->addr) y la marca como un destino de salto válido en el arreglo temporal mediante isJmpDst[ (hole->addr&0xfff) >> 2 ] = 1;.
+* * Esto obliga al bucle principal de traducción a invocar start_new_mapping() justo en esa dirección. Físicamente, esto garantiza que el recompilador genere un estado de registros limpio en ese punto exacto, permitiendo que el juego pueda saltar sin problemas hacia la mitad del bloque recompilado sin corromper el contexto del PowerPC.
+* 3. Ajuste de memoria dinámica (Reasignación) Al final de recompile_block, el emulador revisa si el bloque actual ya tenía memoria asignada comprobando if(!func->code). Si la condición es falsa (es decir, en el else), el emulador deduce que "estamos recompilando desde un agujero" (We're recompiling from a hole), lo que significa que un bloque viejo se está expandiendo. En lugar de pedir memoria nueva desde cero, utiliza la función RecompCache_Realloc para estirar el buffer de memoria existente y hacer que quepan todas las instrucciones nuevas junto con las antiguas.
+*

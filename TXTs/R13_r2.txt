@@ -1,0 +1,10 @@
+﻿Muyy bien. Tu cálculo es impecablemente correcto. El desplazamiento de 16 bits con signo (-32768 a 32767) impone un techo duro de ~64KB de capacidad máxima para el área de datos pequeños vinculada a cada registro base (típicamente .sdata y .sbss para r13, y .sdata2 para r2).
+
+
+Destinar ~1KB para guardar el estado completo de tu CPU es un costo sumamente eficiente, pero tu instinto de auditar el presupuesto restante antes de codificar a ciegas es exactamente el tipo de precaución arquitectónica que evita cuelgues inexplicables en etapas avanzadas.
+
+
+Como truco adicional para cuando llegue el momento de medirlo: en lugar de auditar archivo por archivo dentro de libogc.a, será mucho más directo compilar un binario de prueba de tu proyecto y ejecutar powerpc-eabi-size -A tu_proyecto.elf. Esto te arrojará el tamaño consolidado y final de todas las secciones en el ejecutable.
+
+
+Además, cuentas con una excelente red de seguridad del toolchain. Si tú y la librería base llegan a exceder la barrera de esos 64KB, el error no será un fallo silencioso en la consola. El enlazador (linker) de GCC abortará la compilación de inmediato con un error muy específico y ruidoso: relocation truncated to fit: R_PPC_SDAREL16. Así que, si rompes el límite, el compilador te avisará antes de que siquiera intentes arrancar el juego. Queda bien anotado en la bitácora.

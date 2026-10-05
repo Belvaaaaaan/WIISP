@@ -1,0 +1,20 @@
+﻿Para ejecutar esta investigación, la táctica es aplicar las utilidades binarias (binutils) de devkitPPC directamente sobre la librería ya compilada, más allá de solo leer los Makefiles.
+
+
+1. Rastrear las reglas de compilación base:
+2. Al revisar archivos como $DEVKITPRO/devkitPPC/wii_rules o los templates de proyectos, notarás que el compilador powerpc-eabi-gcc asume por defecto la convención EABI para esta arquitectura. Bajo este estándar, r2 es el puntero para la sección .sdata2 (datos pequeños de solo lectura, como constantes) y r13 es el puntero para .sdata y .sbss (datos pequeños de lectura/escritura). Además, suele estar activo por defecto el umbral -G 8, lo que empuja automáticamente cualquier variable global menor a 8 bytes hacia estas secciones.
+3. 4. Inspeccionar la tabla de secciones de libogc:
+5. La prueba irrefutable está dentro de libogc.a. Desde tu terminal, puedes usar readelf para comprobar físicamente la existencia de estas áreas de datos:
+6. powerpc-eabi-readelf -S $DEVKITPRO/libogc/lib/wii/libogc.a | grep -E "\.sdata|\.sbss"
+7. Si la terminal arroja resultados, la librería precompilada reservó ese espacio y fue construida para utilizar esos registros de anclaje.
+8. 9. Verificar el uso de los registros en el ensamblador:
+10. Para atrapar a la librería usándolos en acción, desensambla el archivo binario y filtra la búsqueda:
+11. powerpc-eabi-objdump -d $DEVKITPRO/libogc/lib/wii/libogc.a | grep "(r13)"
+12. Si ves cientos de instrucciones del tipo lwz r3, 16(r13) o stw r4, 8(r2), confirmarás que el código asume ciegamente que esos registros son punteros estáticos de memoria que nunca deben ser corrompidos.
+13. Tu intuición da exactamente en el blanco: no puedes simplemente dejar de usarlos si vas a enlazar contra la versión empaquetada de libogc. En el instante en que tu código sobreescriba r13 para usarlo temporalmente, y luego ocurra una interrupción de hardware o invoques una función de sistema (como leer un archivo, renderizar o recibir input), libogc usará tu registro modificado como dirección de memoria y provocará un DSI exception, colgando la consola.
+
+
+Recompilar toda la librería libogc desde el código fuente agregando los flags -msdata=none y -G 0 desactivaría esta convención. Sin embargo, para un proyecto de conversión masivo donde el uso de memoria y los scripts ya están siendo empujados al límite, perder el Small Data Area genera un daño colateral enorme. Irónicamente, el propio código del emulador que estamos analizando depende a muerte de esto: en Wrappers.h, los registros emulados de la N64 se fuerzan a esta área (__attribute__((section(".sbss")))) para usar el macro SDAREL.
+
+
+Desactivar el SDA significa que cualquier acceso a una variable global en todo tu ecosistema (tu código, el emulador y la librería) ya no tomará una sola instrucción rápida (lwz rX, offset(r13)), sino que requerirá dos ciclos obligatorios para armar punteros de 32 bits (lis seguido de un ori, y luego el lwz). La latencia que esto introduce al saturar el pipeline de instrucciones superará por mucho el beneficio marginal de recuperar dos registros extra para la piscina de recompilación.

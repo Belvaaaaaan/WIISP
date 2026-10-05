@@ -1,0 +1,42 @@
+﻿Recompile.c. 
+¿Cómo deciden dónde termina un bloque? La decisión se toma durante una etapa de pre-análisis llamada pass0, la cual escanea el código MIPS para determinar las direcciones y los límites del bloque actual. Un bloque termina por una de estas dos razones principales:
+
+
+1. Al encontrar un salto incondicional terminal (en saltos específicos): El bloque se corta prematuramente si el escaneo encuentra un salto incondicional normal (MIPS_OPCODE_J), un salto a un registro (MIPS_FUNC_JR) o un retorno de excepción (MIPS_FUNC_ERET). En estos casos, el re-compilador no detiene el bloque inmediatamente en la instrucción de salto, sino que procesa esa instrucción y la que le sigue de inmediato (conocida como el delay slot), y justo después termina el bloque. Los demás saltos condicionales (como branches o Jump and Link JAL) no terminan el bloque, simplemente se registran.
+2. 3. Al alcanzar el límite máximo de la memoria del bloque (cada N instrucciones): Si en el código no se encuentra ninguna de las instrucciones terminales mencionadas anteriormente, la compilación del bloque continuará hasta llegar al final de su límite de memoria asignado. Dentro de la estructura del re-compilador, esto equivale a un límite fijo máximo de 1024 instrucciones MIPS procesadas.
+4. ¿Cómo puedes verificar esta información en el archivo? Puedes comprobar todo esto revisando directamente el código fuente de la función estática pass0:
+
+
+* Observa el bucle principal for(src = src_first; (pc < addr_last >> 2); ++src, ++pc) que se encarga de iterar sobre las instrucciones a lo largo de todo el bloque.
+* * Busca las sentencias break; dentro de las condicionales de ese bucle. Verás que el código rompe el bucle explícitamente cuando ocurre el MIPS_OPCODE_J, cuando func == MIPS_FUNC_JR o cuando func == MIPS_FUNC_ERET.
+* * Antes de ejecutar dichos break, notarás que el código incrementa los punteros usando ++src, ++pc;. Esta es la prueba de que se incluye explícitamente una instrucción adicional para empacar el delay slot antes de cortar el bloque definitivamente.
+* * Al final de la función pass0, fíjate en la evaluación lógica if(pc < addr_last >> 2) que sirve para saber cómo fue que terminó el escaneo. Si el bucle se interrumpió antes de tiempo por un salto (break), ajusta la dirección final del bloque (addr_last = pc << 2) y devuelve 0 indicando que el bloque está completo y no requiere relleno.
+* * Por otro lado, en la parte del else al final de pass0, verás que si el bucle no fue interrumpido, el límite se fuerza al máximo de 1024 instrucciones (src_last = ppc_block->mips_code + 1024) y devuelve 1, lo que indica a la función superior (recompile_block) que será necesario inyectar un "jump pad" (genJumpPad()) para conectar la ejecución con el siguiente bloque de memoria.
+MIPS-TO-PPC
+Para resolver el problema de asignar los 32 registros de 64 bits del procesador MIPS a los limitados registros de 32 bits del PowerPC, el emulador no utiliza una asignación estática uno a uno, sino un sistema dinámico de Caché de Registros (Register-Cache.h).
+
+
+Al revisar el archivo MIPS-to-PPC.c, se pueden identificar las siguientes estrategias exactas que conforman la solución a este rompecabezas:
+
+
+* Asignación dinámica "Bajo Demanda": El traductor utiliza funciones como mapRegister y mapRegisterNew para solicitar al sistema de caché un registro PowerPC que sirva temporalmente para representar un registro MIPS justo en el momento en que la instrucción actual lo requiere.
+* * División de registros de 64 bits a 32 bits: Como las operaciones del N64 son de 64 bits y el PowerPC de Wii es de 32 bits, las instrucciones más pesadas (como DADDIU o LD) llaman a la función mapRegister64. Esta función devuelve una estructura (RegMapping) que se apropia de un par de registros PowerPC para simular la mitad alta (.hi) y la mitad baja (.lo) del registro MIPS original.
+* * Ahorro de registros en operaciones de 32 bits: Para evitar desperdiciar registros PowerPC, el emulador revisa constantemente el estado actual de los mismos mediante getRegisterMapping(_rs) == MAPPING_32. Si detecta que los registros operandos ya están mapeados como de 32 bits, ejecuta únicamente las instrucciones de 32 bits usando mapRegister y omite toda la lógica y el gasto de registros de la mitad alta de 64 bits.
+* * Seguimiento y propagación de Constantes: Para no gastar valiosos registros PowerPC almacenando valores estáticos temporales, el compilador rastrea si un registro MIPS contiene una constante utilizando las funciones isRegisterConstant, mapConstantNew y setRegisterConstant. Si los datos ya son conocidos, el re-compilador procesa la matemática internamente durante la conversión de la instrucción y actualiza el valor constante en lugar de generar costosas instrucciones aritméticas extra para el PowerPC.
+* * Préstamo de registros temporales o fijos: En rutinas sumamente complejas que requieren múltiples pasos matemáticos simultáneos, como los accesos asimétricos a memoria (LWL, LWR, LDL), el código solicita registros temporales "basura" mediante mapRegisterTemp y los devuelve apenas un par de líneas después con unmapRegisterTemp. En otros casos muy particulares de la arquitectura, puede fijar variables al registro específico R3 utilizando mapRegisterFixed(R3).
+* * Vaciado (Flushing) e invalidación de caché: Los registros PowerPC se reciclan constantemente a medida que se saturan. Antes de enfrentarse a saltos de código, cambios de contexto o de bloque, el emulador invoca flushRegisters(). Esta acción derrama (guarda) forzosamente los valores que residen en los registros físicos de vuelta hacia las estructuras de memoria del procesador emulado. Posteriormente, llama a rutinas como invalidateRegisters() e invalidateConstants() para borrar el caché y permitir que todos los registros del PowerPC estén libres y disponibles para ser reasignados nuevamente en el siguiente flujo del código.
+
+
+
+
+branch delay slot 
+Durante la traducción (recompilación), el emulador resuelve el "branch delay slot" alterando el orden físico del código generado: traduce la instrucción del delay slot antes de emitir la propia instrucción de salto.
+
+
+Aunque el archivo disasm.c proporcionado es estrictamente un desensamblador para imprimir las instrucciones en texto, el motor de recompilación (MIPS-to-PPC.c) revela la lógica exacta con la que manejan este problema arquitectónico:
+
+
+* Inspección anticipada (check_delaySlot): Justo en el momento en que se va a compilar una instrucción de salto (jump o branch), el traductor detiene el proceso y revisa cuál es la siguiente instrucción MIPS usando peek_next_src().
+* * Eliminación de NOPs: Si detecta que la instrucción en el delay slot es un NOP (operación vacía), el traductor simplemente la descarta consumiéndola mediante get_next_src() y continúa sin generar ningún código adicional para ella.
+* * Inversión del orden de traducción: Si la instrucción en el delay slot es válida, el traductor invoca recursivamente la función convert(). Esto fuerza a que la instrucción del delay slot sea procesada, convertida y empaquetada en el PowerPC físicamente por delante del código que evalúa y ejecuta el salto condicional o incondicional.
+* * Manejo de saltos cruzados (is_j_dst): Tras generar la instrucción de salto, el traductor verifica si el "delay slot" original es a su vez el punto de aterrizaje de otro salto distinto en el código. Si este es el caso, utiliza unget_last_src() para regresar la instrucción al flujo de lectura y así re-compilarla de nuevo en su lugar original. Para evitar que la instrucción adelantada y la original se ejecuten dos veces, inyecta un salto de desvío extra en el PowerPC (GEN_B) diseñado para "saltarse" el delay slot si la rama actual no se toma.

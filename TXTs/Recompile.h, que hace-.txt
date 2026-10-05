@@ -1,0 +1,25 @@
+﻿No, definitivamente no son lo mismo. En el lenguaje C, ambos archivos conforman el patrón clásico de separar la "interfaz" de la "implementación". Al estructurar código fuente para realizar ports y adaptaciones de software complejas hacia consolas como la Wii, organizar el código mediante esta separación es fundamental para que diferentes partes del motor se comuniquen sin conflictos de memoria ni dependencias cíclicas.
+
+
+En qué se diferencian conceptualmente:
+
+
+* El archivo .h (Header / Cabecera) es el plano estructural. Declara qué existe y qué forma tiene (tipos de datos, definiciones de estructuras, nombres de funciones), pero no procesa ni ejecuta ninguna lógica real.
+* * El archivo .c (Source / Código Fuente) es la maquinaria. Contiene la lógica ejecutable; toma las estructuras definidas en la cabecera y define cómo funciona internamente el proceso paso a paso.
+* Aquí te explico cómo actúa cada uno específicamente en este subsistema de recompilación:
+
+
+Cómo actúa Recompile.h (El Plano):
+
+
+* Diseña la arquitectura de memoria: Define explícitamente la forma y tamaño de las estructuras vitales del emulador, tales como PowerPC_block (la cual agrupa el código MIPS, las direcciones de memoria y los árboles de funciones) y PowerPC_func (que contiene el código traducido y sus listas de enlaces).
+* * Estructura las interconexiones: Declara tipos de datos orientados a objetos, como nodos de árboles binarios de búsqueda (PowerPC_func_node) y listas enlazadas (PowerPC_func_link_node y hole_node), los cuales son esenciales para que el emulador organice jerárquicamente dónde residen los bloques de memoria.
+* * Establece contratos públicos: Proporciona los prototipos o "firmas" de las funciones (por ejemplo, recompile_block, init_block y get_next_src). Esto permite que otros archivos del proyecto puedan llamar a estas funciones sin necesitar saber cómo están programadas por dentro.
+* * Define constantes universales: Utiliza macros (#define) para establecer límites fijos en el recompilador, indicando que MAX_JUMPS equivale a 4096, y categoriza los tipos de saltos (JUMP_TYPE_J, JUMP_TYPE_CALL, JUMP_TYPE_SPEC).
+* Cómo actúa Recompile.c (La Maquinaria):
+
+
+* Ejecuta el trabajo pesado: Es donde la función recompile_block (previamente prototipada en el .h) realmente cobra vida. Aquí se reserva dinámicamente la memoria para las estructuras (usando calloc y malloc), se detectan superposiciones de funciones y se itera sobre las instrucciones iterando el puntero src.
+* * Mantiene el estado oculto (Privacidad): En este archivo se instancian variables globales que son de uso exclusivo del recompilador y están marcadas como static (como jump_table, code_buffer y los punteros src y dst). Como estas variables y arreglos no están en Recompile.h, el resto del emulador no puede verlas ni corromperlas.
+* * Implementa rutinas secretas: Contiene la lógica de sub-rutinas críticas como pass0 (que escanea los bloques en busca de ramas locales) y pass2 (que rellena matemáticamente las direcciones de salto definitivas en las instrucciones del PowerPC). Estas funciones son internas al archivo .c y ni siquiera se mencionan en el .h porque solo le conciernen a la mecánica interna de la traducción.
+*
