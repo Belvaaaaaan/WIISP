@@ -21,8 +21,50 @@ void *plat_alloc_big(size_t size);
 /* Reserva la memoria de la PSP (32 MB de RAM). 0 = correcto. */
 int  app_init(void);
 
+/* 0 = no imprimir el resumen del módulo (para comparar salidas de tests) */
+void app_set_verbose(int verbose);
+
 /* Carga un EBOOT.PBP / ELF / PRX, imprime su resumen y lo deja en la
-   memoria emulada. max_imports < 0 = listar todos. 0 = correcto. */
-int  app_load(const char *path, int max_imports);
+   memoria emulada. max_imports < 0 = listar todos.
+   imports_out: si no es NULL, ahí se escribe el informe de imports.
+   0 = correcto. */
+int  app_load(const char *path, int max_imports, const char *imports_out);
+
+/* Prepara la ejecución del programa cargado. 0 = correcto. */
+int  app_start(void);
+
+/* Ejecuta un frame (hasta el siguiente vblank). Devuelve 1 si el programa
+   terminó. */
+int  app_run_frame(void);
+const char *app_exit_reason(void);
+
+/* Salida de texto del programa emulado */
+typedef void (*AppOutputFunc)(const char *text, unsigned len);
+void app_set_output(AppOutputFunc func);
+
+/* Mandos en formato PSP (ver APP_BTN_*) y stick analógico (0-255) */
+void app_set_input(unsigned buttons, unsigned char lx, unsigned char ly);
+
+#define APP_BTN_SELECT   0x000001u
+#define APP_BTN_START    0x000008u
+#define APP_BTN_UP       0x000010u
+#define APP_BTN_RIGHT    0x000020u
+#define APP_BTN_DOWN     0x000040u
+#define APP_BTN_LEFT     0x000080u
+#define APP_BTN_LTRIGGER 0x000100u
+#define APP_BTN_RTRIGGER 0x000200u
+#define APP_BTN_TRIANGLE 0x001000u
+#define APP_BTN_CIRCLE   0x002000u
+#define APP_BTN_CROSS    0x004000u
+#define APP_BTN_SQUARE   0x008000u
+#define APP_BTN_HOME     0x010000u
+
+/* Framebuffer actual de la PSP, en su memoria (little-endian).
+   format: 0 = RGB565, 1 = RGBA5551, 2 = RGBA4444, 3 = RGBA8888.
+   Devuelve NULL si el programa no ha configurado ninguno. */
+const unsigned char *app_get_framebuffer(unsigned *stride, unsigned *format);
+
+#define APP_SCREEN_W 480
+#define APP_SCREEN_H 272
 
 #endif

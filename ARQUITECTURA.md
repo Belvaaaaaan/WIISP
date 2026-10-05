@@ -54,12 +54,15 @@ Estructura del repositorio:
 |---|---|
 | `src/core/` | Tipos, acceso little-endian y mapa de memoria de la PSP |
 | `src/loader/` | PBP, PARAM.SFO, ELF/PRX (relocalizaciones e imports) |
+| `src/cpu/` | Intérprete del Allegrex (enteros y FPU; la VFPU, pendiente) |
+| `src/hle/` | HLE: syscalls por NID, hilos, sincronización, memoria, E/S, display, mandos |
+| `tools/` | Generador de la tabla de NIDs a partir del PSPSDK |
 | `src/frontend/` | Lógica común a todas las plataformas (`app.c`) |
 | `src/wii/` | Frontend del Wii (libogc). Es el único sitio con `#include <gccore.h>` |
 | `src/host/` | CLI de PC para depurar sin la consola |
 | `tests/` | Pruebas unitarias (x86 con sanitizers y PowerPC big-endian con qemu) |
 | `Archivos de Not64/`, `TXTs/` | Material de referencia (código de Wii64/Not64 y notas de investigación) |
-| `src/cpu/`, `src/hle/`, `src/gpu/`, `src/audio/` | Fases siguientes |
+| `src/gpu/`, `src/audio/` | Fases siguientes |
 
 Regla de oro: **el núcleo no sabe que existe el Wii.** Todo lo que no sea
 `src/wii/` compila y se prueba en PC. Eso nos da depuración rápida, sanitizers
@@ -237,14 +240,39 @@ porta entero: su consumo de memoria no cabe en el Wii.
 | Fase | Objetivo | Estado |
 |---|---|---|
 | 1 | Esqueleto devkitPPC/libogc, mapa de memoria, cargador PBP/SFO/ELF/PRX con relocalizaciones e imports parcheados, CLI de PC, pruebas en x86 y PPC big-endian, CI | ✅ |
-| 2 | Intérprete Allegrex completo (sin VFPU), HLE mínimo (hilos, archivos, display, ctrl), framebuffer de la PSP mostrado tal cual en el Wii | ⏳ |
-| 3 | Correr los *samples* del PSPSDK y homebrew sencillo | |
+| 2 | Intérprete Allegrex completo (sin VFPU), HLE mínimo (hilos, archivos, display, ctrl), framebuffer de la PSP mostrado tal cual en el Wii | ✅ |
+| 3 | Correr los *samples* del PSPSDK y homebrew sencillo; ampliar el HLE guiado por pspautotests e imports.txt | ⏳ |
 | 4 | GE → GX básico (primitivas, texturas, caché de texturas) | |
 | 5 | Dynarec basado en Not64, validado contra el intérprete | |
 | 6 | VFPU con paired singles, skinning, audio (sceAudio, Atrac3+) | |
 | 7 | ISO/CSO, descifrado, compatibilidad con juegos comerciales, menú | |
 
-## 9. Convenciones
+## 9. Metodología de pruebas
+
+1. **Primero en PC, después en el Wii.** Todo se desarrolla con el CLI
+   (`wiisp-cli --run`), que usa exactamente el mismo núcleo. El Wii confirma
+   cada hito.
+2. **pspautotests** (https://github.com/hrydgard/pspautotests): cientos de
+   programas de PSP con la salida que dan en una PSP real (`.expected`).
+   `tests/autotests.py` los ejecuta y compara. `tests/autotests_pass.txt`
+   lista los que ya pasan: CI falla si alguno deja de pasar (en x86 y en
+   PowerPC big-endian con qemu). Cada test que se arregla se añade a la lista.
+3. **imports.txt**: al cargar un juego, WIISP escribe junto al EBOOT la lista
+   de funciones del firmware que usa, con su nombre y si ya está
+   implementada. Es la lista de tareas del HLE por juego.
+4. **Log de NIDs sin implementar**: al ejecutarse, cada función que falta se
+   avisa una vez (`[HLE] sin implementar: ...`) y devuelve 0.
+5. **Los NIDs no se escriben a mano**: las funciones HLE se registran por
+   nombre y `tools/gen_nids.py` genera la tabla NID → nombre desde los stubs
+   del PSPSDK.
+
+Estado de la fase 2 (comprobado con pspautotests): CPU entera y saltos,
+división, carga/almacenamiento, ll/sc, FPU básica (sin flags IEEE, modos de
+redondeo ni anulación de denormales), hilos, semáforos, event flags, malloc
+y string. Faltan: VFPU, callbacks, alarmas, mutex, mailboxes, message pipes,
+FPL/VPL, sceIoDopen y la mayoría de módulos de sistema.
+
+## 10. Convenciones
 
 - C (`gnu11`), sin dependencias más allá de libogc/libfat en el Wii.
 - Comentarios en español. El texto que se muestra en la consola del Wii va
@@ -256,7 +284,7 @@ porta entero: su consumo de memoria no cabe en el Wii.
 - Cada cambio del núcleo se prueba en x86 **y** en PowerPC big-endian
   (`make -f Makefile.pc test test-ppc`). CI lo hace en cada push.
 
-## 10. Licencia y créditos
+## 11. Licencia y créditos
 
 WIISP se distribuye bajo **GPLv2 o posterior** (ver `LICENSE`). Esto nos
 permite reutilizar:
@@ -265,10 +293,13 @@ permite reutilizar:
   dynarec MIPS→PPC.
 - **PPSSPP**, © Henrik Rydgård y colaboradores (GPLv2+): referencia de HLE,
   formatos y comportamiento.
+- **PSPSDK** (pspdev, licencia BSD): los nombres de NIDs de
+  `src/hle/nid_names.c` se generan desde sus stubs.
+- **pspautotests**: banco de pruebas (se descarga aparte, no se incluye).
 
 El código derivado de ambos conserva sus avisos de copyright originales.
 
-## 11. Riesgos conocidos
+## 12. Riesgos conocidos
 
 - **VFPU y CPU en juegos 3D pesados:** el margen de 2,2× es justo. Hay que
   medir pronto con homebrew 3D en hardware real.

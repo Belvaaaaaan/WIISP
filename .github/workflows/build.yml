@@ -18,6 +18,18 @@ jobs:
         run: make -f Makefile.pc test
       - name: Pruebas en PowerPC big-endian (qemu)
         run: make -f Makefile.pc test-ppc
+      - name: Descargar pspautotests
+        run: |
+          git clone -q https://github.com/hrydgard/pspautotests ../pspautotests
+          git -C ../pspautotests checkout -q f93c29855718a587360976e793f5b41a88ef7e68
+      - name: pspautotests en x86
+        run: |
+          make -f Makefile.pc all
+          python3 tests/autotests.py ../pspautotests --list tests/autotests_pass.txt
+      - name: pspautotests en PowerPC big-endian (qemu)
+        run: |
+          make -f Makefile.pc cli-ppc
+          WIISP_CLI="qemu-ppc build-pc/wiisp-cli-ppc" python3 tests/autotests.py ../pspautotests --list tests/autotests_pass.txt
       - name: CLI de PC y EBOOT.PBP de prueba
         run: |
           make -f Makefile.pc all eboot

@@ -3,6 +3,7 @@
 #   make -f Makefile.pc            -> build-pc/wiisp-cli
 #   make -f Makefile.pc test       -> pruebas unitarias (con sanitizers)
 #   make -f Makefile.pc eboot      -> build-pc/EBOOT.PBP de prueba (sintético)
+#   make -f Makefile.pc cli-ppc    -> CLI para PowerPC (con qemu-ppc)
 #   make -f Makefile.pc test-ppc   -> pruebas en PowerPC big-endian (como el
 #                                     Wii) con powerpc-linux-gnu-gcc + qemu-ppc
 
@@ -12,24 +13,24 @@ CFLAGS   ?= -O1 -g
 CFLAGS   += -std=gnu11 -Wall -Wextra -Wno-unused-parameter -Isrc
 SANITIZE ?= -fsanitize=address,undefined -fno-omit-frame-pointer
 
-CORE_SRC := $(wildcard src/core/*.c) $(wildcard src/loader/*.c)
+CORE_SRC := $(wildcard src/core/*.c) $(wildcard src/loader/*.c) $(wildcard src/cpu/*.c) $(wildcard src/hle/*.c)
 CLI_SRC  := $(CORE_SRC) src/frontend/app.c src/host/main.c
 TEST_SRC := $(CORE_SRC) $(wildcard tests/*.c)
 
 PPC_CC   ?= powerpc-linux-gnu-gcc
 QEMU_PPC ?= qemu-ppc
 
-.PHONY: all test test-ppc eboot clean
+.PHONY: all test test-ppc eboot cli-ppc clean
 
 all: $(OUT)/wiisp-cli
 
 $(OUT)/wiisp-cli: $(CLI_SRC) $(wildcard src/*/*.h)
 	@mkdir -p $(OUT)
-	$(CC) $(CFLAGS) -o $@ $(CLI_SRC)
+	$(CC) $(CFLAGS) -o $@ $(CLI_SRC) -lm
 
 $(OUT)/tests: $(TEST_SRC) $(wildcard src/*/*.h tests/*.h)
 	@mkdir -p $(OUT)
-	$(CC) $(CFLAGS) $(SANITIZE) -o $@ $(TEST_SRC)
+	$(CC) $(CFLAGS) $(SANITIZE) -o $@ $(TEST_SRC) -lm
 
 test: $(OUT)/tests
 	./$(OUT)/tests
@@ -39,7 +40,14 @@ eboot: $(OUT)/tests
 
 $(OUT)/tests-ppc: $(TEST_SRC) $(wildcard src/*/*.h tests/*.h)
 	@mkdir -p $(OUT)
-	$(PPC_CC) -O2 -std=gnu11 -Wall -Wextra -Wno-unused-parameter -Isrc -static -o $@ $(TEST_SRC)
+	$(PPC_CC) -O2 -std=gnu11 -Wall -Wextra -Wno-unused-parameter -Isrc -static -o $@ $(TEST_SRC) -lm
+
+# CLI para PowerPC big-endian (se ejecuta con qemu-ppc)
+cli-ppc: $(OUT)/wiisp-cli-ppc
+
+$(OUT)/wiisp-cli-ppc: $(CLI_SRC) $(wildcard src/*/*.h)
+	@mkdir -p $(OUT)
+	$(PPC_CC) -O2 -std=gnu11 -Wall -Wextra -Wno-unused-parameter -Isrc -static -o $@ $(CLI_SRC) -lm
 
 test-ppc: $(OUT)/tests-ppc
 	$(QEMU_PPC) ./$(OUT)/tests-ppc

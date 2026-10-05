@@ -30,6 +30,7 @@
 #define R_MIPS_26      4
 #define R_MIPS_HI16    5
 #define R_MIPS_LO16    6
+#define R_MIPS_GPREL16 7
 
 #define MODINFO_SIZE  52
 #define MAX_SEGMENTS  32
@@ -136,6 +137,11 @@ static int apply_relocs(const Elf *e, const u8 *rel, u32 count, PspModule *mod){
 
 		switch(type){
 		case R_MIPS_NONE:
+			continue;
+		case R_MIPS_GPREL16:
+			/* Relativa a gp: el módulo se mueve entero (gp incluido), así
+			   que el desplazamiento no cambia. */
+			mod->num_relocs++;
 			continue;
 		case R_MIPS_32:
 			word += relocate_to;

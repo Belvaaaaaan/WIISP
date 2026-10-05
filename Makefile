@@ -15,7 +15,7 @@ include $(DEVKITPPC)/wii_rules
 #---------------------------------------------------------------------------------
 TARGET		:=	wiisp
 BUILD		:=	build
-SOURCES		:=	src/core src/loader src/frontend src/wii
+SOURCES		:=	src/core src/loader src/cpu src/hle src/frontend src/wii
 INCLUDES	:=	src
 
 #---------------------------------------------------------------------------------

@@ -2,8 +2,8 @@
 <app version="1">
   <name>WIISP</name>
   <coder>Belvaaaaaan</coder>
-  <version>0.0.1</version>
+  <version>0.0.2</version>
   <short_description>Emulador de PSP para Wii</short_description>
-  <long_description>Emulador de PSP en desarrollo. Paso 1: carga EBOOT.PBP desde sd:/apps/wiisp/ y muestra su informacion.</long_description>
+  <long_description>Emulador de PSP en desarrollo. Fase 2: carga EBOOT.PBP desde sd:/apps/wiisp/, escribe imports.txt y lo ejecuta con el interprete (sin graficos 3D todavia).</long_description>
   <ahb_access/>
 </app>
