@@ -4,6 +4,6 @@
   <coder>Belvaaaaaan</coder>
   <version>0.0.1</version>
   <short_description>Emulador de PSP para Wii</short_description>
-  <long_description>Emulador de PSP en desarrollo. Paso 1: carga EBOOT.PBP desde sd:/wiisp/ y muestra su informacion.</long_description>
+  <long_description>Emulador de PSP en desarrollo. Paso 1: carga EBOOT.PBP desde sd:/apps/wiisp/ y muestra su informacion.</long_description>
   <ahb_access/>
 </app>

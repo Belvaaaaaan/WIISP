@@ -2,6 +2,7 @@
 #
 #   make -f Makefile.pc            -> build-pc/wiisp-cli
 #   make -f Makefile.pc test       -> pruebas unitarias (con sanitizers)
+#   make -f Makefile.pc eboot      -> build-pc/EBOOT.PBP de prueba (sintético)
 #   make -f Makefile.pc test-ppc   -> pruebas en PowerPC big-endian (como el
 #                                     Wii) con powerpc-linux-gnu-gcc + qemu-ppc
 
@@ -18,7 +19,7 @@ TEST_SRC := $(CORE_SRC) $(wildcard tests/*.c)
 PPC_CC   ?= powerpc-linux-gnu-gcc
 QEMU_PPC ?= qemu-ppc
 
-.PHONY: all test test-ppc clean
+.PHONY: all test test-ppc eboot clean
 
 all: $(OUT)/wiisp-cli
 
@@ -32,6 +33,9 @@ $(OUT)/tests: $(TEST_SRC) $(wildcard src/*/*.h tests/*.h)
 
 test: $(OUT)/tests
 	./$(OUT)/tests
+
+eboot: $(OUT)/tests
+	./$(OUT)/tests --write-pbp $(OUT)/EBOOT.PBP
 
 $(OUT)/tests-ppc: $(TEST_SRC) $(wildcard src/*/*.h tests/*.h)
 	@mkdir -p $(OUT)

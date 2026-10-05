@@ -18,17 +18,28 @@ jobs:
         run: make -f Makefile.pc test
       - name: Pruebas en PowerPC big-endian (qemu)
         run: make -f Makefile.pc test-ppc
-      - name: CLI de PC
-        run: make -f Makefile.pc
+      - name: CLI de PC y EBOOT.PBP de prueba
+        run: |
+          make -f Makefile.pc all eboot
+          ./build-pc/wiisp-cli build-pc/EBOOT.PBP
+      - uses: actions/upload-artifact@v4
+        with:
+          name: eboot-prueba
+          path: build-pc/EBOOT.PBP
 
   wii:
     name: Wii (.dol)
+    needs: tests
     runs-on: ubuntu-24.04
     container: devkitpro/devkitppc:latest
     steps:
       - uses: actions/checkout@v4
       - name: Compilar
         run: make -j2 dist
+      - uses: actions/download-artifact@v4
+        with:
+          name: eboot-prueba
+          path: dist/apps/wiisp
       - uses: actions/upload-artifact@v4
         with:
           name: wiisp-wii

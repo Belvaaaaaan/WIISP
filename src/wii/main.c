@@ -2,15 +2,17 @@
  * WIISP - wii/main.c
  * Frontend del Wii: consola de texto, SD/USB y Wiimote/mando de GameCube.
  *
- * Paso 1 del plan: carga un EBOOT.PBP y muestra su información. Ruta:
- *   - el primer argumento si el Homebrew Channel nos pasa uno, o
- *   - sd:/wiisp/EBOOT.PBP, o usb:/wiisp/EBOOT.PBP
+ * Paso 1 del plan: carga un EBOOT.PBP y muestra su información. Se busca en:
+ *   - el primer argumento, si el Homebrew Channel nos pasa uno
+ *   - la carpeta del propio boot.dol (p. ej. sd:/apps/wiisp/EBOOT.PBP)
+ *   - sd:/apps/wiisp/, usb:/apps/wiisp/, sd:/wiisp/ y usb:/wiisp/
  *
  * SPDX-License-Identifier: GPL-2.0-or-later
 **/
 
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 #include <unistd.h>
 #include <gccore.h>
 #include <fat.h>
@@ -65,9 +67,12 @@ static void wait_for_exit(void){
 
 int main(int argc, char **argv){
 	static const char *const default_paths[] = {
+		"sd:/apps/wiisp/EBOOT.PBP",
+		"usb:/apps/wiisp/EBOOT.PBP",
 		"sd:/wiisp/EBOOT.PBP",
 		"usb:/wiisp/EBOOT.PBP",
 	};
+	static char app_dir_path[256];
 	const char *path = NULL;
 	unsigned i;
 
@@ -88,11 +93,27 @@ int main(int argc, char **argv){
 	}
 
 	if(argc > 1 && argv[1] && file_exists(argv[1])) path = argv[1];
+
+	/* argv[0] es la ruta del boot.dol, p. ej. "sd:/apps/wiisp/boot.dol" */
+	if(!path && argc > 0 && argv[0]){
+		const char *slash = strrchr(argv[0], '/');
+		int dir_len = slash ? (int)(slash - argv[0]) : -1;
+		if(dir_len > 0 && dir_len < (int)sizeof(app_dir_path) - 12){
+			snprintf(app_dir_path, sizeof(app_dir_path), "%.*s/EBOOT.PBP", dir_len, argv[0]);
+			if(file_exists(app_dir_path)) path = app_dir_path;
+		}
+	}
+
 	for(i = 0; !path && i < sizeof(default_paths) / sizeof(default_paths[0]); i++)
 		if(file_exists(default_paths[i])) path = default_paths[i];
 
 	if(path) app_load(path, 12);
-	else printf("No se encontro EBOOT.PBP. Copialo a sd:/wiisp/EBOOT.PBP\n");
+	else {
+		printf("No se encontro EBOOT.PBP. Rutas probadas:\n");
+		if(app_dir_path[0]) printf("  %s\n", app_dir_path);
+		for(i = 0; i < sizeof(default_paths) / sizeof(default_paths[0]); i++)
+			printf("  %s\n", default_paths[i]);
+	}
 
 	wait_for_exit();
 	return 0;

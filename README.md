@@ -20,8 +20,12 @@ y libogc (paquete `wii-dev`).
 make dist
 ```
 
-Copia `dist/apps` a la raíz de la SD y tu homebrew de PSP a
-`sd:/wiisp/EBOOT.PBP`. Después abre WIISP desde el Homebrew Channel.
+Copia `dist/apps` a la raíz de la SD y pon el `EBOOT.PBP` de un homebrew de PSP
+sin cifrar junto al `boot.dol` (`sd:/apps/wiisp/EBOOT.PBP`). También se busca
+en `sd:/wiisp/` y en USB. Después abre WIISP desde el Homebrew Channel.
+
+El zip de GitHub Actions ya trae un `EBOOT.PBP` de prueba (sintético) en
+`apps/wiisp/` para comprobar que todo funciona.
 
 Cada push también compila el `.dol` en GitHub Actions; se descarga desde la
 pestaña *Actions* (artefacto `wiisp-wii`).

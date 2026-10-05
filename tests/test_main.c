@@ -410,7 +410,28 @@ static void test_robustness(void){
 	mem_reset();
 }
 
-int main(void){
+/* Escribe el PBP de prueba a un archivo, para probar el frontend del Wii
+   con un EBOOT que se sabe válido (make -f Makefile.pc eboot) */
+static int write_test_pbp(const char *path){
+	static Img img;
+	static u8 pbp[0x800];
+	FILE *f;
+	u32 len;
+	int ok;
+
+	build_image(&img, 0);
+	len = build_pbp(pbp, img.file, img.len);
+	f = fopen(path, "wb");
+	if(!f){ perror(path); return 1; }
+	ok = fwrite(pbp, 1, len, f) == len;
+	fclose(f);
+	printf("%s: %u bytes\n", path, len);
+	return ok ? 0 : 1;
+}
+
+int main(int argc, char **argv){
+	if(argc == 3 && !strcmp(argv[1], "--write-pbp")) return write_test_pbp(argv[2]);
+
 	u8 *ram = malloc(PSP_RAM_SIZE_32MB), *vram = malloc(PSP_VRAM_SIZE);
 	u8 *scratch = malloc(PSP_SCRATCH_SIZE);
 
