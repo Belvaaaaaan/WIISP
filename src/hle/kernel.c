@@ -259,8 +259,7 @@ static int add_block(u32 addr, u32 size, const char *name){
 		blocks[i].used = 1;
 		blocks[i].addr = addr;
 		blocks[i].size = size;
-		strncpy(blocks[i].name, name ? name : "", sizeof(blocks[i].name) - 1);
-		blocks[i].name[sizeof(blocks[i].name) - 1] = 0;
+		snprintf(blocks[i].name, sizeof(blocks[i].name), "%s", name ? name : "");
 		return i;
 	}
 	return -1;
