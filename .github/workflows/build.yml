@@ -1,0 +1,35 @@
+name: build
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  tests:
+    name: Pruebas (x86 + PowerPC big-endian)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Instalar compilador PowerPC y qemu
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc-powerpc-linux-gnu libc6-dev-powerpc-cross qemu-user
+      - name: Pruebas en x86 (ASan + UBSan)
+        run: make -f Makefile.pc test
+      - name: Pruebas en PowerPC big-endian (qemu)
+        run: make -f Makefile.pc test-ppc
+      - name: CLI de PC
+        run: make -f Makefile.pc
+
+  wii:
+    name: Wii (.dol)
+    runs-on: ubuntu-24.04
+    container: devkitpro/devkitppc:latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Compilar
+        run: make -j2 dist
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wiisp-wii
+          path: dist/apps

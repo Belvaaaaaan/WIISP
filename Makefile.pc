@@ -1,0 +1,44 @@
+# WIISP - compilación para PC (Linux/macOS/MSYS2), para depurar y probar
+#
+#   make -f Makefile.pc            -> build-pc/wiisp-cli
+#   make -f Makefile.pc test       -> pruebas unitarias (con sanitizers)
+#   make -f Makefile.pc test-ppc   -> pruebas en PowerPC big-endian (como el
+#                                     Wii) con powerpc-linux-gnu-gcc + qemu-ppc
+
+CC       ?= cc
+OUT      ?= build-pc
+CFLAGS   ?= -O1 -g
+CFLAGS   += -std=gnu11 -Wall -Wextra -Wno-unused-parameter -Isrc
+SANITIZE ?= -fsanitize=address,undefined -fno-omit-frame-pointer
+
+CORE_SRC := $(wildcard src/core/*.c) $(wildcard src/loader/*.c)
+CLI_SRC  := $(CORE_SRC) src/frontend/app.c src/host/main.c
+TEST_SRC := $(CORE_SRC) $(wildcard tests/*.c)
+
+PPC_CC   ?= powerpc-linux-gnu-gcc
+QEMU_PPC ?= qemu-ppc
+
+.PHONY: all test test-ppc clean
+
+all: $(OUT)/wiisp-cli
+
+$(OUT)/wiisp-cli: $(CLI_SRC) $(wildcard src/*/*.h)
+	@mkdir -p $(OUT)
+	$(CC) $(CFLAGS) -o $@ $(CLI_SRC)
+
+$(OUT)/tests: $(TEST_SRC) $(wildcard src/*/*.h tests/*.h)
+	@mkdir -p $(OUT)
+	$(CC) $(CFLAGS) $(SANITIZE) -o $@ $(TEST_SRC)
+
+test: $(OUT)/tests
+	./$(OUT)/tests
+
+$(OUT)/tests-ppc: $(TEST_SRC) $(wildcard src/*/*.h tests/*.h)
+	@mkdir -p $(OUT)
+	$(PPC_CC) -O2 -std=gnu11 -Wall -Wextra -Wno-unused-parameter -Isrc -static -o $@ $(TEST_SRC)
+
+test-ppc: $(OUT)/tests-ppc
+	$(QEMU_PPC) ./$(OUT)/tests-ppc
+
+clean:
+	rm -rf $(OUT)

@@ -1,0 +1,5 @@
+build/
+build-pc/
+*.dol
+*.elf
+*.elf.map
