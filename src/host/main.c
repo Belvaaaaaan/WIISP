@@ -17,6 +17,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 #include "frontend/app.h"
 
 void *plat_alloc_big(size_t size){
@@ -81,9 +82,18 @@ int main(int argc, char **argv){
 
 	app_set_output(output);
 	if(app_start()) return 1;
-	for(i = 0; i < frames && !exited; i++) exited = app_run_frame();
-	fprintf(stderr, "[WIISP] %s tras %d frames\n",
-	        exited ? app_exit_reason() : "limite de frames alcanzado", i);
+	{
+		clock_t start = clock();
+		unsigned run_frames;
+		unsigned long long instr;
+		double secs;
+		for(i = 0; i < frames && !exited; i++) exited = app_run_frame();
+		secs = (double)(clock() - start) / CLOCKS_PER_SEC;
+		app_get_stats(&run_frames, &instr);
+		fprintf(stderr, "[WIISP] %s tras %d frames (%.1f MIPS en este PC)\n",
+		        exited ? app_exit_reason() : "limite de frames alcanzado", i,
+		        secs > 0 ? instr / secs / 1e6 : 0.0);
+	}
 	if(screenshot) save_screenshot(screenshot);
 	return 0;
 }

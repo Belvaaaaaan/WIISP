@@ -44,6 +44,7 @@ static const HleLibrary *find_library(const char *lib){
 		{ hle_kernel_libs, &hle_kernel_libs_count },
 		{ hle_io_libs, &hle_io_libs_count },
 		{ hle_display_libs, &hle_display_libs_count },
+		{ hle_misc_libs, &hle_misc_libs_count },
 	};
 	u32 g, i;
 	for(g = 0; g < sizeof(groups) / sizeof(groups[0]); g++)

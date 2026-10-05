@@ -13,6 +13,9 @@
 #include "core/memory.h"
 #include "loader/loader.h"
 #include "loader/pbp.h"
+#include "frontend/filelist.h"
+#include <sys/stat.h>
+#include <unistd.h>
 
 static int failures, checks;
 
@@ -410,6 +413,66 @@ static void test_robustness(void){
 	mem_reset();
 }
 
+static void touch(const char *dir, const char *name){
+	char p[512];
+	FILE *f;
+	snprintf(p, sizeof(p), "%s/%s", dir, name);
+	f = fopen(p, "w");
+	if(f) fclose(f);
+}
+
+static void test_filelist(void){
+	char dir[256], sub[300], out[512];
+	FileList fl = { "", NULL, 0 };
+	const char *tmp = getenv("TMPDIR");
+	printf("menu: listado de carpetas\n");
+
+	CHECK(filelist_is_supported("EBOOT.PBP"));
+	CHECK(filelist_is_supported("juego.prx"));
+	CHECK(filelist_is_supported("a.Elf"));
+	CHECK(!filelist_is_supported("imports.txt"));
+	CHECK(!filelist_is_supported("pbp"));
+
+	CHECK(filelist_is_root("sd:/"));
+	CHECK(filelist_is_root("usb:/"));
+	CHECK(!filelist_is_root("sd:/wiisp"));
+
+	filelist_parent("sd:/wiisp/psp", out, sizeof(out)); CHECK(!strcmp(out, "sd:/wiisp"));
+	filelist_parent("sd:/wiisp", out, sizeof(out));     CHECK(!strcmp(out, "sd:/"));
+	filelist_parent("sd:/wiisp/", out, sizeof(out));    CHECK(!strcmp(out, "sd:/"));
+	filelist_parent("usb:/", out, sizeof(out));         CHECK(!strcmp(out, "usb:/"));
+	filelist_join("sd:/", "wiisp", out, sizeof(out));   CHECK(!strcmp(out, "sd:/wiisp"));
+	filelist_join("sd:/wiisp", "a.pbp", out, sizeof(out)); CHECK(!strcmp(out, "sd:/wiisp/a.pbp"));
+
+	/* Carpeta real: carpetas primero, luego ejecutables, sin otros archivos */
+	snprintf(dir, sizeof(dir), "%s/wiisp_filelist_%d", tmp ? tmp : "/tmp", (int)getpid());
+	snprintf(sub, sizeof(sub), "%s/Juegos", dir);
+	mkdir(dir, 0777);
+	mkdir(sub, 0777);
+	touch(dir, "b.PBP");
+	touch(dir, "a.prx");
+	touch(dir, "notas.txt");
+	touch(dir, ".oculto.pbp");
+	CHECK_EQ(filelist_load(&fl, dir), 0);
+	CHECK_EQ(fl.count, 4);
+	if(fl.count == 4){
+		CHECK(!strcmp(fl.entries[0].name, "..") && fl.entries[0].is_dir);
+		CHECK(!strcmp(fl.entries[1].name, "Juegos") && fl.entries[1].is_dir);
+		CHECK(!strcmp(fl.entries[2].name, "a.prx") && !fl.entries[2].is_dir);
+		CHECK(!strcmp(fl.entries[3].name, "b.PBP"));
+	}
+	filelist_free(&fl);
+	CHECK(filelist_load(&fl, "/no/existe/wiisp") != 0);
+	filelist_free(&fl);
+
+	snprintf(out, sizeof(out), "%s/b.PBP", dir); remove(out);
+	snprintf(out, sizeof(out), "%s/a.prx", dir); remove(out);
+	snprintf(out, sizeof(out), "%s/notas.txt", dir); remove(out);
+	snprintf(out, sizeof(out), "%s/.oculto.pbp", dir); remove(out);
+	rmdir(sub);
+	rmdir(dir);
+}
+
 /* Escribe el PBP de prueba a un archivo, para probar el frontend del Wii
    con un EBOOT que se sabe válido (make -f Makefile.pc eboot) */
 static int write_test_pbp(const char *path){
@@ -446,6 +509,7 @@ int main(int argc, char **argv){
 	test_exec();
 	test_pbp();
 	test_robustness();
+	test_filelist();
 
 	printf("\n%d comprobaciones, %d fallos\n", checks, failures);
 	free(ram); free(vram); free(scratch);

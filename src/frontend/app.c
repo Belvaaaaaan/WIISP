@@ -7,6 +7,7 @@
 
 #include <stdio.h>
 #include <stdlib.h>
+#include <strings.h>
 #include "frontend/app.h"
 #include "core/memory.h"
 #include "loader/loader.h"
@@ -98,12 +99,36 @@ static void forward_output(const char *text, u32 len){
 	else fwrite(text, 1, len, stdout);
 }
 
+static unsigned frames_run;
+static u64 executed_at_start;
+
 int app_start(void){
 	hle_set_output(forward_output);
+	frames_run = 0;
+	executed_at_start = cpu_executed;
 	return hle_init(&module, host_dir, exec_path);
 }
 
-int app_run_frame(void){ return hle_run_frame(); }
+int app_run_frame(void){
+	frames_run++;
+	return hle_run_frame();
+}
+
+void app_get_stats(unsigned *frames, unsigned long long *instructions){
+	*frames = frames_run;
+	*instructions = cpu_executed - executed_at_start;
+}
+
+void app_imports_path(const char *path, char *out, size_t out_size){
+	const char *slash = strrchr(path, '/'), *name = slash ? slash + 1 : path;
+	const char *dot = strrchr(name, '.');
+	int dir_len = (int)(name - path);
+	if(!strcasecmp(name, "EBOOT.PBP"))
+		snprintf(out, out_size, "%.*simports.txt", dir_len, path);
+	else
+		snprintf(out, out_size, "%.*s%.*s.imports.txt", dir_len, path,
+		         (int)(dot ? dot - name : (long)strlen(name)), name);
+}
 const char *app_exit_reason(void){ return hle_exit_reason(); }
 void app_set_output(AppOutputFunc func){ output_func = func; }
 

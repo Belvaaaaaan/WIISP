@@ -241,7 +241,7 @@ porta entero: su consumo de memoria no cabe en el Wii.
 |---|---|---|
 | 1 | Esqueleto devkitPPC/libogc, mapa de memoria, cargador PBP/SFO/ELF/PRX con relocalizaciones e imports parcheados, CLI de PC, pruebas en x86 y PPC big-endian, CI | ✅ |
 | 2 | Intérprete Allegrex completo (sin VFPU), HLE mínimo (hilos, archivos, display, ctrl), framebuffer de la PSP mostrado tal cual en el Wii | ✅ |
-| 3 | Correr los *samples* del PSPSDK y homebrew sencillo; ampliar el HLE guiado por pspautotests e imports.txt | ⏳ |
+| 3 | Correr los *samples* del PSPSDK y homebrew sencillo; ampliar el HLE guiado por pspautotests e imports.txt. Hecho: menú SD/USB, medidor de FPS/MIPS, sceRtc, sceUtility, sceSuspend, directorios/stat, Mt19937, red simulada | ⏳ |
 | 4 | GE → GX básico (primitivas, texturas, caché de texturas) | |
 | 5 | Dynarec basado en Not64, validado contra el intérprete | |
 | 6 | VFPU con paired singles, skinning, audio (sceAudio, Atrac3+) | |

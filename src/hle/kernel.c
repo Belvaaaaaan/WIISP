@@ -702,11 +702,9 @@ static void sceKernelSysClock2USecWide(void){
 	RETURN(0);
 }
 
-/* Fecha base fija (2010-01-01) para que las ejecuciones sean reproducibles */
-#define EPOCH_BASE 1262304000u
 
 static void sceKernelLibcTime(void){
-	u32 t = EPOCH_BASE + (u32)(hle_now_us() / 1000000);
+	u32 t = HLE_EPOCH_BASE + (u32)(hle_now_us() / 1000000);
 	if(ARG(0)) mem_write32(ARG(0), t);
 	RETURN(t);
 }
@@ -717,7 +715,7 @@ static void sceKernelLibcGettimeofday(void){
 	u64 now = hle_now_us();
 	u32 tv = ARG(0);
 	if(tv && mem_valid(tv, 8)){
-		mem_write32(tv, EPOCH_BASE + (u32)(now / 1000000));
+		mem_write32(tv, HLE_EPOCH_BASE + (u32)(now / 1000000));
 		mem_write32(tv + 4, (u32)(now % 1000000));
 	}
 	RETURN(0);
@@ -1086,6 +1084,47 @@ static void sceKernelLoadModule(void){ RETURN(SCE_ERROR_FILE_NOT_FOUND); }
 
 static void sceKernelGetGPI(void){ RETURN(0); }
 
+/* Mersenne Twister estándar con el estado en memoria del juego:
+   u32 índice, u32 estado[624] */
+#define MT_N 624
+#define MT_M 397
+
+static void sceKernelUtilsMt19937Init(void){
+	u32 ctx = ARG(0), seed = ARG(1), i;
+	if(!mem_valid(ctx, 4 + MT_N * 4)){ RETURN(SCE_KERNEL_ERROR_ILLEGAL_ADDR); return; }
+	mem_write32(ctx + 4, seed);
+	for(i = 1; i < MT_N; i++){
+		u32 prev = mem_read32(ctx + 4 + (i - 1) * 4);
+		mem_write32(ctx + 4 + i * 4, 1812433253u * (prev ^ (prev >> 30)) + i);
+	}
+	mem_write32(ctx, MT_N);
+	RETURN(0);
+}
+
+static void sceKernelUtilsMt19937UInt(void){
+	u32 ctx = ARG(0), index, y;
+	if(!mem_valid(ctx, 4 + MT_N * 4)){ RETURN(SCE_KERNEL_ERROR_ILLEGAL_ADDR); return; }
+	index = mem_read32(ctx);
+	if(index >= MT_N){
+		u32 i;
+		for(i = 0; i < MT_N; i++){
+			u32 a = mem_read32(ctx + 4 + i * 4);
+			u32 b = mem_read32(ctx + 4 + ((i + 1) % MT_N) * 4);
+			u32 c = mem_read32(ctx + 4 + ((i + MT_M) % MT_N) * 4);
+			y = (a & 0x80000000u) | (b & 0x7FFFFFFFu);
+			mem_write32(ctx + 4 + i * 4, c ^ (y >> 1) ^ ((y & 1) ? 0x9908B0DFu : 0));
+		}
+		index = 0;
+	}
+	y = mem_read32(ctx + 4 + index * 4);
+	mem_write32(ctx, index + 1);
+	y ^= y >> 11;
+	y ^= (y << 7) & 0x9D2C5680u;
+	y ^= (y << 15) & 0xEFC60000u;
+	y ^= y >> 18;
+	RETURN(y);
+}
+
 /* ------------------------------------------------------------------ */
 /* Arranque                                                           */
 /* ------------------------------------------------------------------ */
@@ -1254,6 +1293,8 @@ static const HleFunction utils_user[] = {
 	{ "sceKernelIcacheInvalidateAll", return_zero },
 	{ "sceKernelIcacheInvalidateRange", return_zero },
 	{ "sceKernelGetGPI", sceKernelGetGPI },
+	{ "sceKernelUtilsMt19937Init", sceKernelUtilsMt19937Init },
+	{ "sceKernelUtilsMt19937UInt", sceKernelUtilsMt19937UInt },
 	{ "sceKernelSetGPO", return_zero },
 };
 

@@ -30,12 +30,20 @@ void app_set_verbose(int verbose);
    0 = correcto. */
 int  app_load(const char *path, int max_imports, const char *imports_out);
 
+/* Ruta recomendada para el informe de imports de path: "imports.txt" en su
+   carpeta si es un EBOOT.PBP, si no "<nombre>.imports.txt" */
+void app_imports_path(const char *path, char *out, size_t out_size);
+
 /* Prepara la ejecución del programa cargado. 0 = correcto. */
 int  app_start(void);
 
 /* Ejecuta un frame (hasta el siguiente vblank). Devuelve 1 si el programa
    terminó. */
 int  app_run_frame(void);
+
+/* Estadísticas acumuladas desde app_start: frames emulados e instrucciones
+   de la PSP ejecutadas (para calcular FPS y MIPS) */
+void app_get_stats(unsigned *frames, unsigned long long *instructions);
 const char *app_exit_reason(void);
 
 /* Salida de texto del programa emulado */

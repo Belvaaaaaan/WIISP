@@ -79,6 +79,10 @@ static inline u32 hle_arg(int n){ return n < 4 ? cpu.r[R_A0 + n] : cpu.r[R_T0 + 
 
 static inline u64 hle_now_us(void){ return cpu_cycles / CYCLES_PER_US; }
 
+/* Fecha base fija (2010-01-01 en tiempo Unix) para que las ejecuciones
+   sean reproducibles */
+#define HLE_EPOCH_BASE 1262304000u
+
 /* --- API para el frontend ------------------------------------------- */
 
 typedef void (*HleOutputFunc)(const char *text, u32 len);
@@ -133,6 +137,8 @@ extern const HleLibrary hle_io_libs[];
 extern const u32 hle_io_libs_count;
 extern const HleLibrary hle_display_libs[];
 extern const u32 hle_display_libs_count;
+extern const HleLibrary hle_misc_libs[];
+extern const u32 hle_misc_libs_count;
 
 /* Hilos y planificador (kernel.c) */
 void kernel_init(const PspModule *mod, const char *exec_path);
@@ -149,6 +155,9 @@ void kernel_free(u32 addr);
 /* E/S (io.c) */
 void io_init(const char *host_dir);
 void io_shutdown(void);
+
+/* Escribe una ScePspDateTime (16 bytes) a partir de microsegundos Unix (misc.c) */
+void hle_write_datetime(u32 addr, u64 unix_us);
 
 /* Display y mandos (display.c) */
 void display_init(void);

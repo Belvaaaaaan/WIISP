@@ -14,6 +14,9 @@
 
 #include <stdio.h>
 #include <stdlib.h>
+#include <dirent.h>
+#include <sys/stat.h>
+#include <unistd.h>
 #include "hle/hle.h"
 #include "core/memory.h"
 
@@ -32,7 +35,11 @@
 #define EMULATOR_DEVCTL_SEND_OUTPUT     0x02
 #define EMULATOR_DEVCTL_IS_EMULATOR     0x03
 
+#define MAX_DIRS 16
+#define DIR_FD_BASE 0x100   /* los directorios usan otros identificadores */
+
 static FILE *files[MAX_FILES];
+static struct { DIR *dir; char path[640]; } dirs[MAX_DIRS];
 static char host_dir[256];
 static char cwd[128];
 
@@ -46,6 +53,8 @@ void io_shutdown(void){
 	int i;
 	for(i = 3; i < MAX_FILES; i++)
 		if(files[i]){ fclose(files[i]); files[i] = NULL; }
+	for(i = 0; i < MAX_DIRS; i++)
+		if(dirs[i].dir){ closedir(dirs[i].dir); dirs[i].dir = NULL; }
 }
 
 /* Traduce una ruta de la PSP a una del anfitrión. Devuelve 0 si es válida. */
@@ -158,6 +167,108 @@ static void sceIoChdir(void){
 	RETURN(0);
 }
 
+/* SceIoStat (88 bytes): modo, atributos, tamaño (64 bits), fechas de
+   creación, acceso y modificación, y 6 palabras privadas */
+#define FIO_S_IFDIR  0x1000
+#define FIO_S_IFREG  0x2000
+#define FIO_SO_IFDIR 0x0010
+#define FIO_SO_IFREG 0x0020
+
+static void write_stat(u32 addr, const struct stat *st){
+	int is_dir = S_ISDIR(st->st_mode);
+	u64 mtime = (u64)st->st_mtime * 1000000ull;
+	memset(mem_ptr(addr, 88), 0, 88);
+	mem_write32(addr, (is_dir ? FIO_S_IFDIR : FIO_S_IFREG) | 0x1FF);
+	mem_write32(addr + 4, is_dir ? FIO_SO_IFDIR : FIO_SO_IFREG);
+	mem_write32(addr + 8, (u32)st->st_size);
+	mem_write32(addr + 12, (u32)((u64)st->st_size >> 32));
+	hle_write_datetime(addr + 16, mtime);
+	hle_write_datetime(addr + 32, mtime);
+	hle_write_datetime(addr + 48, mtime);
+}
+
+static void sceIoGetstat(void){
+	char path[640];
+	struct stat st;
+	if(host_path(ARG(0), path, sizeof(path)) || stat(path, &st)){ RETURN(SCE_ERROR_FILE_NOT_FOUND); return; }
+	if(!mem_valid(ARG(1), 88)){ RETURN(SCE_KERNEL_ERROR_ILLEGAL_ADDR); return; }
+	write_stat(ARG(1), &st);
+	RETURN(0);
+}
+
+static void sceIoDopen(void){
+	char path[640];
+	DIR *d;
+	int i;
+	if(host_path(ARG(0), path, sizeof(path)) || !(d = opendir(path))){ RETURN(SCE_ERROR_FILE_NOT_FOUND); return; }
+	for(i = 0; i < MAX_DIRS && dirs[i].dir; i++);
+	if(i == MAX_DIRS){ closedir(d); RETURN(SCE_KERNEL_ERROR_MFILE); return; }
+	dirs[i].dir = d;
+	snprintf(dirs[i].path, sizeof(dirs[i].path), "%s", path);
+	RETURN(DIR_FD_BASE + i);
+}
+
+static int dir_index(u32 fd){
+	u32 i = fd - DIR_FD_BASE;
+	return (fd >= DIR_FD_BASE && i < MAX_DIRS && dirs[i].dir) ? (int)i : -1;
+}
+
+/* SceIoDirent (352 bytes): SceIoStat, char d_name[256], d_private, dummy.
+   Devuelve 1 si leyó una entrada y 0 al llegar al final. */
+static void sceIoDread(void){
+	int i = dir_index(ARG(0));
+	u32 out = ARG(1);
+	struct dirent *e;
+	if(i < 0){ RETURN(SCE_KERNEL_ERROR_BADF); return; }
+	if(!mem_valid(out, 352)){ RETURN(SCE_KERNEL_ERROR_ILLEGAL_ADDR); return; }
+	e = readdir(dirs[i].dir);
+	if(!e){ RETURN(0); return; }
+	{
+		char full[1024];
+		struct stat st;
+		u32 d_private = mem_read32(out + 344);
+		memset(mem_ptr(out, 344), 0, 344);
+		snprintf(full, sizeof(full), "%s/%s", dirs[i].path, e->d_name);
+		if(!stat(full, &st)) write_stat(out, &st);
+		strncpy((char *)mem_ptr(out + 88, 256), e->d_name, 255);
+		mem_write32(out + 344, d_private);
+	}
+	RETURN(1);
+}
+
+static void sceIoDclose(void){
+	int i = dir_index(ARG(0));
+	if(i < 0){ RETURN(SCE_KERNEL_ERROR_BADF); return; }
+	closedir(dirs[i].dir);
+	dirs[i].dir = NULL;
+	RETURN(0);
+}
+
+static void sceIoRemove(void){
+	char path[640];
+	if(host_path(ARG(0), path, sizeof(path)) || remove(path)){ RETURN(SCE_ERROR_FILE_NOT_FOUND); return; }
+	RETURN(0);
+}
+
+static void sceIoRename(void){
+	char from[640], to[640];
+	if(host_path(ARG(0), from, sizeof(from)) || host_path(ARG(1), to, sizeof(to)) ||
+	   rename(from, to)){ RETURN(SCE_ERROR_FILE_NOT_FOUND); return; }
+	RETURN(0);
+}
+
+static void sceIoMkdir(void){
+	char path[640];
+	if(host_path(ARG(0), path, sizeof(path)) || mkdir(path, 0777)){ RETURN(0x80010011u /* EEXIST */); return; }
+	RETURN(0);
+}
+
+static void sceIoRmdir(void){
+	char path[640];
+	if(host_path(ARG(0), path, sizeof(path)) || rmdir(path)){ RETURN(SCE_ERROR_FILE_NOT_FOUND); return; }
+	RETURN(0);
+}
+
 static void sceIoDevctl(void){
 	char dev[32];
 	u32 cmd = ARG(1), in = ARG(2), in_len = ARG(3), out = ARG(4), out_len = ARG(5);
@@ -192,6 +303,14 @@ static const HleFunction io_user[] = {
 	{ "sceIoLseek32", sceIoLseek32 },
 	{ "sceIoChdir", sceIoChdir },
 	{ "sceIoDevctl", sceIoDevctl },
+	{ "sceIoGetstat", sceIoGetstat },
+	{ "sceIoDopen", sceIoDopen },
+	{ "sceIoDread", sceIoDread },
+	{ "sceIoDclose", sceIoDclose },
+	{ "sceIoRemove", sceIoRemove },
+	{ "sceIoRename", sceIoRename },
+	{ "sceIoMkdir", sceIoMkdir },
+	{ "sceIoRmdir", sceIoRmdir },
 };
 
 const HleLibrary hle_io_libs[] = {

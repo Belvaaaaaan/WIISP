@@ -49,8 +49,12 @@ extern CpuState cpu;
    lo previsto (cambio de hilo, fin del programa...). */
 extern volatile int cpu_stop_requested;
 
-/* Ciclos ejecutados en total (base del tiempo emulado) */
+/* Ciclos emulados en total (base del tiempo emulado; incluye los saltos de
+   tiempo cuando todos los hilos esperan) */
 extern u64 cpu_cycles;
+
+/* Instrucciones realmente ejecutadas (para medir la velocidad) */
+extern u64 cpu_executed;
 
 /* Ejecuta hasta max_cycles instrucciones o hasta que se pida parar.
    Devuelve las instrucciones ejecutadas. */

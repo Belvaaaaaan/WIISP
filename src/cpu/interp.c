@@ -22,6 +22,7 @@
 CpuState cpu;
 volatile int cpu_stop_requested;
 u64 cpu_cycles;
+u64 cpu_executed;
 
 #define RS   ((instr >> 21) & 31)
 #define RT   ((instr >> 16) & 31)
@@ -372,5 +373,6 @@ u32 cpu_run(u32 max_cycles){
 		n++;
 	}
 	cpu_cycles += n;
+	cpu_executed += n;
 	return n;
 }

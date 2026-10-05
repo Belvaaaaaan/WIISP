@@ -26,12 +26,27 @@ y libogc (paquete `wii-dev`).
 make dist
 ```
 
-Copia `dist/apps` a la raíz de la SD y pon el `EBOOT.PBP` de un homebrew de PSP
-sin cifrar junto al `boot.dol` (`sd:/apps/wiisp/EBOOT.PBP`). También se busca
-en `sd:/wiisp/` y en USB. Después abre WIISP desde el Homebrew Channel.
+Copia `dist/apps` a la raíz de la SD y abre WIISP desde el Homebrew Channel.
+Aparece un menú para elegir el programa en la **SD o en un USB**: pon tus
+`.pbp`, `.prx` o `.elf` donde quieras (por ejemplo en `sd:/wiisp/`), con su
+nombre original.
 
-El zip de GitHub Actions ya trae un `EBOOT.PBP` de prueba (sintético) en
-`apps/wiisp/` para comprobar que todo funciona.
+| Botón (Wiimote / GameCube) | En el menú | Durante la emulación |
+|---|---|---|
+| Cruceta | moverse (izquierda/derecha: página) | cruceta de la PSP |
+| A | abrir carpeta / elegir | X (cruz) |
+| B | carpeta anterior | O (círculo) |
+| 1 / X | cambiar SD ↔ USB | cuadrado / triángulo |
+| HOME / START | salir al Homebrew Channel | HOME o Z+START: volver al menú |
+
+Al abrir un programa, WIISP escribe junto a él su informe de imports
+(`imports.txt` para un `EBOOT.PBP`, `<nombre>.imports.txt` para el resto) y
+recuerda la carpeta para la próxima vez. Durante la emulación, arriba se ven
+los FPS, los MIPS (millones de instrucciones de la PSP por segundo) y la
+velocidad respecto a una PSP real.
+
+El zip de GitHub Actions trae además un `EBOOT.PBP` de prueba (sintético) en
+`apps/wiisp/`.
 
 Cada push también compila el `.dol` en GitHub Actions; se descarga desde la
 pestaña *Actions* (artefacto `wiisp-wii`).

@@ -11,6 +11,7 @@ cpu/fpu/fpu_nan
 cpu/icache/icache
 cpu/lsu/llsc
 cpu/lsu/lsu
+ctrl/ctrl
 gpu/commands/basic
 gpu/commands/material
 gpu/complex/complex
@@ -37,6 +38,7 @@ hle/check_not_used_uids
 malloc/malloc
 misc/testgp
 misc/timeconv
+rtc/rtc
 string/string
 threads/events/events
 threads/k0/k0
