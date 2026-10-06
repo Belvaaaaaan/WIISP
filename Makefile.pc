@@ -13,7 +13,7 @@ CFLAGS   ?= -O1 -g
 CFLAGS   += -std=gnu11 -Wall -Wextra -Wno-unused-parameter -Isrc
 SANITIZE ?= -fsanitize=address,undefined -fno-omit-frame-pointer
 
-CORE_SRC := $(wildcard src/core/*.c) $(wildcard src/loader/*.c) $(wildcard src/cpu/*.c) $(wildcard src/hle/*.c)
+CORE_SRC := $(wildcard src/core/*.c) $(wildcard src/loader/*.c) $(wildcard src/cpu/*.c) $(wildcard src/hle/*.c) $(wildcard src/gpu/*.c)
 CLI_SRC  := $(CORE_SRC) src/frontend/app.c src/frontend/filelist.c src/host/main.c
 TEST_SRC := $(CORE_SRC) src/frontend/filelist.c $(wildcard tests/*.c)
 

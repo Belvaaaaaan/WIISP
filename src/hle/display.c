@@ -1,6 +1,6 @@
 /**
  * WIISP - display.c
- * HLE de sceDisplay, sceCtrl y lo mínimo de sceGe_user.
+ * HLE de sceDisplay y sceCtrl (sceGe_user está en gpu/ge.c).
  *
  * El framebuffer de la PSP vive en su VRAM o RAM; aquí solo se guarda dónde
  * está y en qué formato, y el frontend lo convierte al dibujar.
@@ -106,12 +106,6 @@ static void sceCtrlReadBufferPositive(void){
 	RETURN(n);
 }
 
-/* --- sceGe_user (mínimo hasta la fase 4) ------------------------------ */
-
-static void sceGeEdramGetAddr(void){ RETURN(PSP_VRAM_BASE); }
-static void sceGeEdramGetSize(void){ RETURN(PSP_VRAM_SIZE); }
-static void return_zero(void){ RETURN(0); }
-
 static const HleFunction display[] = {
 	{ "sceDisplaySetMode", sceDisplaySetMode },
 	{ "sceDisplayGetMode", sceDisplayGetMode },
@@ -135,16 +129,8 @@ static const HleFunction ctrl[] = {
 	{ "sceCtrlReadBufferPositive", sceCtrlReadBufferPositive },
 };
 
-static const HleFunction ge[] = {
-	{ "sceGeEdramGetAddr", sceGeEdramGetAddr },
-	{ "sceGeEdramGetSize", sceGeEdramGetSize },
-	{ "sceGeDrawSync", return_zero },
-	{ "sceGeListSync", return_zero },
-};
-
 const HleLibrary hle_display_libs[] = {
 	HLE_LIBRARY("sceDisplay", display),
 	HLE_LIBRARY("sceCtrl", ctrl),
-	HLE_LIBRARY("sceGe_user", ge),
 };
 const u32 hle_display_libs_count = sizeof(hle_display_libs) / sizeof(hle_display_libs[0]);

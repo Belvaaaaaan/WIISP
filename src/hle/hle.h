@@ -39,10 +39,13 @@ static inline u32 hle_arg(int n){ return n < 4 ? cpu.r[R_A0 + n] : cpu.r[R_T0 + 
 #define RETURN64(v)   (cpu.r[R_V0] = (u32)(u64)(v), cpu.r[R_V1] = (u32)((u64)(v) >> 32))
 
 /* Códigos de syscall especiales (por encima de los imports) */
-#define HLE_SYSCALL_THREAD_RETURN 0xFFF00u  /* un hilo volvió de su función */
+#define HLE_SYSCALL_THREAD_RETURN   0xFFF00u  /* un hilo volvió de su función */
+#define HLE_SYSCALL_CALLBACK_RETURN 0xFFF01u  /* volvió una llamada de kernel_call_guest */
 
 /* Direcciones en la zona de kernel (no la usa el juego) */
 #define HLE_KERNEL_TRAMPOLINE  0x08000000u  /* syscall THREAD_RETURN; nop */
+#define HLE_CALLBACK_TRAMPOLINE 0x08000008u /* syscall CALLBACK_RETURN; nop */
+#define HLE_INTERRUPT_STACK_TOP 0x08010000u /* pila para las llamadas tipo interrupción */
 
 /* Errores del kernel de la PSP */
 #define SCE_KERNEL_ERROR_ERROR               0x80020001u
@@ -109,6 +112,11 @@ int  hle_has_exited(void);
 const char *hle_exit_reason(void);
 void hle_exit(const char *reason);
 
+/* Captura pedida por el programa (devctl 0x20 de "emulator:", pspautotests) */
+typedef void (*HleScreenshotFunc)(void);
+void hle_set_screenshot(HleScreenshotFunc func);
+void hle_screenshot(void);
+
 /* Mandos: botones en el formato de la PSP (PSP_CTRL_*) */
 void hle_set_input(u32 buttons, u8 lx, u8 ly);
 
@@ -139,6 +147,8 @@ extern const HleLibrary hle_display_libs[];
 extern const u32 hle_display_libs_count;
 extern const HleLibrary hle_misc_libs[];
 extern const u32 hle_misc_libs_count;
+extern const HleLibrary hle_ge_libs[];
+extern const u32 hle_ge_libs_count;
 
 /* Hilos y planificador (kernel.c) */
 void kernel_init(const PspModule *mod, const char *exec_path);
@@ -146,7 +156,17 @@ void kernel_shutdown(void);
 void kernel_run_until(u64 target_cycles);
 void kernel_vblank(void);
 void kernel_thread_return(void);
+
+/* Ejecuta una función del juego como lo haría una interrupción (pila
+   propia, sin poder bloquearse) y vuelve cuando termina. Devuelve su v0.
+   Se puede llamar desde dentro de un syscall. */
+u32  kernel_call_guest(u32 func, u32 a0, u32 a1, u32 a2);
+void kernel_callback_return(void);
+/* 1 mientras se ejecuta una llamada de kernel_call_guest */
+int  kernel_in_interrupt(void);
 int  kernel_wait_vblank(void); /* bloquea el hilo actual hasta el vblank */
+/* Bloquea el hilo actual hasta el ciclo indicado (si no es una interrupción) */
+void kernel_wait_until(u64 cycle);
 
 /* Asignador de memoria de usuario (kernel.c) */
 u32  kernel_alloc(u32 size, int from_high, const char *name);

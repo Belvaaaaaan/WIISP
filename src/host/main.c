@@ -10,6 +10,8 @@
  *     --frames N        límite de frames al ejecutar (por defecto 1800 = 30 s)
  *     --quiet           no imprimir el resumen del módulo
  *     --screenshot FILE guardar el framebuffer final como PPM
+ *     --bmp FILE        guardar como BMP la captura que pida el programa
+ *                       (devctl de pspautotests), igual que en una PSP
  *
  * SPDX-License-Identifier: GPL-2.0-or-later
 **/
@@ -69,6 +71,7 @@ int main(int argc, char **argv){
 		else if(!strcmp(argv[i], "--frames") && i + 1 < argc) frames = atoi(argv[++i]);
 		else if(!strcmp(argv[i], "--imports") && i + 1 < argc) imports = argv[++i];
 		else if(!strcmp(argv[i], "--screenshot") && i + 1 < argc) screenshot = argv[++i];
+		else if(!strcmp(argv[i], "--bmp") && i + 1 < argc) app_set_screenshot_path(argv[++i]);
 		else path = argv[i];
 	}
 	if(!path){

@@ -102,8 +102,67 @@ static void forward_output(const char *text, u32 len){
 static unsigned frames_run;
 static u64 executed_at_start;
 
+static char screenshot_path[512];
+
+/* Expansión de bits igual que pspautotests/common/common.c */
+static u32 bmp_pixel(const u8 *p, u32 format){
+	u32 r, g, b, a;
+	if(format == 3){ r = p[0]; g = p[1]; b = p[2]; a = p[3]; }
+	else {
+		u32 c = (u32)p[0] | ((u32)p[1] << 8);
+		if(format == 2){
+			r = (c & 15) * 17; g = ((c >> 4) & 15) * 17; b = ((c >> 8) & 15) * 17; a = ((c >> 12) & 15) * 17;
+		} else if(format == 1){
+			r = ((c & 31) << 3) | ((c & 31) >> 2); g = (((c >> 5) & 31) << 3) | (((c >> 5) & 31) >> 2);
+			b = (((c >> 10) & 31) << 3) | (((c >> 10) & 31) >> 2); a = (c & 0x8000) ? 255 : 0;
+		} else {
+			r = ((c & 31) << 3) | ((c & 31) >> 2); g = (((c >> 5) & 63) << 2) | (((c >> 5) & 63) >> 4);
+			b = (((c >> 11) & 31) << 3) | (((c >> 11) & 31) >> 2); a = 255;
+		}
+	}
+	return b | (g << 8) | (r << 16) | (a << 24);
+}
+
+int app_write_bmp(const char *path){
+	static const u8 header[54] = {
+		0x42, 0x4D, 0x38, 0x80, 0x08, 0x00, 0x00, 0x00, 0x00, 0x00, 0x36, 0x00,
+		0x00, 0x00, 0x28, 0x00, 0x00, 0x00, 0x00, 0x02, 0x00, 0x00, 0x10, 0x01,
+		0x00, 0x00, 0x01, 0x00, 0x20, 0x00, 0x00, 0x00, 0x00, 0x00, 0x02, 0x80,
+		0x08, 0x00, 0x12, 0x0B, 0x00, 0x00, 0x12, 0x0B, 0x00, 0x00, 0x00, 0x00,
+		0x00, 0x00, 0x00, 0x00, 0x00, 0x00
+	};
+	HleFramebuffer fb;
+	FILE *f;
+	u32 y, x, bpp;
+	hle_get_framebuffer(&fb);
+	f = fopen(path, "wb");
+	if(!f) return -1;
+	fwrite(header, 1, sizeof(header), f);
+	bpp = fb.format == 3 ? 4 : 2;
+	for(y = 0; y < 272; y++){
+		u8 row[512 * 4];
+		for(x = 0; x < 512; x++){
+			const u8 *p = fb.addr ? mem_ptr(fb.addr + ((271 - y) * fb.stride + x) * bpp, bpp) : NULL;
+			u32 v = p ? bmp_pixel(p, fb.format) : 0;
+			wr_le32(row + x * 4, v);
+		}
+		fwrite(row, 1, sizeof(row), f);
+	}
+	fclose(f);
+	return 0;
+}
+
+static void on_screenshot(void){
+	if(screenshot_path[0]) app_write_bmp(screenshot_path);
+}
+
+void app_set_screenshot_path(const char *path){
+	snprintf(screenshot_path, sizeof(screenshot_path), "%s", path ? path : "");
+}
+
 int app_start(void){
 	hle_set_output(forward_output);
+	hle_set_screenshot(on_screenshot);
 	frames_run = 0;
 	executed_at_start = cpu_executed;
 	return hle_init(&module, host_dir, exec_path);

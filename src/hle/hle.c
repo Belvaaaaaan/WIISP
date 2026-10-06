@@ -11,6 +11,7 @@
 #include "hle/hle.h"
 #include "hle/nid_names.h"
 #include "core/memory.h"
+#include "gpu/ge.h"
 
 typedef struct {
 	HleFunc func;
@@ -45,6 +46,7 @@ static const HleLibrary *find_library(const char *lib){
 		{ hle_io_libs, &hle_io_libs_count },
 		{ hle_display_libs, &hle_display_libs_count },
 		{ hle_misc_libs, &hle_misc_libs_count },
+		{ hle_ge_libs, &hle_ge_libs_count },
 	};
 	u32 g, i;
 	for(g = 0; g < sizeof(groups) / sizeof(groups[0]); g++)
@@ -71,6 +73,10 @@ HleFunc hle_find(const char *lib, u32 nid, const char **name_out){
 void hle_syscall(u32 code){
 	if(code == HLE_SYSCALL_THREAD_RETURN){
 		kernel_thread_return();
+		return;
+	}
+	if(code == HLE_SYSCALL_CALLBACK_RETURN){
+		kernel_callback_return();
 		return;
 	}
 	if(!module || code >= module->num_imports){
@@ -103,6 +109,10 @@ void cpu_fault(const char *what, u32 addr, u32 instr){
 /* ------------------------------------------------------------------ */
 
 void hle_set_output(HleOutputFunc func){ output_func = func; }
+
+static HleScreenshotFunc screenshot_func;
+void hle_set_screenshot(HleScreenshotFunc func){ screenshot_func = func; }
+void hle_screenshot(void){ if(screenshot_func) screenshot_func(); }
 
 void hle_output(const char *text, u32 len){
 	if(output_func) output_func(text, len);
@@ -148,9 +158,12 @@ int hle_init(PspModule *mod, const char *host_dir, const char *exec_name){
 	/* Trampolín al que vuelven los hilos al terminar su función */
 	mem_write32(HLE_KERNEL_TRAMPOLINE, MIPS_SYSCALL(HLE_SYSCALL_THREAD_RETURN));
 	mem_write32(HLE_KERNEL_TRAMPOLINE + 4, 0);
+	mem_write32(HLE_CALLBACK_TRAMPOLINE, MIPS_SYSCALL(HLE_SYSCALL_CALLBACK_RETURN));
+	mem_write32(HLE_CALLBACK_TRAMPOLINE + 4, 0);
 
 	io_init(host_dir);
 	display_init();
+	ge_init();
 	kernel_init(mod, exec_name);
 	return 0;
 }

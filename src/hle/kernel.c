@@ -109,8 +109,12 @@ static void wake(int i, u32 ret){
 
 /* El hilo actual pasa a esperar. timeout_addr: puntero a microsegundos
    (0 = sin límite). El valor de retorno por defecto es 0. */
+static int in_interrupt;
+#define SCE_KERNEL_ERROR_CAN_NOT_WAIT 0x800201A7u
+
 static void wait_current(int type, int index, u32 timeout_addr){
 	Thread *t = current();
+	if(in_interrupt){ RETURN(SCE_KERNEL_ERROR_CAN_NOT_WAIT); return; }
 	if(!t) return;
 	t->status = TH_WAITING;
 	t->wait = type;
@@ -221,6 +225,13 @@ void kernel_vblank(void){
 	for(i = 0; i < MAX_THREADS; i++)
 		if(threads[i].used && threads[i].status == TH_WAITING && threads[i].wait == W_VBLANK)
 			wake(i, 0);
+}
+
+void kernel_wait_until(u64 cycle){
+	Thread *t = current();
+	if(!t || in_interrupt || cycle <= cpu_cycles) return;
+	wait_current(W_DELAY, 0, 0);
+	t->wait_until = cycle;
 }
 
 int kernel_wait_vblank(void){
@@ -511,6 +522,46 @@ static void exit_thread(int i, u32 status, int del){
 	}
 	if(del) free_thread(i);
 	request_resched();
+}
+
+/* --- Llamadas al juego desde el HLE (como interrupciones) ------------- */
+
+static int callback_done;
+
+int kernel_in_interrupt(void){ return in_interrupt; }
+
+void kernel_callback_return(void){
+	callback_done = 1;
+	cpu_stop_requested = 1;
+}
+
+u32 kernel_call_guest(u32 func, u32 a0, u32 a1, u32 a2){
+	CpuState saved = cpu;
+	int saved_done = callback_done, saved_stop = cpu_stop_requested;
+	u32 ret;
+
+	if(!func || !mem_valid(func, 4)) return 0;
+	in_interrupt++;
+	cpu.r[R_A0] = a0;
+	cpu.r[R_A1] = a1;
+	cpu.r[R_A2] = a2;
+	cpu.r[R_SP] = HLE_INTERRUPT_STACK_TOP - 64 - (u32)(in_interrupt - 1) * 0x2000;
+	cpu.r[R_GP] = module_gp;
+	cpu.r[R_RA] = HLE_CALLBACK_TRAMPOLINE;
+	cpu.pc = func;
+	cpu.npc = func + 4;
+	callback_done = 0;
+	/* Los cambios de hilo que pida la función esperan a que termine */
+	while(!callback_done && !hle_has_exited()){
+		cpu_stop_requested = 0;
+		cpu_run(100000);
+	}
+	ret = cpu.r[R_V0];
+	cpu = saved;
+	callback_done = saved_done;
+	cpu_stop_requested = saved_stop || need_resched || hle_has_exited();
+	in_interrupt--;
+	return ret;
 }
 
 void kernel_thread_return(void){

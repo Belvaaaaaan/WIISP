@@ -34,6 +34,7 @@
 #define EMULATOR_DEVCTL_GET_HAS_DISPLAY 0x01
 #define EMULATOR_DEVCTL_SEND_OUTPUT     0x02
 #define EMULATOR_DEVCTL_IS_EMULATOR     0x03
+#define EMULATOR_DEVCTL_EMIT_SCREENSHOT 0x20
 
 #define MAX_DIRS 16
 #define DIR_FD_BASE 0x100   /* los directorios usan otros identificadores */
@@ -230,7 +231,11 @@ static void sceIoDread(void){
 		memset(mem_ptr(out, 344), 0, 344);
 		snprintf(full, sizeof(full), "%s/%s", dirs[i].path, e->d_name);
 		if(!stat(full, &st)) write_stat(out, &st);
-		strncpy((char *)mem_ptr(out + 88, 256), e->d_name, 255);
+		{
+			size_t n = strlen(e->d_name);
+			if(n > 255) n = 255;
+			memcpy(mem_ptr(out + 88, 256), e->d_name, n);
+		}
 		mem_write32(out + 344, d_private);
 	}
 	RETURN(1);
@@ -287,6 +292,9 @@ static void sceIoDevctl(void){
 		break;
 	}
 	case EMULATOR_DEVCTL_IS_EMULATOR:
+		break;
+	case EMULATOR_DEVCTL_EMIT_SCREENSHOT:
+		hle_screenshot();
 		break;
 	default:
 		break; /* mandos simulados y capturas: aún no */

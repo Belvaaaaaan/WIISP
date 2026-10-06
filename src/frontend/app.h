@@ -72,6 +72,12 @@ void app_set_input(unsigned buttons, unsigned char lx, unsigned char ly);
    Devuelve NULL si el programa no ha configurado ninguno. */
 const unsigned char *app_get_framebuffer(unsigned *stride, unsigned *format);
 
+/* Si se indica, cuando el programa pida una captura (pspautotests) se
+   escribe un BMP de 512x272 idéntico al que genera una PSP real */
+void app_set_screenshot_path(const char *path);
+/* Escribe ahora el framebuffer mostrado como BMP. 0 = correcto. */
+int  app_write_bmp(const char *path);
+
 #define APP_SCREEN_W 480
 #define APP_SCREEN_H 272
 

@@ -13,7 +13,7 @@ de WIISP y compara la salida con los .expected (grabados en una PSP real).
 
 SPDX-License-Identifier: GPL-2.0-or-later
 """
-import difflib, pathlib, subprocess, sys
+import difflib, os, pathlib, subprocess, sys, tempfile
 
 import os, shlex
 # WIISP_CLI permite usar otro binario, p. ej. "qemu-ppc build-pc/wiisp-cli-ppc"
@@ -26,13 +26,35 @@ def normalize(text):
         lines.pop()
     return [l.rstrip() for l in lines]
 
-def run(prx):
+def run(prx, bmp=None):
+    args = CLI + ['--run', '--quiet', '--frames', '1200']
+    if bmp:
+        args += ['--bmp', bmp]
     try:
-        p = subprocess.run(CLI + ['--run', '--quiet', '--frames', '1200', str(prx)],
-                           capture_output=True, timeout=180)
+        p = subprocess.run(args + [str(prx)], capture_output=True, timeout=180)
         return p.stdout.decode('utf-8', 'replace'), p.stderr.decode('utf-8', 'replace')
     except subprocess.TimeoutExpired:
         return '', 'TIMEOUT'
+
+def bmp_diff(expected, actual):
+    """Porcentaje de píxeles (480x272 visibles) con RGB distinto; None si no hay captura."""
+    try:
+        a = open(expected, 'rb').read()[54:]
+        b = open(actual, 'rb').read()[54:]
+    except OSError:
+        return None
+    if len(b) < 512 * 272 * 4 or len(a) < 512 * 272 * 4:
+        return None
+    bad = 0
+    for y in range(272):
+        ra = a[y * 2048:y * 2048 + 480 * 4]
+        rb = b[y * 2048:y * 2048 + 480 * 4]
+        if ra == rb:
+            continue
+        for x in range(0, 480 * 4, 4):
+            if ra[x:x + 3] != rb[x:x + 3]:
+                bad += 1
+    return 100.0 * bad / (480 * 272)
 
 def main():
     args = sys.argv[1:]
@@ -50,15 +72,23 @@ def main():
                  and (not filters or any(f in n for f in filters))]
 
     passed, failed = [], []
+    tmpdir = tempfile.mkdtemp(prefix='wiisp_')
     for name in names:
-        out, err = run(root / (name + '.prx'))
+        ref_bmp = root / (name + '.expected.bmp')
+        out_bmp = os.path.join(tmpdir, name.replace('/', '_') + '.bmp') if ref_bmp.exists() else None
+        out, err = run(root / (name + '.prx'), out_bmp)
         expected = (root / (name + '.expected')).read_text(errors='replace')
-        if normalize(out) == normalize(expected):
+        text_ok = normalize(out) == normalize(expected)
+        diff = bmp_diff(ref_bmp, out_bmp) if out_bmp else None
+        img = ''
+        if out_bmp:
+            img = '  [imagen: %s]' % ('sin captura' if diff is None else '%.2f%% distinto' % diff)
+        if text_ok and (out_bmp is None or diff == 0.0):
             passed.append(name)
-            print('PASA  ' + name)
+            print('PASA  ' + name + img)
         else:
             failed.append(name)
-            print('FALLA ' + name + ('  (' + err.strip().splitlines()[-1] + ')' if err.strip() else ''))
+            print('FALLA ' + name + img + ('  (' + err.strip().splitlines()[-1] + ')' if err.strip() else ''))
             if verbose:
                 for l in list(difflib.unified_diff(normalize(expected), normalize(out),
                                                    'esperado', 'wiisp', lineterm='', n=1))[:40]:

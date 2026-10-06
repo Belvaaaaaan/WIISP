@@ -1,5 +1,5 @@
 # Tests de pspautotests que deben pasar (CI falla si alguno deja de pasar).
-# Los gpu/* aún no comprueban la imagen: solo que el programa termina bien.
+# Los que tienen .expected.bmp comparan además la captura con la de una PSP real, píxel a píxel.
 cpu/cpu_alu/cpu_alu
 cpu/cpu_alu/cpu_branch
 cpu/cpu_alu/cpu_branch2
@@ -12,27 +12,23 @@ cpu/icache/icache
 cpu/lsu/llsc
 cpu/lsu/lsu
 ctrl/ctrl
+gpu/callbacks/ge_callbacks
 gpu/commands/basic
 gpu/commands/material
 gpu/complex/complex
-gpu/primitives/bezier
+gpu/depth/transformprecision
 gpu/primitives/continue
-gpu/primitives/immediate
 gpu/primitives/indices
+gpu/primitives/indices32
 gpu/primitives/invalidprim
 gpu/primitives/lines
 gpu/primitives/linestrip
 gpu/primitives/points
 gpu/primitives/rectangles
-gpu/primitives/spline
 gpu/primitives/trianglefan
 gpu/primitives/triangles
 gpu/primitives/trianglestrip
-gpu/reflection/reflection
-gpu/rendertarget/rendertarget
-gpu/triangle/triangle
 gpu/vertices/colors
-gpu/vertices/morph
 gpu/vertices/texcoords
 hle/check_not_used_uids
 malloc/malloc
