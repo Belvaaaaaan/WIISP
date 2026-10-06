@@ -366,13 +366,15 @@ static inline void step(void){
 	cpu.r[0] = 0;
 }
 
+/* cpu_cycles avanza con cada instrucción para que el HLE vea la hora
+   exacta; si una llamada del HLE ejecuta código del juego (o adelanta el
+   reloj), ese tiempo también cuenta para el límite. */
 u32 cpu_run(u32 max_cycles){
-	u32 n = 0;
-	while(n < max_cycles && !cpu_stop_requested){
+	u64 start = cpu_cycles, end = cpu_cycles + max_cycles;
+	while(cpu_cycles < end && !cpu_stop_requested){
 		step();
-		n++;
+		cpu_cycles++;
+		cpu_executed++;
 	}
-	cpu_cycles += n;
-	cpu_executed += n;
-	return n;
+	return (u32)(cpu_cycles - start);
 }

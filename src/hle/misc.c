@@ -1,13 +1,16 @@
 /**
  * WIISP - misc.c
  * HLE de módulos pequeños: sceRtc (reloj), sceSuspendForUser, sceUtility
- * (parámetros del sistema y carga de módulos) y sceNetInet (sin red).
+ * (parámetros del sistema y carga de módulos), sceDmac (copias DMA) y
+ * sceNetInet (sin red).
  *
  * SPDX-License-Identifier: GPL-2.0-or-later
 **/
 
 #include "hle/hle.h"
 #include "core/memory.h"
+
+#include <string.h>
 
 /* --- sceRtc ------------------------------------------------------------ */
 /* Los ticks del RTC son microsegundos desde el 1 de enero del año 1. */
@@ -95,6 +98,45 @@ static void sceUtilityGetSystemParamInt(void){
 	RETURN(0);
 }
 
+/* --- sceDmac: copias por DMA ------------------------------------------- */
+/* Se copia al instante; el hilo espera lo que tardaría el DMA real
+   (unos 236 bytes/us medidos por PPSSPP) y mientras tanto TryMemcpy
+   devuelve "ocupado". */
+
+#define SCE_KERNEL_ERROR_BUSY            0x80000021u
+#define SCE_KERNEL_ERROR_PRIV_REQUIRED   0x80000023u
+#define SCE_KERNEL_ERROR_INVALID_POINTER 0x80000103u
+#define SCE_KERNEL_ERROR_INVALID_SIZE    0x80000104u
+
+static u64 dmac_deadline;
+
+static void dmac_copy(int try_only){
+	u32 dst = ARG(0), src = ARG(1), size = ARG(2);
+	u8 *d; const u8 *s;
+	if(size == 0){ RETURN(SCE_KERNEL_ERROR_INVALID_SIZE); return; }
+	if(!mem_ptr(dst, 1) || !mem_ptr(src, 1)){ RETURN(SCE_KERNEL_ERROR_INVALID_POINTER); return; }
+	if(size >= 0x80000000u || dst + size >= 0x80000000u || src + size >= 0x80000000u){
+		RETURN(SCE_KERNEL_ERROR_PRIV_REQUIRED);
+		return;
+	}
+	if(try_only && dmac_deadline > cpu_cycles){ RETURN(SCE_KERNEL_ERROR_BUSY); return; }
+	d = mem_ptr(dst, size);
+	s = mem_ptr(src, size);
+	if(d && s) memmove(d, s, size);
+	else {
+		u32 i;
+		for(i = 0; i < size; i++) mem_write8(dst + i, mem_read8(src + i));
+	}
+	RETURN(0);
+	if(size >= 272){
+		dmac_deadline = cpu_cycles + (u64)(size / 236) * CYCLES_PER_US;
+		kernel_wait_until(dmac_deadline);
+	}
+}
+
+static void sceDmacMemcpy(void){ dmac_copy(0); }
+static void sceDmacTryMemcpy(void){ dmac_copy(1); }
+
 /* --- sceNetInet: el Wii no expone red a la PSP emulada ----------------- */
 
 #define PSP_ENETDOWN 50
@@ -128,6 +170,11 @@ static const HleFunction utility[] = {
 	{ "sceUtilityUnloadAvModule", return_zero },
 };
 
+static const HleFunction dmac[] = {
+	{ "sceDmacMemcpy", sceDmacMemcpy },
+	{ "sceDmacTryMemcpy", sceDmacTryMemcpy },
+};
+
 static const HleFunction net_inet[] = {
 	{ "sceNetInetInit", return_zero },
 	{ "sceNetInetTerm", return_zero },
@@ -150,6 +197,7 @@ const HleLibrary hle_misc_libs[] = {
 	HLE_LIBRARY("sceRtc", rtc),
 	HLE_LIBRARY("sceSuspendForUser", suspend),
 	HLE_LIBRARY("sceUtility", utility),
+	HLE_LIBRARY("sceDmac", dmac),
 	HLE_LIBRARY("sceNetInet", net_inet),
 };
 const u32 hle_misc_libs_count = sizeof(hle_misc_libs) / sizeof(hle_misc_libs[0]);

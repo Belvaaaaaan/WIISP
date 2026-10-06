@@ -10,7 +10,14 @@
  * need_resched y pide al intérprete que pare.
  *
  * Si no hay ningún hilo listo, el tiempo salta directamente al siguiente
- * evento (fin de un retardo o vblank) en vez de gastar ciclos esperando.
+ * evento (fin de un retardo, vblank o evento programado) en vez de gastar
+ * ciclos esperando.
+ *
+ * Eventos e interrupciones siguen el modelo de PPSSPP (CoreTiming y
+ * sceKernelInterrupt.cpp, GPLv2+): un evento se dispara en un ciclo dado,
+ * y puede levantar una interrupción; las interrupciones pendientes se
+ * atienden en cuanto están habilitadas, ejecutando los manejadores del
+ * juego en contexto de interrupción.
  *
  * SPDX-License-Identifier: GPL-2.0-or-later
 **/
@@ -46,7 +53,7 @@ enum {
 
 enum {
 	W_NONE = 0, W_SLEEP = 1, W_DELAY = 2, W_SEMA = 3, W_EVF = 4, W_THREADEND = 9,
-	W_VBLANK = 100, W_LWMUTEX = 101
+	W_VBLANK = 100, W_LWMUTEX = 101, W_GEDRAW = 102, W_GELIST = 103
 };
 
 typedef struct {
@@ -109,12 +116,19 @@ static void wake(int i, u32 ret){
 
 /* El hilo actual pasa a esperar. timeout_addr: puntero a microsegundos
    (0 = sin límite). El valor de retorno por defecto es 0. */
-static int in_interrupt;
+static int in_interrupt;     /* profundidad de kernel_call_guest */
+static int intr_running;     /* atendiendo una interrupción */
+static int intr_enabled = 1; /* sceKernelCpuSuspendIntr/ResumeIntr */
+static int dispatch_enabled = 1;
 #define SCE_KERNEL_ERROR_CAN_NOT_WAIT 0x800201A7u
+
+int kernel_in_interrupt(void){ return in_interrupt || intr_running; }
+int kernel_interrupts_enabled(void){ return intr_enabled; }
+int kernel_dispatch_enabled(void){ return dispatch_enabled && intr_enabled; }
 
 static void wait_current(int type, int index, u32 timeout_addr){
 	Thread *t = current();
-	if(in_interrupt){ RETURN(SCE_KERNEL_ERROR_CAN_NOT_WAIT); return; }
+	if(kernel_in_interrupt() || !kernel_dispatch_enabled()){ RETURN(SCE_KERNEL_ERROR_CAN_NOT_WAIT); return; }
 	if(!t) return;
 	t->status = TH_WAITING;
 	t->wait = type;
@@ -133,6 +147,8 @@ static void wait_current(int type, int index, u32 timeout_addr){
 static void schedule(void){
 	int i, best = -1;
 	need_resched = 0;
+	/* Sin dispatch el hilo actual sigue (no puede esperar en ese estado) */
+	if(!kernel_dispatch_enabled() && cur >= 0 && threads[cur].status == TH_RUNNING) return;
 	for(i = 0; i < MAX_THREADS; i++){
 		Thread *t = &threads[i];
 		if(!t->used || (t->status != TH_READY && t->status != TH_RUNNING)) continue;
@@ -196,27 +212,366 @@ static int any_thread_alive(void){
 	return 0;
 }
 
+/* ------------------------------------------------------------------ */
+/* Eventos programados                                                */
+/* ------------------------------------------------------------------ */
+
+#define MAX_EVENTS 64
+
+typedef struct {
+	int used;
+	u64 when, order;
+	KernelEventFunc fn;
+	u64 userdata;
+} KEvent;
+
+static KEvent events[MAX_EVENTS];
+static u64 event_order;
+
+void kernel_schedule_event(u64 when, KernelEventFunc fn, u64 userdata){
+	int i;
+	for(i = 0; i < MAX_EVENTS && events[i].used; i++);
+	if(i == MAX_EVENTS){
+		hle_log("[KERNEL] demasiados eventos programados\n");
+		return;
+	}
+	events[i].used = 1;
+	events[i].when = when;
+	events[i].order = ++event_order;
+	events[i].fn = fn;
+	events[i].userdata = userdata;
+	/* Que el bucle principal recalcule cuánto puede correr la CPU */
+	cpu_stop_requested = 1;
+}
+
+s64 kernel_unschedule_event(KernelEventFunc fn, u64 userdata){
+	s64 left = 0;
+	int i, found = 0;
+	for(i = 0; i < MAX_EVENTS; i++){
+		if(!events[i].used || events[i].fn != fn || events[i].userdata != userdata) continue;
+		if(!found){ left = (s64)(events[i].when - cpu_cycles); found = 1; }
+		events[i].used = 0;
+	}
+	return left;
+}
+
+static u64 next_event(void){
+	u64 next = ~0ull;
+	int i;
+	for(i = 0; i < MAX_EVENTS; i++)
+		if(events[i].used && events[i].when < next) next = events[i].when;
+	return next;
+}
+
+/* Dispara, en orden, los eventos vencidos */
+static void process_events(void){
+	for(;;){
+		int i, best = -1;
+		for(i = 0; i < MAX_EVENTS; i++){
+			if(!events[i].used || events[i].when > cpu_cycles) continue;
+			if(best < 0 || events[i].when < events[best].when ||
+			   (events[i].when == events[best].when && events[i].order < events[best].order))
+				best = i;
+		}
+		if(best < 0) break;
+		events[best].used = 0;
+		events[best].fn(events[best].userdata);
+	}
+}
+
+/* ------------------------------------------------------------------ */
+/* Interrupciones                                                     */
+/* ------------------------------------------------------------------ */
+
+#define MAX_SUBINTR  32
+#define MAX_PENDING  128
+#define SCE_KERNEL_ERROR_ILLEGAL_CONTEXT   0x80020064u
+#define SCE_KERNEL_ERROR_ILLEGAL_INTRCODE  0x80020065u
+#define SCE_KERNEL_ERROR_CPUDI             0x80020066u
+#define SCE_KERNEL_ERROR_FOUND_HANDLER     0x80020067u
+#define SCE_KERNEL_ERROR_NOTFOUND_HANDLER  0x80020068u
+
+typedef struct { int used, enabled; u32 handler, arg; } SubIntr;
+typedef struct { int intr, sub; } PendingIntr;
+
+static SubIntr subintrs[PSP_NUM_INTR][MAX_SUBINTR];
+static const KernelIntrHandler *intr_handlers[PSP_NUM_INTR];
+static PendingIntr pending[MAX_PENDING];
+static int pending_len;
+
+void kernel_register_intr(int intno, const KernelIntrHandler *h){
+	if(intno >= 0 && intno < PSP_NUM_INTR) intr_handlers[intno] = h;
+}
+
+int kernel_get_subintr(int intno, int sub, u32 *handler, u32 *arg){
+	const SubIntr *si;
+	if(intno < 0 || intno >= PSP_NUM_INTR || sub < 0 || sub >= MAX_SUBINTR) return 0;
+	si = &subintrs[intno][sub];
+	if(!si->used) return 0;
+	if(handler) *handler = si->handler;
+	if(arg) *arg = si->arg;
+	return 1;
+}
+
+static void pending_remove(int i){
+	memmove(pending + i, pending + i + 1, (size_t)(pending_len - i - 1) * sizeof(pending[0]));
+	pending_len--;
+}
+
+static void pending_push(int intno, int sub){
+	if(pending_len == MAX_PENDING) return;
+	pending[pending_len].intr = intno;
+	pending[pending_len].sub = sub;
+	pending_len++;
+}
+
+/* Atiende las interrupciones pendientes, si se puede. Cada una puede
+   llamar a una función del juego (con su propia pila, sin poder esperar). */
+static void run_interrupts(void){
+	int ran = 0;
+	while(pending_len > 0 && intr_enabled && !intr_running && !in_interrupt && !hle_has_exited()){
+		PendingIntr p = pending[0];
+		const KernelIntrHandler *h = intr_handlers[p.intr];
+		u32 func = 0, a[3] = { 0, 0, 0 };
+		int call;
+		intr_running = 1;
+		ran = 1;
+		if(h && h->run) call = h->run(p.sub, &func, a);
+		else {
+			call = kernel_get_subintr(p.intr, p.sub, &func, &a[1]);
+			a[0] = (u32)p.sub;
+		}
+		if(!call || !func){
+			if(pending_len > 0) pending_remove(0);
+			intr_running = 0;
+			continue;
+		}
+		cpu.llbit = 0;
+		kernel_call_guest(func, a[0], a[1], a[2]);
+		if(pending_len > 0) pending_remove(0);
+		if(h && h->result) h->result(p.sub);
+		intr_running = 0;
+	}
+	if(ran) request_resched();
+}
+
+int kernel_trigger_interrupt(int intno, int sub){
+	int count = 0, i;
+	if(intno < 0 || intno >= PSP_NUM_INTR) return 0;
+	cpu.llbit = 0; /* volver de una interrupción rompe ll/sc */
+	if(sub == INTR_SUB_NONE){
+		pending_push(intno, sub);
+		count = 1;
+	} else {
+		for(i = 0; i < MAX_SUBINTR; i++){
+			const SubIntr *si = &subintrs[intno][i];
+			if((sub == INTR_SUB_ALL || sub == i) && si->used && si->enabled && si->handler){
+				pending_push(intno, i);
+				count++;
+			}
+		}
+	}
+	run_interrupts();
+	return count;
+}
+
+int kernel_cancel_raised_interrupts(int intno){
+	int i = intr_running ? 1 : 0, count = 0;
+	while(i < pending_len){
+		if(pending[i].intr == intno){ pending_remove(i); count++; }
+		else i++;
+	}
+	return count;
+}
+
+int kernel_register_subintr(int intno, int sub, u32 handler, u32 arg){
+	SubIntr *si;
+	if(intno < 0 || intno >= PSP_NUM_INTR || sub < 0 || sub >= MAX_SUBINTR) return (int)SCE_KERNEL_ERROR_ILLEGAL_INTRCODE;
+	si = &subintrs[intno][sub];
+	if(si->used && si->handler) return (int)SCE_KERNEL_ERROR_FOUND_HANDLER;
+	if(!si->used) si->enabled = 0;
+	si->used = 1;
+	si->handler = handler;
+	si->arg = arg;
+	return 0;
+}
+
+int kernel_release_subintr(int intno, int sub){
+	int i = 0;
+	SubIntr *si;
+	if(intno < 0 || intno >= PSP_NUM_INTR || sub < 0 || sub >= MAX_SUBINTR) return (int)SCE_KERNEL_ERROR_ILLEGAL_INTRCODE;
+	si = &subintrs[intno][sub];
+	if(!si->used || !si->handler) return (int)SCE_KERNEL_ERROR_NOTFOUND_HANDLER;
+	while(i < pending_len){
+		if(pending[i].intr == intno && pending[i].sub == sub) pending_remove(i);
+		else i++;
+	}
+	memset(si, 0, sizeof(*si));
+	return 0;
+}
+
+int kernel_enable_subintr(int intno, int sub, int enable){
+	SubIntr *si;
+	if(intno < 0 || intno >= PSP_NUM_INTR || sub < 0 || sub >= MAX_SUBINTR) return (int)SCE_KERNEL_ERROR_ILLEGAL_INTRCODE;
+	si = &subintrs[intno][sub];
+	if(!si->used){
+		if(!enable) return 0;
+		si->used = 1;
+		si->handler = si->arg = 0;
+	}
+	si->enabled = enable;
+	return 0;
+}
+
+/* Quién puede poner manejadores en cada interrupción, como lo ve un
+   programa de usuario en una PSP 6.61 (medido por PPSSPP). */
+enum { ACCESS_NO_HANDLER, ACCESS_NO_SUBS, ACCESS_KERNEL_SUBS, ACCESS_USER };
+static int intr_user_access(u32 intno){
+	switch(intno){
+	case PSP_GE_INTR: case PSP_VBLANK_INTR: return ACCESS_USER;
+	case 4: case 6: case 21: return ACCESS_KERNEL_SUBS;
+	case 7: case 10: case 12: case 15: case 16: case 17: case 18: case 19: case 20: case 22:
+	case 23: case 24: case 26: case 31: case 36: case 50: case 56: case 57: case 58: case 59:
+	case 60: case 61: case 65:
+		return ACCESS_NO_SUBS;
+	default: return ACCESS_NO_HANDLER;
+	}
+}
+
+static void sceKernelRegisterSubIntrHandler(void){
+	u32 intno = ARG(0), sub = ARG(1);
+	if(intno >= PSP_NUM_INTR){ RETURN(SCE_KERNEL_ERROR_ILLEGAL_INTRCODE); return; }
+	switch(intr_user_access(intno)){
+	case ACCESS_NO_HANDLER: RETURN(SCE_KERNEL_ERROR_NOTFOUND_HANDLER); return;
+	case ACCESS_NO_SUBS: case ACCESS_KERNEL_SUBS: RETURN(SCE_KERNEL_ERROR_ILLEGAL_INTRCODE); return;
+	default: break;
+	}
+	if(sub >= MAX_SUBINTR){ RETURN(SCE_KERNEL_ERROR_ILLEGAL_INTRCODE); return; }
+	if(intno == PSP_VBLANK_INTR){
+		if((sub >= 18 && sub <= 20) || (sub >= 24 && sub <= 26)){ RETURN(SCE_KERNEL_ERROR_FOUND_HANDLER); return; }
+		if(sub >= 16){ RETURN(SCE_KERNEL_ERROR_ILLEGAL_INTRCODE); return; }
+	}
+	RETURN(kernel_register_subintr((int)intno, (int)sub, ARG(2), ARG(3)));
+}
+
+static void sceKernelReleaseSubIntrHandler(void){
+	u32 intno = ARG(0), sub = ARG(1);
+	int access;
+	if(intno >= PSP_NUM_INTR){ RETURN(SCE_KERNEL_ERROR_ILLEGAL_INTRCODE); return; }
+	access = intr_user_access(intno);
+	if(access == ACCESS_NO_HANDLER){ RETURN(SCE_KERNEL_ERROR_NOTFOUND_HANDLER); return; }
+	if(access == ACCESS_NO_SUBS || sub >= MAX_SUBINTR){ RETURN(SCE_KERNEL_ERROR_ILLEGAL_INTRCODE); return; }
+	if(access == ACCESS_KERNEL_SUBS || (intno == PSP_VBLANK_INTR && sub >= 16)){
+		RETURN(SCE_KERNEL_ERROR_NOTFOUND_HANDLER);
+		return;
+	}
+	RETURN(kernel_release_subintr((int)intno, (int)sub));
+}
+
+static void sceKernelEnableSubIntr(void){
+	u32 intno = ARG(0), sub = ARG(1);
+	if(intno >= PSP_NUM_INTR || sub >= MAX_SUBINTR){ RETURN(SCE_KERNEL_ERROR_ILLEGAL_INTRCODE); return; }
+	RETURN(kernel_enable_subintr((int)intno, (int)sub, 1));
+}
+
+static void sceKernelDisableSubIntr(void){
+	u32 intno = ARG(0), sub = ARG(1);
+	if(intno >= PSP_NUM_INTR || sub >= MAX_SUBINTR){ RETURN(SCE_KERNEL_ERROR_ILLEGAL_INTRCODE); return; }
+	RETURN(kernel_enable_subintr((int)intno, (int)sub, 0));
+}
+
+static void sceKernelCpuSuspendIntr(void){
+	RETURN(intr_enabled ? 1 : 0);
+	intr_enabled = 0;
+	kernel_eat_cycles(15);
+}
+
+static void sceKernelCpuResumeIntr(void){
+	/* mtic a0: solo cuenta el bit 0 */
+	if(ARG(0) & 1){
+		intr_enabled = 1;
+		run_interrupts();
+		request_resched();
+	} else intr_enabled = 0;
+	kernel_eat_cycles(15);
+}
+
+static void sceKernelIsCpuIntrEnable(void){ RETURN(intr_enabled); }
+static void sceKernelIsCpuIntrSuspended(void){ RETURN(ARG(0) == 0 ? 1 : 0); }
+
+static void sceKernelSuspendDispatchThread(void){
+	if(!intr_enabled){ RETURN(SCE_KERNEL_ERROR_CPUDI); return; }
+	RETURN(dispatch_enabled);
+	dispatch_enabled = 0;
+	kernel_eat_cycles(940);
+}
+
+static void sceKernelResumeDispatchThread(void){
+	if(!intr_enabled){ RETURN(SCE_KERNEL_ERROR_CPUDI); return; }
+	dispatch_enabled = ARG(0) != 0;
+	RETURN(0);
+	request_resched();
+	kernel_eat_cycles(940);
+}
+
+/* Algunas funciones del sistema tardan: el tiempo pasa sin ejecutar nada */
+void kernel_eat_cycles(u32 n){
+	cpu_cycles += n;
+}
+
+/* ------------------------------------------------------------------ */
+/* Bucle principal                                                    */
+/* ------------------------------------------------------------------ */
+
 void kernel_run_until(u64 target){
 	while(!hle_has_exited() && cpu_cycles < target){
+		u64 limit, ev;
+		process_events();
 		process_timeouts();
+		run_interrupts();
 		if(need_resched) schedule();
 		if(!any_thread_alive()){
 			hle_exit("todos los hilos terminaron");
 			break;
 		}
+		limit = next_timeout();
+		ev = next_event();
+		if(ev < limit) limit = ev;
+		if(limit > target) limit = target;
 		if(cur < 0){
 			/* Ocioso: saltar al siguiente evento */
-			u64 next = next_timeout();
-			cpu_cycles = next < target ? next : target;
+			if(limit > cpu_cycles) cpu_cycles = limit;
 			continue;
 		}
-		u64 limit = next_timeout();
-		if(limit > target) limit = target;
-		u64 slice = limit > cpu_cycles ? limit - cpu_cycles : 1;
-		if(slice > 1000000) slice = 1000000;
-		cpu_stop_requested = 0;
-		cpu_run((u32)slice);
+		{
+			u64 slice = limit > cpu_cycles ? limit - cpu_cycles : 1;
+			if(slice > 1000000) slice = 1000000;
+			cpu_stop_requested = 0;
+			cpu_run((u32)slice);
+		}
 	}
+}
+
+/* Esperas por objetos del HLE (el GE): el hilo actual espera a (tipo, id) */
+void kernel_wait_object(int type, u32 id){
+	wait_current(type == KWAIT_GE_DRAW ? W_GEDRAW : W_GELIST, (int)id, 0);
+}
+
+/* Despierta, por orden de llegada, a los que esperan (tipo, id) */
+int kernel_wake_object(int type, u32 id, u32 ret){
+	int w = type == KWAIT_GE_DRAW ? W_GEDRAW : W_GELIST, woke = 0;
+	for(;;){
+		int i, best = -1;
+		for(i = 0; i < MAX_THREADS; i++){
+			Thread *t = &threads[i];
+			if(!t->used || t->status != TH_WAITING || t->wait != w || t->wait_index != (int)id) continue;
+			if(best < 0 || t->wait_seq < threads[best].wait_seq) best = i;
+		}
+		if(best < 0) break;
+		wake(best, ret);
+		woke++;
+	}
+	return woke;
 }
 
 void kernel_vblank(void){
@@ -225,11 +580,12 @@ void kernel_vblank(void){
 	for(i = 0; i < MAX_THREADS; i++)
 		if(threads[i].used && threads[i].status == TH_WAITING && threads[i].wait == W_VBLANK)
 			wake(i, 0);
+	kernel_trigger_interrupt(PSP_VBLANK_INTR, INTR_SUB_ALL);
 }
 
 void kernel_wait_until(u64 cycle){
 	Thread *t = current();
-	if(!t || in_interrupt || cycle <= cpu_cycles) return;
+	if(!t || kernel_in_interrupt() || cycle <= cpu_cycles) return;
 	wait_current(W_DELAY, 0, 0);
 	t->wait_until = cycle;
 }
@@ -383,6 +739,14 @@ static void sceKernelTotalFreeMemSize(void){
 }
 
 static void sceKernelDevkitVersion(void){ RETURN(0x06060010); } /* firmware 6.60 */
+
+/* Versión del SDK con que se compiló el juego: cambia detalles del
+   firmware (p. ej. en sceGe). Sale de module_sdk_version o de
+   sceKernelSetCompiledSdkVersion*. */
+static u32 sdk_version;
+u32 kernel_sdk_version(void){ return sdk_version; }
+static void sceKernelSetCompiledSdkVersion(void){ sdk_version = ARG(0); RETURN(0); }
+static void sceKernelGetCompiledSdkVersion(void){ RETURN(sdk_version); }
 static void return_zero(void){ RETURN(0); }
 
 /* Printf mínimo para sceKernelPrintf: lee hasta 7 argumentos de registros */
@@ -528,8 +892,6 @@ static void exit_thread(int i, u32 status, int del){
 
 static int callback_done;
 
-int kernel_in_interrupt(void){ return in_interrupt; }
-
 void kernel_callback_return(void){
 	callback_done = 1;
 	cpu_stop_requested = 1;
@@ -559,7 +921,8 @@ u32 kernel_call_guest(u32 func, u32 a0, u32 a1, u32 a2){
 	ret = cpu.r[R_V0];
 	cpu = saved;
 	callback_done = saved_done;
-	cpu_stop_requested = saved_stop || need_resched || hle_has_exited();
+	(void)saved_stop;
+	cpu_stop_requested = 1; /* que el bucle principal revise eventos y cambios de hilo */
 	in_interrupt--;
 	return ret;
 }
@@ -710,8 +1073,6 @@ static void sceKernelWaitThreadEnd(void){
 	wait_current(W_THREADEND, i, ARG(1));
 }
 
-static void sceKernelSuspendDispatchThread(void){ RETURN(1); }
-static void sceKernelResumeDispatchThread(void){ RETURN(0); }
 
 /* ------------------------------------------------------------------ */
 /* Tiempo                                                             */
@@ -1121,8 +1482,6 @@ static void sceKernelCreateCallback(void){
 	RETURN(make_uid(UID_CALLBACK, counter++ & 0x7FFF));
 }
 
-static void sceKernelCpuSuspendIntr(void){ RETURN(1); }
-static void sceKernelIsCpuIntrEnable(void){ RETURN(1); }
 
 static void sceKernelStdin(void){ RETURN(0); }
 static void sceKernelStdout(void){ RETURN(1); }
@@ -1188,6 +1547,12 @@ void kernel_init(const PspModule *mod, const char *exec_path){
 	memset(semas, 0, sizeof(semas));
 	memset(evfs, 0, sizeof(evfs));
 	memset(blocks, 0, sizeof(blocks));
+	memset(events, 0, sizeof(events));
+	memset(subintrs, 0, sizeof(subintrs));
+	pending_len = 0;
+	intr_running = in_interrupt = 0;
+	intr_enabled = dispatch_enabled = 1;
+	sdk_version = mod->sdk_version;
 	cur = -1;
 	need_resched = 0;
 	seq = 0;
@@ -1291,10 +1656,10 @@ static const HleFunction thread_man[] = {
 
 static const HleFunction kernel_library[] = {
 	{ "sceKernelCpuSuspendIntr", sceKernelCpuSuspendIntr },
-	{ "sceKernelCpuResumeIntr", return_zero },
-	{ "sceKernelCpuResumeIntrWithSync", return_zero },
+	{ "sceKernelCpuResumeIntr", sceKernelCpuResumeIntr },
+	{ "sceKernelCpuResumeIntrWithSync", sceKernelCpuResumeIntr },
 	{ "sceKernelIsCpuIntrEnable", sceKernelIsCpuIntrEnable },
-	{ "sceKernelIsCpuIntrSuspended", return_zero },
+	{ "sceKernelIsCpuIntrSuspended", sceKernelIsCpuIntrSuspended },
 	{ "sceKernelLockLwMutex", sceKernelLockLwMutex },
 	{ "sceKernelLockLwMutexCB", sceKernelLockLwMutex },
 	{ "sceKernelTryLockLwMutex", sceKernelTryLockLwMutex },
@@ -1308,8 +1673,18 @@ static const HleFunction sysmem_user[] = {
 	{ "sceKernelMaxFreeMemSize", sceKernelMaxFreeMemSize },
 	{ "sceKernelTotalFreeMemSize", sceKernelTotalFreeMemSize },
 	{ "sceKernelDevkitVersion", sceKernelDevkitVersion },
-	{ "sceKernelSetCompiledSdkVersion", return_zero },
-	{ "sceKernelGetCompiledSdkVersion", return_zero },
+	{ "sceKernelSetCompiledSdkVersion", sceKernelSetCompiledSdkVersion },
+	{ "sceKernelSetCompiledSdkVersion370", sceKernelSetCompiledSdkVersion },
+	{ "sceKernelSetCompiledSdkVersion380_390", sceKernelSetCompiledSdkVersion },
+	{ "sceKernelSetCompiledSdkVersion395", sceKernelSetCompiledSdkVersion },
+	{ "sceKernelSetCompiledSdkVersion401_402", sceKernelSetCompiledSdkVersion },
+	{ "sceKernelSetCompiledSdkVersion500_505", sceKernelSetCompiledSdkVersion },
+	{ "sceKernelSetCompiledSdkVersion507", sceKernelSetCompiledSdkVersion },
+	{ "sceKernelSetCompiledSdkVersion600_602", sceKernelSetCompiledSdkVersion },
+	{ "sceKernelSetCompiledSdkVersion603_605", sceKernelSetCompiledSdkVersion },
+	{ "sceKernelSetCompiledSdkVersion606", sceKernelSetCompiledSdkVersion },
+	{ "sceKernelGetCompiledSdkVersion", sceKernelGetCompiledSdkVersion },
+	{ "sceKernelSetCompilerVersion", return_zero },
 	{ "sceKernelPrintf", sceKernelPrintf },
 };
 
@@ -1349,7 +1724,15 @@ static const HleFunction utils_user[] = {
 	{ "sceKernelSetGPO", return_zero },
 };
 
+static const HleFunction interrupt_manager[] = {
+	{ "sceKernelRegisterSubIntrHandler", sceKernelRegisterSubIntrHandler },
+	{ "sceKernelReleaseSubIntrHandler", sceKernelReleaseSubIntrHandler },
+	{ "sceKernelEnableSubIntr", sceKernelEnableSubIntr },
+	{ "sceKernelDisableSubIntr", sceKernelDisableSubIntr },
+};
+
 const HleLibrary hle_kernel_libs[] = {
+	HLE_LIBRARY("InterruptManager", interrupt_manager),
 	HLE_LIBRARY("ThreadManForUser", thread_man),
 	HLE_LIBRARY("Kernel_Library", kernel_library),
 	HLE_LIBRARY("SysMemUserForUser", sysmem_user),

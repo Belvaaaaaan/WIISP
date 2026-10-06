@@ -280,6 +280,34 @@ static int patch_imports(u32 start, u32 end, PspModule *mod){
 	return LOADER_OK;
 }
 
+/* Exportaciones: misma cabecera que las importaciones, pero la tabla de
+   NIDs va seguida de la de direcciones (funciones y luego variables).
+   Solo nos interesa la variable module_sdk_version de la biblioteca sin
+   nombre ("syslib"), que algunos comportamientos del firmware consultan. */
+#define NID_MODULE_SDK_VERSION 0x11B97506u
+
+static void read_exports(u32 start, u32 end, PspModule *mod){
+	u32 addr = start;
+	if(end < start || !mem_valid(start, end - start)) return;
+	while(end - addr >= 16){
+		u32 name = mem_read32(addr);
+		u32 size = mem_read8(addr + 8);
+		u32 var_count = mem_read8(addr + 9);
+		u32 func_count = mem_read16(addr + 10);
+		u32 table = mem_read32(addr + 12);
+		u32 total = var_count + func_count, i;
+		if(size < 4) return;
+		if(!name && total && mem_valid(table, total * 8)){
+			for(i = func_count; i < total; i++){
+				u32 var = mem_read32(table + (total + i) * 4);
+				if(mem_read32(table + i * 4) == NID_MODULE_SDK_VERSION && mem_valid(var, 4))
+					mod->sdk_version = mem_read32(var);
+			}
+		}
+		addr += size * 4;
+	}
+}
+
 static int read_modinfo(Elf *e, u32 base, PspModule *mod){
 	u32 addr = find_section_addr(e, base, ".rodata.sceModuleInfo");
 	if(!addr){
@@ -296,6 +324,7 @@ static int read_modinfo(Elf *e, u32 base, PspModule *mod){
 	memcpy(mod->name, mem_ptr(addr + 4, 28), 28);
 	mod->name[28] = 0;
 	mod->gp = mem_read32(addr + 32);
+	read_exports(mem_read32(addr + 36), mem_read32(addr + 40), mod);
 	return patch_imports(mem_read32(addr + 44), mem_read32(addr + 48), mod);
 }
 

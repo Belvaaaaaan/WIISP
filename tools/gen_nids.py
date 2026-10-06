@@ -17,6 +17,30 @@ for path in sorted(root.rglob('*.S')):
     for lib, nid, name in pat.findall(path.read_text(errors='replace')):
         names.setdefault(int(nid, 16), name)
 
+# NIDs de firmwares posteriores que no están en los stubs del PSPSDK
+# (nombres según la tabla HLE de PPSSPP y uOFW).
+EXTRA = {
+    0x342061E5: 'sceKernelSetCompiledSdkVersion370',
+    0x315AD3A0: 'sceKernelSetCompiledSdkVersion380_390',
+    0xEBD5C3E6: 'sceKernelSetCompiledSdkVersion395',
+    0x057E7380: 'sceKernelSetCompiledSdkVersion401_402',
+    0xF77D77CB: 'sceKernelSetCompilerVersion',
+    0x91DE343C: 'sceKernelSetCompiledSdkVersion500_505',
+    0x7893F79A: 'sceKernelSetCompiledSdkVersion507',
+    0x35669D4C: 'sceKernelSetCompiledSdkVersion600_602',
+    0x1B4217BC: 'sceKernelSetCompiledSdkVersion603_605',
+    0x358CA1BB: 'sceKernelSetCompiledSdkVersion606',
+    0xACBD88CA: 'sceKernelTotalMemSize',
+    0xA6848DF8: 'sceKernelSetUsersystemLibWork',
+    0x6231A71D: 'sceKernelSetPTRIG',
+    0x39F49610: 'sceKernelGetPTRIG',
+    0xDB83A952: 'sceKernelGetMemoryBlockAddr',
+    0x50F61D8A: 'sceKernelFreeMemoryBlock',
+    0xFE707FDF: 'sceKernelAllocMemoryBlock',
+}
+for nid, name in EXTRA.items():
+    names.setdefault(nid, name)
+
 out = sys.stdout
 out.write('/**\n * WIISP - nid_names.c\n'
           ' * GENERADO por tools/gen_nids.py a partir de los stubs del PSPSDK\n'

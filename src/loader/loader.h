@@ -62,6 +62,7 @@ typedef struct {
 	u32  num_libs;     /* bibliotecas importadas */
 	u32  num_imports;  /* funciones importadas */
 	u32  num_var_imports; /* variables importadas (aún no soportadas) */
+	u32  sdk_version;  /* variable exportada module_sdk_version (0 si no hay) */
 	PspImport *imports;   /* el índice es el código del syscall */
 
 	/* Metadatos del PARAM.SFO si venía en un PBP */

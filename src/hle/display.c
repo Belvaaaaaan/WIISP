@@ -85,6 +85,21 @@ static void sceDisplayGetVcount(void){ RETURN((u32)(cpu_cycles / CYCLES_PER_FRAM
 static void sceDisplayIsVblank(void){ RETURN(0); }
 static void sceDisplayGetFramePerSec(void){ union { float f; u32 u; } v = { 59.9400599f }; RETURN(v.u); }
 
+/* 286 líneas por cuadro; como en PPSSPP, el contador nunca da 0 */
+#define HCOUNT_PER_FRAME 286u
+static u32 current_hcount(void){
+	return 1u + (u32)((cpu_cycles % CYCLES_PER_FRAME) / (PSP_CPU_HZ / 60u / HCOUNT_PER_FRAME));
+}
+static void sceDisplayGetCurrentHcount(void){ RETURN(current_hcount()); }
+static void sceDisplayGetAccumulatedHcount(void){
+	RETURN((u32)(cpu_cycles / CYCLES_PER_FRAME) * HCOUNT_PER_FRAME + current_hcount());
+}
+static void sceDisplayGetVblankRest(void){
+	RETURN((u32)((CYCLES_PER_FRAME - cpu_cycles % CYCLES_PER_FRAME) / CYCLES_PER_US));
+}
+static void sceDisplayIsForeground(void){ RETURN(fb.addr != 0); }
+static void display_zero(void){ RETURN(0); }
+
 /* --- sceCtrl --------------------------------------------------------- */
 
 static void sceCtrlSetSamplingCycle(void){ RETURN(ctrl_cycle); ctrl_cycle = ARG(0); }
@@ -118,6 +133,12 @@ static const HleFunction display[] = {
 	{ "sceDisplayGetVcount", sceDisplayGetVcount },
 	{ "sceDisplayIsVblank", sceDisplayIsVblank },
 	{ "sceDisplayGetFramePerSec", sceDisplayGetFramePerSec },
+	{ "sceDisplayGetCurrentHcount", sceDisplayGetCurrentHcount },
+	{ "sceDisplayGetAccumulatedHcount", sceDisplayGetAccumulatedHcount },
+	{ "sceDisplayGetVblankRest", sceDisplayGetVblankRest },
+	{ "sceDisplayIsForeground", sceDisplayIsForeground },
+	{ "sceDisplaySetHoldMode", display_zero },
+	{ "sceDisplaySetResumeMode", display_zero },
 };
 
 static const HleFunction ctrl[] = {

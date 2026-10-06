@@ -162,11 +162,51 @@ void kernel_thread_return(void);
    Se puede llamar desde dentro de un syscall. */
 u32  kernel_call_guest(u32 func, u32 a0, u32 a1, u32 a2);
 void kernel_callback_return(void);
-/* 1 mientras se ejecuta una llamada de kernel_call_guest */
+/* 1 mientras se atiende una interrupción o se ejecuta kernel_call_guest */
 int  kernel_in_interrupt(void);
 int  kernel_wait_vblank(void); /* bloquea el hilo actual hasta el vblank */
 /* Bloquea el hilo actual hasta el ciclo indicado (si no es una interrupción) */
 void kernel_wait_until(u64 cycle);
+
+/* Eventos programados, como CoreTiming de PPSSPP (kernel.c): fn(userdata)
+   se llama cuando cpu_cycles llega a `when`. unschedule devuelve los
+   ciclos que le faltaban al primero que quita (0 si no había). */
+typedef void (*KernelEventFunc)(u64 userdata);
+void kernel_schedule_event(u64 when, KernelEventFunc fn, u64 userdata);
+s64  kernel_unschedule_event(KernelEventFunc fn, u64 userdata);
+/* El tiempo avanza sin ejecutar instrucciones (coste de una llamada) */
+void kernel_eat_cycles(u32 n);
+
+/* Interrupciones (kernel.c) */
+#define PSP_GE_INTR      25
+#define PSP_VBLANK_INTR  30
+#define PSP_NUM_INTR     67
+#define INTR_SUB_NONE   (-1)  /* una sola entrada, sin subinterrupción */
+#define INTR_SUB_ALL    (-2)  /* todas las subinterrupciones habilitadas */
+
+typedef struct {
+	/* Prepara la interrupción. Devuelve 1 si hay que llamar a *func con
+	   los argumentos a[0..2] (y luego a result), 0 si ya está atendida. */
+	int  (*run)(int sub, u32 *func, u32 a[3]);
+	void (*result)(int sub);
+} KernelIntrHandler;
+
+void kernel_register_intr(int intno, const KernelIntrHandler *h);
+int  kernel_trigger_interrupt(int intno, int sub);
+int  kernel_cancel_raised_interrupts(int intno);
+int  kernel_get_subintr(int intno, int sub, u32 *handler, u32 *arg);
+int  kernel_register_subintr(int intno, int sub, u32 handler, u32 arg);
+int  kernel_release_subintr(int intno, int sub);
+int  kernel_enable_subintr(int intno, int sub, int enable);
+int  kernel_interrupts_enabled(void);
+int  kernel_dispatch_enabled(void);   /* dispatch y además interrupciones */
+u32  kernel_sdk_version(void);
+
+/* El hilo actual espera a un objeto del HLE; kernel_wake_object despierta
+   a todos los que esperan ese (tipo, id) por orden de llegada. */
+enum { KWAIT_GE_DRAW = 1, KWAIT_GE_LIST = 2 };
+void kernel_wait_object(int type, u32 id);
+int  kernel_wake_object(int type, u32 id, u32 ret);
 
 /* Asignador de memoria de usuario (kernel.c) */
 u32  kernel_alloc(u32 size, int from_high, const char *name);

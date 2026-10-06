@@ -87,33 +87,80 @@ static inline u32 list_addr(u32 a){ return a & 0x0FFFFFFFu; }
 
 /* --- Ejecución de comandos ---------------------------------------------- */
 
+/* Transferencia de bloques. Como en el hardware (medido por PPSSPP):
+   - una dirección de VRAM que se pasa del último espejo vuelve al
+     principio de la VRAM;
+   - con solapamiento o vuelta, cada línea se copia en trozos de 64 bytes
+     de delante hacia atrás (lo que "arrastra" los datos si dst > src);
+   - si el origen o el destino no son válidos (y no son VRAM), no se copia. */
+static inline int is_vram(u32 a){ return (a & 0x3F800000u) == 0x04000000u; }
+static inline u32 vram_wrap(u32 a){ return (a & 0x04800000u) == 0x04800000u ? a & ~0x00800000u : a; }
+
+static void copy_chunk(u32 d, u32 s, u32 n){
+	u8 tmp[64];
+	u32 i;
+	for(i = 0; i < n; i++) tmp[i] = mem_read8(vram_wrap(s + i));
+	for(i = 0; i < n; i++) mem_write8(vram_wrap(d + i), tmp[i]);
+}
+
 static void do_transfer(u32 arg){
 	u32 bpp = (arg & 1) ? 4 : 2;
-	u32 src = (ge.cmd[GE_TRANSFERSRC] & 0xFFFFF0u) | ((ge.cmd[GE_TRANSFERSRCW] & 0xFF0000u) << 8);
-	u32 dst = (ge.cmd[GE_TRANSFERDST] & 0xFFFFF0u) | ((ge.cmd[GE_TRANSFERDSTW] & 0xFF0000u) << 8);
+	u32 src_base = (ge.cmd[GE_TRANSFERSRC] & 0xFFFFF0u) | ((ge.cmd[GE_TRANSFERSRCW] & 0xFF0000u) << 8);
+	u32 dst_base = (ge.cmd[GE_TRANSFERDST] & 0xFFFFF0u) | ((ge.cmd[GE_TRANSFERDSTW] & 0xFF0000u) << 8);
 	u32 src_stride = ge.cmd[GE_TRANSFERSRCW] & 0x7F8;
 	u32 dst_stride = ge.cmd[GE_TRANSFERDSTW] & 0x7F8;
 	u32 sx = ge.cmd[GE_TRANSFERSRCPOS] & 0x3FF, sy = (ge.cmd[GE_TRANSFERSRCPOS] >> 10) & 0x3FF;
 	u32 dx = ge.cmd[GE_TRANSFERDSTPOS] & 0x3FF, dy = (ge.cmd[GE_TRANSFERDSTPOS] >> 10) & 0x3FF;
 	u32 w = (ge.cmd[GE_TRANSFERSIZE] & 0x3FF) + 1, h = ((ge.cmd[GE_TRANSFERSIZE] >> 10) & 0x3FF) + 1;
-	u32 y;
+	u32 src, dst, src_size, dst_size, line = w * bpp, y;
+	int overlap, src_ok, dst_ok, src_wraps, dst_wraps;
 
-	for(y = 0; y < h; y++){
-		u8 *s = mem_ptr(src + ((sy + y) * src_stride + sx) * bpp, w * bpp);
-		u8 *d = mem_ptr(dst + ((dy + y) * dst_stride + dx) * bpp, w * bpp);
-		if(s && d) memmove(d, s, w * bpp);
+	src_base = vram_wrap(src_base);
+	dst_base = vram_wrap(dst_base);
+	src = src_base + (sy * src_stride + sx) * bpp;
+	dst = dst_base + (dy * dst_stride + dx) * bpp;
+	src_size = (h - 1) * src_stride + line;
+	dst_size = (h - 1) * dst_stride + line;
+	overlap = src + src_size > dst && dst + dst_size > src;
+	src_ok = mem_valid(src, src_size);
+	dst_ok = mem_valid(dst, dst_size);
+	src_wraps = is_vram(src_base) && !src_ok;
+	dst_wraps = is_vram(dst_base) && !dst_ok;
+	list_cost += w * h * bpp * 16 / 10 / 4;
+
+	if((overlap || src_wraps || dst_wraps) && (src_ok || src_wraps) && (dst_ok || dst_wraps)){
+		for(y = 0; y < h; y++){
+			u32 s = vram_wrap(src_base + ((y + sy) * src_stride + sx) * bpp);
+			u32 d = vram_wrap(dst_base + ((y + dy) * dst_stride + dx) * bpp);
+			u32 i;
+			for(i = 0; i < line; i += 64){
+				u32 n = line - i < 64 ? line - i : 64;
+				copy_chunk(d, s, n);
+				s = vram_wrap(s + n);
+				d = vram_wrap(d + n);
+			}
+		}
+	} else if(src_ok && dst_ok){
+		for(y = 0; y < h; y++){
+			u8 *s = mem_ptr(src_base + ((y + sy) * src_stride + sx) * bpp, line);
+			u8 *d = mem_ptr(dst_base + ((y + dy) * dst_stride + dx) * bpp, line);
+			if(s && d) memcpy(d, s, line);
+		}
 	}
-	list_cost += w * h / 2;
 }
 
+/* La CLUT interna es de 1 KB por carga; lo que cae fuera de memoria válida
+   se rellena con ceros (p. ej. una paleta pegada al final de la VRAM). */
 void ge_load_clut(u32 blocks){
 	u32 addr = (ge.cmd[GE_CLUTADDR] & 0xFFFFF0u) | ((ge.cmd[GE_CLUTADDRUPPER] << 8) & 0x0F000000u);
-	u32 bytes = (blocks & 0x3F) * 32;
-	u8 *p;
-	if(bytes > sizeof(ge.clut)) bytes = sizeof(ge.clut);
-	p = mem_ptr(addr, bytes);
-	if(p) memcpy(ge.clut, p, bytes);
-	else memset(ge.clut, 0, bytes);
+	u32 bytes = (blocks & 0x3F) * 32, off;
+	if(bytes > 1024) bytes = 1024;
+	if(!mem_valid(addr, 1) && addr == 0) return;
+	for(off = 0; off < bytes; off += 16){
+		const u8 *p = mem_ptr(addr + off, 16);
+		if(p) memcpy(ge.clut + off, p, 16);
+		else memset(ge.clut + off, 0, 16);
+	}
 	ge.clut_bytes = bytes;
 }
 
@@ -453,6 +500,23 @@ static void sceGeGetCmd(void){
 	RETURN(c < 256 ? (c << 24) | ge.cmd[c] : SCE_GE_ERROR_INVALID_ARGUMENT);
 }
 
+/* sceGeGetStack(índice, u32 *pila): profundidad de CALL de la lista actual */
+static void sceGeGetStack(void){
+	int index = (int)ARG(0);
+	u32 out = ARG(1);
+	GeList *l;
+	if(!queue_len){ RETURN(0); return; }
+	l = &lists[queue[0]];
+	if(l->sp <= index){ RETURN(0x80000102u /* SCE_KERNEL_ERROR_INVALID_INDEX */); return; }
+	if(index >= 0 && mem_valid(out, 32)){
+		mem_write32(out, 0);
+		mem_write32(out + 4, l->stack_pc[index] + 4);
+		mem_write32(out + 8, l->stack_offset[index]);
+		mem_write32(out + 28, ge.base);
+	}
+	RETURN((u32)l->sp);
+}
+
 /* sceGeGetMtx(tipo, float *m): 0-7 huesos, 8 mundo, 9 vista, 10 proyección, 11 textura */
 static void sceGeGetMtx(void){
 	u32 type = ARG(0), out = ARG(1), n, i;
@@ -520,6 +584,7 @@ static const HleFunction ge_user[] = {
 	{ "sceGeUnsetCallback", sceGeUnsetCallback },
 	{ "sceGeGetCmd", sceGeGetCmd },
 	{ "sceGeGetMtx", sceGeGetMtx },
+	{ "sceGeGetStack", sceGeGetStack },
 	{ "sceGeSaveContext", sceGeSaveContext },
 	{ "sceGeRestoreContext", sceGeRestoreContext },
 };

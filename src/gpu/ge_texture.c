@@ -40,15 +40,24 @@ void ge_texture_setup(GeTexture *tex){
 	tex->height = tex->level_h[0];
 }
 
-static void clut_lookup(u32 index, u8 rgba[4]){
+/* El desplazamiento csa se recorta a la CLUT de 1 KB (256 entradas de 32
+   bits o 512 de 16). Con el bit 8 de TEXMODE cada mipmap usa su propia
+   parte de la paleta. */
+static void clut_lookup(u32 index, int lvl, u8 rgba[4]){
 	u32 cf = ge.cmd[GE_CLUTFORMAT];
 	u32 fmt = cf & 3, shift = (cf >> 2) & 0x1F, mask = (cf >> 8) & 0xFF, csa = (cf >> 16) & 0x1F;
-	index = ((index >> shift) & mask) | (csa << 4);
+	u32 share = 0;
+	index = ((index >> shift) & mask) | ((csa << 4) & (fmt == GE_FMT_8888 ? 0xFFu : 0x1FFu));
+	if(ge.cmd[GE_TEXMODE] & 0x100)
+		share = (ge.cmd[GE_TEXFORMAT] & 0xF) == GE_TFMT_CLUT4 ? (u32)lvl * 16 : (u32)(lvl & 1) * 256;
+	index += share;
 	if(fmt == GE_FMT_8888) ge_decode_color(fmt, rd_le32(ge.clut + (index & 0x1FF) * 4), rgba);
 	else ge_decode_color(fmt, rd_le16(ge.clut + (index & 0x3FF) * 2), rgba);
 }
 
-/* Colores de un bloque DXT (los colores 565 tienen el rojo en los bits altos) */
+/* Colores de un bloque DXT (los colores 565 tienen el rojo en los bits altos).
+   La regla c1 > c2 vale para los tres formatos: en DXT3/5 el color 3 con
+   c1 <= c2 también es negro (el alfa sale luego del bloque de alfa). */
 static u32 dxt_color(const u8 *block, int idx, int dxt1, u8 rgba[4]){
 	u16 c1 = rd_le16(block + 4), c2 = rd_le16(block + 6);
 	int r1 = (c1 >> 8) & 0xF8, g1 = (c1 >> 3) & 0xFC, b1 = (c1 << 3) & 0xF8;
@@ -58,12 +67,12 @@ static u32 dxt_color(const u8 *block, int idx, int dxt1, u8 rgba[4]){
 	case 0: r = r1; g = g1; b = b1; break;
 	case 1: r = r2; g = g2; b = b2; break;
 	case 2:
-		if(c1 > c2 || !dxt1){ r = (2 * r1 + r2) / 3; g = (2 * g1 + g2) / 3; b = (2 * b1 + b2) / 3; }
+		if(c1 > c2){ r = (2 * r1 + r2) / 3; g = (2 * g1 + g2) / 3; b = (2 * b1 + b2) / 3; }
 		else { r = (r1 + r2) / 2; g = (g1 + g2) / 2; b = (b1 + b2) / 2; }
 		break;
 	default:
-		if(c1 > c2 || !dxt1){ r = (2 * r2 + r1) / 3; g = (2 * g2 + g1) / 3; b = (2 * b2 + b1) / 3; }
-		else { r = g = b = 0; a = 0; }
+		if(c1 > c2){ r = (2 * r2 + r1) / 3; g = (2 * g2 + g1) / 3; b = (2 * b2 + b1) / 3; }
+		else { r = g = b = 0; a = dxt1 ? 0 : 255; }
 		break;
 	}
 	rgba[0] = (u8)r; rgba[1] = (u8)g; rgba[2] = (u8)b; rgba[3] = (u8)a;
@@ -131,5 +140,5 @@ void ge_texture_fetch(const GeTexture *tex, int lvl, int x, int y, u8 rgba[4]){
 	case GE_TFMT_CLUT16: raw = rd_le16(p); break;
 	default:             raw = rd_le32(p); break;
 	}
-	clut_lookup(raw, rgba);
+	clut_lookup(raw, lvl, rgba);
 }
