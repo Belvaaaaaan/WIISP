@@ -16,7 +16,9 @@ Por eso cada componente se diseña buscando el atajo:
    implementan en C nativo del Wii. Es lo que hace viable a PPSSPP.
 2. **Dynarec MIPS→PPC basado en Not64**, simplificado (el Allegrex es de 32
    bits) y sin las penalizaciones que Not64 pagaba por la TLB de la N64.
-3. **El GE se traduce a GX** (la GPU del Wii). No hay render por software.
+3. **El GE se dibuja con GX** (la GPU del Wii). Hay además un renderizador
+   por software exacto (port del de PPSSPP) que sirve de referencia, para las
+   pruebas en PC y como opción "exacta" en el Wii.
 4. **Lo que no se puede emular barato, se aproxima o se recorta.** Ejemplos:
    vídeos FMV, efectos de framebuffer raros, la precisión de la VFPU.
 5. **Medir en hardware real lo antes posible.** Ninguna optimización se da
@@ -222,18 +224,42 @@ porta entero: su consumo de memoria no cabe en el Wii.
   suelen estar cifrados (`~PSP`) y habrá que descifrarlos con la
   implementación de KIRK (también en PPSSPP); el cargador ya detecta ese caso.
 
-## 7. Gráficos: GE → GX (fases 4 y 6)
+## 7. Gráficos: GE → GX
 
-| PSP (GE) | Wii (GX) | Estrategia |
+El GE tiene dos renderizadores que comparten todo lo anterior a la
+rasterización (`src/gpu`):
+
+- **Procesador de listas** (`ge.c`): cola de listas, señales, llamadas,
+  contexto, transferencias y CLUT, fiel al hardware (pspautotests).
+- **Geometría** (`ge_vertex.c`): decodificación de vértices, morph,
+  skinning, transformación, luces, texgen, recorte en el plano cercano,
+  curvas bezier/spline, sprites e inmediatos con la aritmética del GE que
+  midió PPSSPP. Da vértices en coordenadas de pantalla de la PSP.
+- **Rasterizador por software** (`ge_raster.c`): port del de PPSSPP,
+  exacto al bit en las pruebas `gpu/exact`. Lento en el Wii (unos 7 Mpíxel/s
+  en un PC): para pruebas y como modo "exacto".
+- **Backend GX** (`src/wii/gx_ge.c`, el modo por defecto en el Wii). GX solo
+  rasteriza; la geometría sigue en la CPU, así que las reglas raras del GE
+  (recorte, culling, sprites, inmediatos) son las mismas en los dos modos.
+
+| PSP (GE) | Wii (GX) | Cómo |
 |---|---|---|
-| Listas de comandos en RAM | FIFO de GX | Decodificar la lista y emitir estado y primitivas de GX |
-| Vértices s8/s16/float con transformación por hardware | GX acepta s8/s16 con bits fraccionarios | **Pasar los vértices tal cual** cuando el formato coincide (sin coste de CPU). Si no, convertir con `psq_l` (paired singles con escalado por GQR) |
-| Skinning de hasta 8 huesos | Matrices indexadas de GX (10 de posición) | Mapear los huesos a matrices de GX; si no basta, skinning por CPU con paired singles |
-| Texturas swizzled, CLUT de 4/8 bits con paleta de 16/32 bits | CI4/CI8 con TLUT (RGB565/RGB5A3/IA8) | Des-swizzlear y convertir una vez, con caché por hash. Las paletas de 32 bits se convierten a RGB5A3 |
-| 480×272, profundidad de 16 bits | Framebuffer interno de 640×528, Z de 24 bits | Encaja con margen |
-| Render a textura | `GX_CopyTex` | Directo |
-| Stencil | **No existe en GX** | Aproximar con alfa o desactivarlo por juego |
-| Modos de blending raros (diferencia absoluta, colores fijos) | Blending limitado y TEV | Aproximar con TEV |
+| Vértices ya en pantalla (x, y en 1/16 de píxel, z de 16 bits) | Proyección ortográfica | x, y tal cual; z × 256 en el Z de 24 bits |
+| Texturas con perspectiva | GX interpola lineal en pantalla con proyección ortográfica | s/w, t/w y 1/w en la normal; generación 3×4 que divide por píxel. El color se interpola lineal, como en la PSP |
+| Rango de profundidad MINZ/MAXZ | Recorte en z | El viewport de GX convierte [minz, maxz] en su rango de recorte |
+| Función de textura, doblado, especular, niebla, tramado | TEV | Una etapa por cosa; el tramado con una textura 4×4 en coordenadas de pantalla |
+| Mezcla con factores fijos o alfa de destino | Factores de GX | Fijos: premultiplicar en el TEV o usar el alfa de la fuente como constante. Alfa de destino uniforme: constante |
+| MIN/MAX/diferencia, SUB con factores | No existen | Aproximados |
+| Stencil (en el alfa del framebuffer) | No existe | Escritura con alfa de destino constante (ZERO, REPLACE); el test se ignora |
+| Framebuffers en la VRAM | EFB de 640×528 | El que se dibuja vive en el EFB; los demás en texturas (copias del EFB). Color en RGB8 (exacto) mientras el alfa sea uniforme o siga en la VRAM; RGBA6 solo si hace falta alfa por píxel |
+| La CPU lee o escribe la VRAM | | Un gancho en `memory.c` baja de la GPU lo que se lee y marca lo escrito para subirlo antes de volver a dibujar |
+| Render a textura | `GX_CopyTex` | Si la textura es un framebuffer en la GPU, se usa su copia directamente |
+| Texturas swizzled, CLUT, DXT | RGBA8 / RGB565 | Caché por contenido (hash), mipmaps cuando los niveles van a la mitad |
+| 480×272 | XFB del televisor | Compuesto con GX: en 16:9 llena la pantalla, en 4:3 ocupa el ancho |
+
+Las diferencias con el hardware son de ±1 en los colores (la aritmética del
+TEV y de la mezcla de GX), el alfa de 6 bits cuando hace falta alfa por
+píxel, el stencil y los modos de mezcla que GX no tiene.
 
 ## 8. Plan por fases
 
@@ -242,7 +268,7 @@ porta entero: su consumo de memoria no cabe en el Wii.
 | 1 | Esqueleto devkitPPC/libogc, mapa de memoria, cargador PBP/SFO/ELF/PRX con relocalizaciones e imports parcheados, CLI de PC, pruebas en x86 y PPC big-endian, CI | ✅ |
 | 2 | Intérprete Allegrex completo (sin VFPU), HLE mínimo (hilos, archivos, display, ctrl), framebuffer de la PSP mostrado tal cual en el Wii | ✅ |
 | 3 | Correr los *samples* del PSPSDK y homebrew sencillo; ampliar el HLE guiado por pspautotests e imports.txt. Hecho: menú SD/USB, medidor de FPS/MIPS, sceRtc, sceUtility, sceSuspend, directorios/stat, Mt19937, red simulada | ⏳ |
-| 4 | GE → GX básico (primitivas, texturas, caché de texturas) | |
+| 4 | GE: listas, geometría, renderizador por software exacto y backend GX (primitivas, texturas con caché, framebuffers, render a textura) | ✅ |
 | 5 | Dynarec basado en Not64, validado contra el intérprete | |
 | 6 | VFPU con paired singles, skinning, audio (sceAudio, Atrac3+) | |
 | 7 | ISO/CSO, descifrado, compatibilidad con juegos comerciales, menú | |

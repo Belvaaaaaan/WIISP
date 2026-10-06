@@ -12,6 +12,8 @@
  *     --screenshot FILE guardar el framebuffer final como PPM
  *     --bmp FILE        guardar como BMP la captura que pida el programa
  *                       (devctl de pspautotests), igual que en una PSP
+ *     --null-gpu        no dibujar (para medir el resto: CPU y geometría)
+ *     --fast-math       geometría con float normal, como con GX en el Wii
  *
  * SPDX-License-Identifier: GPL-2.0-or-later
 **/
@@ -72,6 +74,8 @@ int main(int argc, char **argv){
 		else if(!strcmp(argv[i], "--imports") && i + 1 < argc) imports = argv[++i];
 		else if(!strcmp(argv[i], "--screenshot") && i + 1 < argc) screenshot = argv[++i];
 		else if(!strcmp(argv[i], "--bmp") && i + 1 < argc) app_set_screenshot_path(argv[++i]);
+		else if(!strcmp(argv[i], "--null-gpu")) app_set_null_renderer();
+		else if(!strcmp(argv[i], "--fast-math")) app_set_fast_math(1);
 		else path = argv[i];
 	}
 	if(!path){

@@ -57,6 +57,12 @@ static inline int ge_log16(float delta){
 	return (int)((u >> 19) & 0x0FFF) - 127 * 16;
 }
 
+/* 1 = transformación y luces de los vértices con float normal en lugar de
+   la aritmética del GE (varias veces más rápido; para el backend por
+   hardware, donde ±1 en la profundidad o el color no se ve). El resto
+   (skinning, morph, curvas, recorte) sigue siendo exacto. */
+extern int ge_fast_math;
+
 float ge_recip(float w);
 float ge_rsqrt(float d);
 /* Suma del GE: el término menor se trunca a la precisión del mayor */

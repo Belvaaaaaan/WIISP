@@ -12,6 +12,8 @@
 #include "core/memory.h"
 #include "loader/loader.h"
 #include "hle/hle.h"
+#include "gpu/ge_internal.h"
+#include "gpu/ge_math.h"
 
 #define MAX_EXEC_SIZE (64u * 1024 * 1024)
 
@@ -205,3 +207,21 @@ const unsigned char *app_get_framebuffer(unsigned *stride, unsigned *format){
 	*format = fb.format;
 	return mem_ptr_r(fb.addr, fb.stride * (APP_SCREEN_H - 1) * bpp + APP_SCREEN_W * bpp);
 }
+
+void app_set_host_clock(unsigned long long (*clock)(void)){ ge_host_clock = clock; }
+
+unsigned long long app_ge_host_ticks(void){
+	GeStats st;
+	ge_get_stats(&st);
+	return st.host_ticks;
+}
+
+static void null_begin(void){}
+static void null_tri(const GeVertex *a, const GeVertex *b, const GeVertex *c){ (void)a; (void)b; (void)c; }
+static void null_two(const GeVertex *a, const GeVertex *b){ (void)a; (void)b; }
+static void null_one(const GeVertex *a){ (void)a; }
+static const GeHwRenderer null_renderer = { null_begin, null_tri, null_two, null_two, null_two, null_one, null_begin };
+
+void app_set_null_renderer(void){ ge_hw = &null_renderer; ge_fast_math = 1; }
+
+void app_set_fast_math(int on){ ge_fast_math = on; }

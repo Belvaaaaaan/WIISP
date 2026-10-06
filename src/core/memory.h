@@ -73,9 +73,23 @@ void mem_reset(void);
 /* Devuelve un puntero host a [addr, addr+len) o NULL si el rango no es
    válido o cruza el final de una región. mem_ptr_r es para accesos que
    solo leen. */
-u8  *mem_ptr(u32 addr, u32 len);
-const u8 *mem_ptr_r(u32 addr, u32 len);
+u8  *mem_ptr_slow(u32 addr, u32 len);
+const u8 *mem_ptr_r_slow(u32 addr, u32 len);
 int  mem_valid(u32 addr, u32 len);
+
+/* La RAM principal en línea; lo demás (VRAM con sus ganchos, scratchpad)
+   por la función */
+static inline u8 *mem_ptr(u32 addr, u32 len){
+	u32 off = (addr & PSP_ADDR_MASK) - PSP_RAM_BASE;
+	if(off < psp_mem.ram_size && len <= psp_mem.ram_size - off) return psp_mem.ram + off;
+	return mem_ptr_slow(addr, len);
+}
+
+static inline const u8 *mem_ptr_r(u32 addr, u32 len){
+	u32 off = (addr & PSP_ADDR_MASK) - PSP_RAM_BASE;
+	if(off < psp_mem.ram_size && len <= psp_mem.ram_size - off) return psp_mem.ram + off;
+	return mem_ptr_r_slow(addr, len);
+}
 
 /* Coherencia con un renderizador por hardware que guarda en su GPU la
    versión más nueva de parte de la VRAM (framebuffers dibujados por GX).

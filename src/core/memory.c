@@ -53,7 +53,7 @@ static u8 *vram_ptr(u32 addr, u32 len, int write){
 	return psp_mem.vram + off;
 }
 
-u8 *mem_ptr(u32 addr, u32 len){
+u8 *mem_ptr_slow(u32 addr, u32 len){
 	addr &= PSP_ADDR_MASK;
 	if(addr >= PSP_RAM_BASE)
 		return region(psp_mem.ram, psp_mem.ram_size, addr - PSP_RAM_BASE, len);
@@ -63,7 +63,7 @@ u8 *mem_ptr(u32 addr, u32 len){
 	return NULL;
 }
 
-const u8 *mem_ptr_r(u32 addr, u32 len){
+const u8 *mem_ptr_r_slow(u32 addr, u32 len){
 	addr &= PSP_ADDR_MASK;
 	if(addr >= PSP_RAM_BASE)
 		return region(psp_mem.ram, psp_mem.ram_size, addr - PSP_RAM_BASE, len);

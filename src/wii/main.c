@@ -18,7 +18,10 @@
  * sd:/wiisp/autotest.txt, se ejecuta cada programa de la lista (rutas
  * relativas a sd:/wiisp/autotest/) sin mandos; su salida va a
  * <programa>.out y la captura que pida a <programa>.bmp. Las líneas "gx" y
- * "soft" eligen el renderizador. Al acabar escribe autotest.done y apaga.
+ * "soft" eligen el renderizador y "frames N" el máximo de frames (1200).
+ * Al final de cada programa se añaden a <programa>.stats los FPS y MIPS y
+ * la última imagen va a <programa>.final.bmp. Al acabar escribe
+ * autotest.done y apaga.
  *
  * SPDX-License-Identifier: GPL-2.0-or-later
 **/
@@ -63,6 +66,7 @@ static int wait_accept(void){
 }
 
 static u64 now_ms(void){ return ticks_to_millisecs(gettime()); }
+static unsigned long long host_clock(void){ return gettime(); }
 
 static void run_program(void){
 	int exited = 0;
@@ -152,7 +156,7 @@ static void autotest_output(const char *text, unsigned len){
 static int autotest(void){
 	FILE *list = fopen("sd:/wiisp/autotest.txt", "r"), *done;
 	char line[256], path[320], out[340];
-	int count = 0;
+	int count = 0, max_frames = 1200;
 	if(!list) return 0;
 	printf("Pruebas automaticas (sd:/wiisp/autotest.txt)\n");
 	gx_ge_enable(1);
@@ -162,6 +166,7 @@ static int autotest(void){
 		if(!line[0] || line[0] == '#') continue;
 		if(!strcmp(line, "gx")){ gx_ge_enable(1); continue; }
 		if(!strcmp(line, "soft")){ gx_ge_enable(0); continue; }
+		if(!strncmp(line, "frames ", 7)){ max_frames = atoi(line + 7); continue; }
 		snprintf(path, sizeof(path), "sd:/wiisp/autotest/%s", line);
 		printf("%s\n", line);
 		snprintf(out, sizeof(out), "%s.bmp", path);
@@ -170,11 +175,35 @@ static int autotest(void){
 		autotest_file = fopen(out, "w");
 		app_set_verbose(0);
 		app_set_output(autotest_output);
-		if(app_load(path, 8, NULL) == 0 && app_start() == 0)
-			for(frames = 0; frames < 1200 && !exited; frames++){
+		if(app_load(path, 8, NULL) == 0 && app_start() == 0){
+			u64 start = now_ms();
+			unsigned done_frames;
+			unsigned long long instr, ge0 = app_ge_host_ticks(), ps, pst, pp;
+			unsigned cnt[4];
+			FILE *st;
+			app_set_host_clock(host_clock);
+			gx_ge_profile(&ps, &pst, &pp, cnt);
+			for(frames = 0; frames < max_frames && !exited; frames++){
 				exited = app_run_frame();
-				if((frames & 7) == 7) video_draw_psp_frame(NULL);
+				video_draw_psp_frame(NULL);
 			}
+			app_get_stats(&done_frames, &instr);
+			snprintf(out, sizeof(out), "%s.stats", path);
+			st = fopen(out, "a");
+			if(st){
+				u64 ms = now_ms() - start;
+				fprintf(st, "%s: %u frames en %u ms: %.1f FPS, %.1f MIPS\n", gx_ge_enabled() ? "gx" : "soft",
+				        done_frames, (unsigned)ms, ms ? done_frames * 1000.0 / ms : 0.0, ms ? instr / 1000.0 / ms : 0.0);
+				gx_ge_profile(&ps, &pst, &pp, cnt);
+				fprintf(st, "   GE %u ms (buferes/texturas %u, estado GX %u), presentar %u ms\n"
+				            "   %u presentaciones desde la VRAM, %u bajadas, %u subidas, %u texturas decodificadas\n",
+				        (unsigned)ticks_to_millisecs(app_ge_host_ticks() - ge0), (unsigned)ticks_to_millisecs(ps),
+				        (unsigned)ticks_to_millisecs(pst), (unsigned)ticks_to_millisecs(pp), cnt[0], cnt[1], cnt[2], cnt[3]);
+				fclose(st);
+			}
+			snprintf(out, sizeof(out), "%s.%s.bmp", path, gx_ge_enabled() ? "gx" : "soft");
+			app_write_bmp(out);
+		}
 		if(autotest_file) fclose(autotest_file);
 		autotest_file = NULL;
 		gx_ge_reset();

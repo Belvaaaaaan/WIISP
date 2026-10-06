@@ -28,7 +28,11 @@ typedef struct {
 	u32 primitives;
 	u32 vertices;
 	u64 pixels;
+	u64 host_ticks;   /* tiempo del anfitrión dentro del GE (si hay reloj) */
 } GeStats;
 void ge_get_stats(GeStats *out);
+
+/* Reloj del anfitrión para medir el GE (perfilado); NULL = sin medir */
+extern unsigned long long (*ge_host_clock)(void);
 
 #endif

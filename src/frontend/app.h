@@ -50,6 +50,15 @@ const char *app_exit_reason(void);
 typedef void (*AppOutputFunc)(const char *text, unsigned len);
 void app_set_output(AppOutputFunc func);
 
+/* Perfilado: el GE hace toda la geometría pero no dibuja nada */
+void app_set_null_renderer(void);
+/* Geometría con float normal, como con el backend GX */
+void app_set_fast_math(int on);
+
+/* Perfilado: reloj del anfitrión y tiempo acumulado dentro del GE */
+void app_set_host_clock(unsigned long long (*clock)(void));
+unsigned long long app_ge_host_ticks(void);
+
 /* Mandos en formato PSP (ver APP_BTN_*) y stick analógico (0-255) */
 void app_set_input(unsigned buttons, unsigned char lx, unsigned char ly);
 

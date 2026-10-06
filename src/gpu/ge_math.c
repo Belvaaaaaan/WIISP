@@ -14,6 +14,19 @@
 #include <limits.h>
 #include "gpu/ge_math.h"
 
+int ge_fast_math;
+
+/* x * 2^e sin pasar por la libm cuando 2^e es un float normal */
+static inline float scale2(float x, int e){
+	if(e >= -126 && e <= 127){
+		u32 bits = (u32)(e + 127) << 23;
+		float p;
+		memcpy(&p, &bits, 4);
+		return x * p;
+	}
+	return ldexpf(x, e);
+}
+
 typedef struct { s32 b, m; } RecipSegment;
 
 static const RecipSegment recip_segments[128] = {
@@ -84,7 +97,7 @@ float ge_recip(float w){
 	e = (int)((bits >> 23) & 0xFF) - 127;
 	seg = &recip_segments[i >> 8];
 	q = (64 * seg->b + 63 + seg->m * (s32)(i & 255)) >> 7;
-	return copysignf(ldexpf((float)q, -16 - e), w);
+	return copysignf(scale2((float)q, -16 - e), w);
 }
 
 float ge_rsqrt(float d){
@@ -97,7 +110,7 @@ float ge_rsqrt(float d){
 	e = (int)((bits >> 23) & 0xFF) - 127;
 	seg = &rsqrt_segments[e & 1][i >> 8];
 	q = (64 * seg->b + 63 + seg->m * (s32)(i & 255)) >> 7;
-	return ldexpf((float)q, -16 - (e >> 1));
+	return scale2((float)q, -16 - (e >> 1));
 }
 
 float ge_add(float a, float b){
@@ -118,7 +131,7 @@ float ge_add(float a, float b){
 	return a + b;
 }
 
-GeRowTerm ge_product(float a, float b){
+static inline GeRowTerm prod(float a, float b){
 	GeRowTerm t;
 	u32 ba, bb;
 	int ea, eb;
@@ -137,7 +150,7 @@ GeRowTerm ge_product(float a, float b){
 	return t;
 }
 
-float ge_row_sum(const GeRowTerm *terms, int count){
+static inline float rowsum(const GeRowTerm *terms, int count){
 	int lsb = INT_MIN, i;
 	s32 sum = 0;
 	for(i = 0; i < count; i++) if(terms[i].lsb_exp > lsb) lsb = terms[i].lsb_exp;
@@ -149,16 +162,19 @@ float ge_row_sum(const GeRowTerm *terms, int count){
 		if(shift < 32) sum += m < 0 ? -((-m) >> shift) : (m >> shift);
 	}
 	if(sum == 0) return 0.0f;
-	return ge_trunc24(ldexpf((float)sum, lsb));
+	return ge_trunc24(scale2((float)sum, lsb));
 }
+
+GeRowTerm ge_product(float a, float b){ return prod(a, b); }
+float ge_row_sum(const GeRowTerm *terms, int count){ return rowsum(terms, count); }
 
 float ge_clip_component(const float *v, const float *m, int c){
 	GeRowTerm t[4];
-	t[0] = ge_product(ge_trunc24(v[0]), m[c]);
-	t[1] = ge_product(ge_trunc24(v[1]), m[4 + c]);
-	t[2] = ge_product(ge_trunc24(v[2]), m[8 + c]);
-	t[3] = ge_product(1.0f, m[12 + c]);
-	return ge_row_sum(t, 4);
+	t[0] = prod(ge_trunc24(v[0]), m[c]);
+	t[1] = prod(ge_trunc24(v[1]), m[4 + c]);
+	t[2] = prod(ge_trunc24(v[2]), m[8 + c]);
+	t[3] = prod(1.0f, m[12 + c]);
+	return rowsum(t, 4);
 }
 
 void ge_combine_matrices(float *out, const float *a, const float *b){
@@ -166,8 +182,8 @@ void ge_combine_matrices(float *out, const float *a, const float *b){
 	for(r = 0; r < 4; r++)
 		for(c = 0; c < 4; c++){
 			GeRowTerm t[4];
-			for(k = 0; k < 4; k++) t[k] = ge_product(a[r * 4 + k], b[k * 4 + c]);
-			out[r * 4 + c] = ge_row_sum(t, 4);
+			for(k = 0; k < 4; k++) t[k] = prod(a[r * 4 + k], b[k * 4 + c]);
+			out[r * 4 + c] = rowsum(t, 4);
 		}
 }
 
@@ -184,10 +200,10 @@ float ge_add24(float a, float b){ return ge_trunc24(ge_add(a, b)); }
 /* Producto escalar como la unidad del GE (una fila de matriz sin traslación) */
 float ge_dot(const float *a, const float *b){
 	GeRowTerm t[3];
-	t[0] = ge_product(ge_trunc24(a[0]), ge_trunc24(b[0]));
-	t[1] = ge_product(ge_trunc24(a[1]), ge_trunc24(b[1]));
-	t[2] = ge_product(ge_trunc24(a[2]), ge_trunc24(b[2]));
-	return ge_row_sum(t, 3);
+	t[0] = prod(ge_trunc24(a[0]), ge_trunc24(b[0]));
+	t[1] = prod(ge_trunc24(a[1]), ge_trunc24(b[1]));
+	t[2] = prod(ge_trunc24(a[2]), ge_trunc24(b[2]));
+	return rowsum(t, 3);
 }
 
 /* Normaliza como el GE (gpu/probe exp69, exp61): la longitud al cuadrado

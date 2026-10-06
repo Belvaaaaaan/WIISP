@@ -25,6 +25,7 @@
 
 GeState ge;
 GeStats ge_stats;
+unsigned long long (*ge_host_clock)(void);
 
 /* --- Listas ------------------------------------------------------------ */
 
@@ -648,7 +649,17 @@ static void execute(DisplayList *l, u32 op){
 
 /* Ejecuta la cola hasta que algo la pare. Las listas no corren mientras la
    cabeza espere a que se atienda su interrupción. */
+static void process_dl_queue_body(void);
+
 static void process_dl_queue(void){
+	u64 t0;
+	if(!ge_host_clock){ process_dl_queue_body(); return; }
+	t0 = ge_host_clock();
+	process_dl_queue_body();
+	ge_stats.host_ticks += ge_host_clock() - t0;
+}
+
+static void process_dl_queue_body(void){
 	starting_ticks = cpu_cycles;
 	cycles_executed = 0;
 	/* Si el GE sigue ocupado con lo anterior, esto empieza cuando acabe */

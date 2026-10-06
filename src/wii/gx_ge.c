@@ -45,6 +45,7 @@
 #define s32 core_s32
 #define s64 core_s64
 #include "gpu/ge_internal.h"
+#include "gpu/ge_math.h"
 #include "core/memory.h"
 #include "hle/hle.h"
 #undef u8
@@ -57,6 +58,7 @@
 #undef s64
 
 #include <gccore.h>
+#include <ogc/lwp_watchdog.h>
 #include "wii/gx_ge.h"
 
 #define EFB_W 640
@@ -92,7 +94,8 @@ typedef struct {
 
 typedef struct {
 	int used;
-	core_u32 addr, fmt, size, bufw, clutfmt, clut_hash, hash;
+	core_u32 addr, fmt, size, bufw, clutfmt, clut_hash, hash, mipkey;
+	int levels;                /* niveles de mipmap en data */
 	unsigned checked_frame, used_frame;
 	int w, h;
 	u32 bytes;
@@ -125,8 +128,14 @@ static GXTexObj empty_obj;
 
 /* Estado de las primitivas */
 static int tex_on, tex_proj, through, flat;
-static float inv_tw, inv_th;
+static float inv_tw, inv_th, tex_su = 1.0f, tex_sv = 1.0f;
+static GXTexObj rtt_obj;
+static int use_rtt;                     /* la textura es un framebuffer en la GPU */
 static float pos_off;
+
+/* Perfilado (ticks del Wii) */
+static u64 prof_setup, prof_state, prof_present;
+static unsigned prof_vram_presents, prof_downloads, prof_uploads, prof_decodes;
 
 static void *defer_list[64];
 static int ndefer;
@@ -235,62 +244,130 @@ static int visible_w(const Surface *s){
 	return s->w < (int)s->stride ? s->w : (int)s->stride;
 }
 
-/* tex (GPU) -> VRAM */
+/* tex (GPU) -> VRAM, fila a fila y por formato */
 static void tex_to_vram(const Surface *s){
-	int x, y, w = visible_w(s);
+	int x, y, w = visible_w(s), keep_a = s->amode == A_VRAM;
+	u32 ua = (u32)s->ualpha;
 	DCInvalidateRange(s->tex, (u32)(s->w * s->h * 4));
-	for(y = 0; y < s->h; y++)
-		for(x = 0; x < w; x++){
-			const u8 *t = tile_ptr(s->tex, s->w, x, y);
-			u32 a = s->amode == A_GPU ? t[0] : (u32)s->ualpha, r = t[1], g = t[32], b = t[33], v;
-			u8 *p;
-			switch(s->fmt){
-			case SURF_Z:
-				p = vram_depth(s, x, y);
-				p[0] = (u8)g;          /* z24 >> 8 */
-				p[1] = (u8)r;
-				continue;
-			case GE_FMT_8888:
-				p = vram_color(s, x, y, 4);
-				p[0] = (u8)r; p[1] = (u8)g; p[2] = (u8)b;
-				if(s->amode != A_VRAM) p[3] = (u8)a;
-				continue;
-			case GE_FMT_565:  v = (r >> 3) | ((g >> 2) << 5) | ((b >> 3) << 11); break;
-			case GE_FMT_5551: v = (r >> 3) | ((g >> 3) << 5) | ((b >> 3) << 10) | ((a >> 7) << 15); break;
-			default:          v = (r >> 4) | ((g >> 4) << 4) | ((b >> 4) << 8) | ((a >> 4) << 12); break;
+	for(y = 0; y < s->h; y++){
+		const u8 *trow = s->tex + (u32)(((y >> 2) * (s->w >> 2)) << 6) + (u32)((y & 3) << 3);
+		if(s->fmt == SURF_Z){
+			for(x = 0; x < w; x++){
+				const u8 *t = trow + ((x >> 2) << 6) + ((x & 3) << 1);
+				u8 *p = vram_depth(s, x, y);
+				p[0] = t[32];          /* z24 >> 8 */
+				p[1] = t[1];
 			}
-			p = vram_color(s, x, y, 2);
-			if(s->amode == A_VRAM && s->fmt != GE_FMT_565){
-				/* El alfa de la VRAM se queda */
-				u32 keep = s->fmt == GE_FMT_5551 ? 0x8000u : 0xF000u;
-				v = (v & ~keep) | ((p[0] | ((u32)p[1] << 8)) & keep);
-			}
-			p[0] = (u8)v;
-			p[1] = (u8)(v >> 8);
+			continue;
 		}
+		if(((s->addr + (u32)y * s->stride * (u32)surf_bpp(s->fmt)) & (PSP_VRAM_SIZE - 1)) + (u32)w * (u32)surf_bpp(s->fmt) > PSP_VRAM_SIZE){
+			/* La fila da la vuelta al final de la VRAM: píxel a píxel */
+			for(x = 0; x < w; x++){
+				const u8 *t = trow + ((x >> 2) << 6) + ((x & 3) << 1);
+				u32 a = s->amode == A_GPU ? t[0] : ua, r = t[1], g = t[32], b = t[33], v;
+				u8 *p;
+				if(s->fmt == GE_FMT_8888){
+					p = vram_color(s, x, y, 4);
+					p[0] = (u8)r; p[1] = (u8)g; p[2] = (u8)b;
+					if(!keep_a) p[3] = (u8)a;
+					continue;
+				}
+				p = vram_color(s, x, y, 2);
+				v = s->fmt == GE_FMT_565 ? (r >> 3) | ((g >> 2) << 5) | ((b >> 3) << 11)
+				  : s->fmt == GE_FMT_5551 ? (r >> 3) | ((g >> 3) << 5) | ((b >> 3) << 10) | ((a >> 7) << 15)
+				  : (r >> 4) | ((g >> 4) << 4) | ((b >> 4) << 8) | ((a >> 4) << 12);
+				if(keep_a && s->fmt != GE_FMT_565){
+					u32 k = s->fmt == GE_FMT_5551 ? 0x8000u : 0xF000u;
+					v = (v & ~k) | ((p[0] | ((u32)p[1] << 8)) & k);
+				}
+				p[0] = (u8)v; p[1] = (u8)(v >> 8);
+			}
+			continue;
+		}
+		{
+			u8 *p = vram_color(s, 0, y, surf_bpp(s->fmt));
+			switch(s->fmt){
+			case GE_FMT_8888:
+				for(x = 0; x < w; x++, p += 4){
+					const u8 *t = trow + ((x >> 2) << 6) + ((x & 3) << 1);
+					p[0] = t[1]; p[1] = t[32]; p[2] = t[33];
+					if(!keep_a) p[3] = s->amode == A_GPU ? t[0] : (u8)ua;
+				}
+				break;
+			case GE_FMT_565:
+				for(x = 0; x < w; x++, p += 2){
+					const u8 *t = trow + ((x >> 2) << 6) + ((x & 3) << 1);
+					u32 v = (u32)(t[1] >> 3) | ((u32)(t[32] >> 2) << 5) | ((u32)(t[33] >> 3) << 11);
+					p[0] = (u8)v; p[1] = (u8)(v >> 8);
+				}
+				break;
+			default: {
+				int is5551 = s->fmt == GE_FMT_5551;
+				u32 k = is5551 ? 0x8000u : 0xF000u;
+				for(x = 0; x < w; x++, p += 2){
+					const u8 *t = trow + ((x >> 2) << 6) + ((x & 3) << 1);
+					u32 a = s->amode == A_GPU ? t[0] : ua, v;
+					v = is5551 ? (u32)(t[1] >> 3) | ((u32)(t[32] >> 3) << 5) | ((u32)(t[33] >> 3) << 10) | ((a >> 7) << 15)
+					           : (u32)(t[1] >> 4) | ((u32)(t[32] >> 4) << 4) | ((u32)(t[33] >> 4) << 8) | ((a >> 4) << 12);
+					if(keep_a) v = (v & ~k) | ((p[0] | ((u32)p[1] << 8)) & k);
+					p[0] = (u8)v; p[1] = (u8)(v >> 8);
+				}
+				break;
+			}
+			}
+		}
+	}
+}
+
+static inline core_u32 vram16_to_8888(int fmt, core_u32 v){
+	core_u32 r, g, b, a;
+	switch(fmt){
+	case GE_FMT_565:
+		r = v & 31; g = (v >> 5) & 63; b = (v >> 11) & 31;
+		return ((r << 3) | (r >> 2)) | (((g << 2) | (g >> 4)) << 8) | (((b << 3) | (b >> 2)) << 16) | 0xFF000000u;
+	case GE_FMT_5551:
+		r = v & 31; g = (v >> 5) & 31; b = (v >> 10) & 31;
+		return ((r << 3) | (r >> 2)) | (((g << 3) | (g >> 2)) << 8) | (((b << 3) | (b >> 2)) << 16) | ((v & 0x8000) ? 0xFF000000u : 0);
+	default:
+		r = v & 15; g = (v >> 4) & 15; b = (v >> 8) & 15; a = v >> 12;
+		return (r * 0x11) | ((g * 0x11) << 8) | ((b * 0x11) << 16) | ((a * 0x11) << 24);
+	}
 }
 
 /* VRAM -> tex. Un alfa igual en todo el búfer se queda en ualpha. */
 static void vram_to_tex(Surface *s){
-	int x, y, w = visible_w(s), first_a = -1, uniform = 1;
+	int x, y, w = visible_w(s), first_a = -1, uniform = 1, bpp = surf_bpp(s->fmt);
+	prof_uploads++;
 	memset(s->tex, 0, (size_t)(s->w * s->h * 4));
-	for(y = 0; y < s->h; y++)
+	for(y = 0; y < s->h; y++){
+		u8 *trow = s->tex + (u32)(((y >> 2) * (s->w >> 2)) << 6) + (u32)((y & 3) << 3);
+		int wraps = s->fmt != SURF_Z &&
+		            ((s->addr + (u32)y * s->stride * (u32)bpp) & (PSP_VRAM_SIZE - 1)) + (u32)w * (u32)bpp > PSP_VRAM_SIZE;
+		const u8 *p = s->fmt != SURF_Z && !wraps ? vram_color(s, 0, y, bpp) : NULL;
 		for(x = 0; x < w; x++){
-			u8 *t = tile_ptr(s->tex, s->w, x, y);
+			u8 *t = trow + ((x >> 2) << 6) + ((x & 3) << 1);
+			core_u32 c;
 			if(s->fmt == SURF_Z){
-				const u8 *p = vram_depth(s, x, y);
-				t[0] = 0xFF; t[1] = p[1]; t[32] = p[0]; t[33] = 0;
-			} else {
-				core_u8 c[4];
-				const u8 *p = vram_color(s, x, y, surf_bpp(s->fmt));
-				core_u32 raw = s->fmt == GE_FMT_8888 ? (core_u32)p[0] | ((core_u32)p[1] << 8) | ((core_u32)p[2] << 16) | ((core_u32)p[3] << 24)
-				                                     : (core_u32)p[0] | ((core_u32)p[1] << 8);
-				ge_decode_color((core_u32)s->fmt, raw, c);
-				t[0] = c[3]; t[1] = c[0]; t[32] = c[1]; t[33] = c[2];
-				if(first_a < 0) first_a = c[3];
-				else if(c[3] != first_a) uniform = 0;
+				const u8 *z = vram_depth(s, x, y);
+				t[0] = 0xFF; t[1] = z[1]; t[32] = z[0]; t[33] = 0;
+				continue;
 			}
+			if(!p){
+				const u8 *q = vram_color(s, x, y, bpp);
+				c = bpp == 4 ? (core_u32)q[0] | ((core_u32)q[1] << 8) | ((core_u32)q[2] << 16) | ((core_u32)q[3] << 24)
+				             : vram16_to_8888(s->fmt, (core_u32)q[0] | ((core_u32)q[1] << 8));
+			} else if(bpp == 4){
+				const u8 *q = p + x * 4;
+				c = (core_u32)q[0] | ((core_u32)q[1] << 8) | ((core_u32)q[2] << 16) | ((core_u32)q[3] << 24);
+			} else {
+				const u8 *q = p + x * 2;
+				c = vram16_to_8888(s->fmt, (core_u32)q[0] | ((core_u32)q[1] << 8));
+			}
+			t[0] = (u8)(c >> 24); t[1] = (u8)c; t[32] = (u8)(c >> 8); t[33] = (u8)(c >> 16);
+			if(first_a < 0) first_a = (int)(c >> 24);
+			else if((int)(c >> 24) != first_a) uniform = 0;
 		}
+	}
 	if(s->fmt != SURF_Z){
 		s->amode = has_alpha_fmt(s->fmt) && !uniform ? A_VRAM : A_UNIFORM;
 		s->ualpha = first_a < 0 || !has_alpha_fmt(s->fmt) ? 0 : first_a;
@@ -323,6 +400,7 @@ static void download(Surface *s){
 	if(s->has_tex){
 		wait_gpu();
 		tex_to_vram(s);
+		prof_downloads++;
 	}
 	s->state = SYNCED;
 }
@@ -671,25 +749,149 @@ static void trim_textures(void){
 }
 
 static core_u32 decode_buf[MAX_TEX_SIZE * MAX_TEX_SIZE];
+static u8 linear_buf[MAX_TEX_SIZE * MAX_TEX_SIZE * 4];
 
-static int decode_texture(TexEntry *e){
-	int w = e->w, h = e->h, tw = round4(w), th = round4(h), x, y;
-	u32 bytes = (u32)(tw * th * 4);
-	u8 *data = memalign(32, bytes);
+static inline core_u32 rd16le(const u8 *p){ return (core_u32)p[0] | ((core_u32)p[1] << 8); }
+static inline core_u32 rd32le(const u8 *p){ return (core_u32)p[0] | ((core_u32)p[1] << 8) | ((core_u32)p[2] << 16) | ((core_u32)p[3] << 24); }
+
+/* Color de la PSP (rojo en el byte bajo) -> texel RGBA8 de GX */
+static inline void put_rgba8(u8 *t, core_u32 c){
+	t[0] = (u8)(c >> 24); t[1] = (u8)c; t[32] = (u8)(c >> 8); t[33] = (u8)(c >> 16);
+}
+
+static inline core_u32 psp16_to_8888(int fmt, core_u32 v){
+	core_u32 r, g, b, a;
+	switch(fmt){
+	case GE_FMT_565:
+		r = v & 31; g = (v >> 5) & 63; b = (v >> 11) & 31;
+		return ((r << 3) | (r >> 2)) | (((g << 2) | (g >> 4)) << 8) | (((b << 3) | (b >> 2)) << 16) | 0xFF000000u;
+	case GE_FMT_5551:
+		r = v & 31; g = (v >> 5) & 31; b = (v >> 10) & 31;
+		return ((r << 3) | (r >> 2)) | (((g << 3) | (g >> 2)) << 8) | (((b << 3) | (b >> 2)) << 16) | ((v & 0x8000) ? 0xFF000000u : 0);
+	default:
+		r = v & 15; g = (v >> 4) & 15; b = (v >> 8) & 15; a = v >> 12;
+		return (r * 0x11) | ((g * 0x11) << 8) | ((b * 0x11) << 16) | ((a * 0x11) << 24);
+	}
+}
+
+/* Bloques de 16 bytes x 8 filas -> lineal (pitch en bytes) */
+static void unswizzle(const u8 *src, u8 *dst, u32 pitch, int rows){
+	u32 bx, r, blocks = pitch / 16;
+	int by;
+	for(by = 0; by < (rows + 7) / 8; by++)
+		for(bx = 0; bx < blocks; bx++)
+			for(r = 0; r < 8; r++){
+				int y = by * 8 + (int)r;
+				if(y >= rows) break;
+				memcpy(dst + (u32)y * pitch + bx * 16, src + ((u32)by * blocks + bx) * 128 + r * 16, 16);
+			}
+}
+
+/* Decodifica en data (tiles de GX). Formatos habituales con lectura
+   directa; el resto texel a texel como el muestreador. Devuelve el formato
+   de GX usado. */
+static int decode_into(const GeRasterState *r, int level, u8 *data, int w, int h, int tw, int allow565){
+	int fmt = r->texfmt, bits, x, y;
+	u32 bufw = r->texbufw[level], pitch, bytes;
+	const u8 *src;
+
+	switch(fmt){
+	case GE_FMT_565: case GE_FMT_5551: case GE_FMT_4444: case GE_TFMT_CLUT16: bits = 16; break;
+	case GE_FMT_8888: case GE_TFMT_CLUT32: bits = 32; break;
+	case GE_TFMT_CLUT8: bits = 8; break;
+	case GE_TFMT_CLUT4: bits = 4; break;
+	default: bits = 0; break;
+	}
+	pitch = bufw * (u32)bits / 8;
+	bytes = pitch * (u32)((h + 7) & ~7);
+	src = bits && r->texvalid[level] && available_bytes(r->texaddr[level], bytes) == bytes && bytes <= sizeof(linear_buf)
+	      ? mem_ptr_r(r->texaddr[level], bytes) : NULL;
+	if(!src || (fmt >= GE_TFMT_CLUT16 && fmt <= GE_TFMT_CLUT32) || (int)bufw < w || (level && !r->use_shared_clut)){
+		/* Genérico */
+		ge_texture_decode(level, decode_buf, w, h, w);
+		for(y = 0; y < h; y++)
+			for(x = 0; x < w; x++) put_rgba8(tile_ptr(data, tw, x, y), decode_buf[y * w + x]);
+		return GX_TF_RGBA8;
+	}
+	if(r->swizzle){
+		unswizzle(src, linear_buf, pitch, h);
+		src = linear_buf;
+	}
+
+	if(fmt == GE_FMT_565 && allow565){
+		/* RGB565 de GX: mismos bits con rojo arriba, big-endian */
+		for(y = 0; y < h; y++){
+			const u8 *row = src + (u32)y * pitch;
+			for(x = 0; x < w; x++){
+				core_u32 v = rd16le(row + (u32)x * 2);
+				u8 *t = data + ((((y >> 2) * (tw >> 2) + (x >> 2)) << 5) | ((((y & 3) << 2) | (x & 3)) << 1));
+				v = ((v & 31) << 11) | (v & 0x07E0) | ((v >> 11) & 31);
+				t[0] = (u8)(v >> 8);
+				t[1] = (u8)v;
+			}
+		}
+		return GX_TF_RGB565;
+	}
+	if(fmt == GE_TFMT_CLUT4 || fmt == GE_TFMT_CLUT8){
+		/* Paleta ya convertida (con desplazamiento, máscara y offset) */
+		static core_u32 pal[256];
+		int n = fmt == GE_TFMT_CLUT4 ? 16 : 256, i;
+		u32 shift = (r->clutformat >> 2) & 0x1F, mask = (r->clutformat >> 8) & 0xFF;
+		u32 offset = ((r->clutformat >> 16) & 0x1F) << 4, offset_mask = r->clut_fmt == GE_FMT_8888 ? 0xFF : 0x1FF;
+		for(i = 0; i < n; i++){
+			u32 idx = (r->has_clut_shift || r->has_clut_mask || r->has_clut_offset)
+			          ? ((((u32)i >> shift) & mask) | (offset & offset_mask)) : (u32)i;
+			pal[i] = r->clut_fmt == GE_FMT_8888 ? rd32le(ge.clut + (idx & 0x1FF) * 4)
+			                                    : psp16_to_8888(r->clut_fmt, rd16le(ge.clut + (idx & 0x3FF) * 2));
+		}
+		for(y = 0; y < h; y++){
+			const u8 *row = src + (u32)y * pitch;
+			if(fmt == GE_TFMT_CLUT8)
+				for(x = 0; x < w; x++) put_rgba8(tile_ptr(data, tw, x, y), pal[row[x]]);
+			else
+				for(x = 0; x < w; x++) put_rgba8(tile_ptr(data, tw, x, y), pal[(row[x >> 1] >> ((x & 1) * 4)) & 15]);
+		}
+		return GX_TF_RGBA8;
+	}
+	for(y = 0; y < h; y++){
+		const u8 *row = src + (u32)y * pitch;
+		if(fmt == GE_FMT_8888)
+			for(x = 0; x < w; x++){
+				const u8 *p = row + (u32)x * 4;
+				u8 *t = tile_ptr(data, tw, x, y);
+				t[0] = p[3]; t[1] = p[0]; t[32] = p[1]; t[33] = p[2];
+			}
+		else
+			for(x = 0; x < w; x++) put_rgba8(tile_ptr(data, tw, x, y), psp16_to_8888(fmt, rd16le(row + (u32)x * 2)));
+	}
+	return GX_TF_RGBA8;
+}
+
+/* Bytes de un nivel en tiles de 4x4 de 32 bits */
+static u32 level_bytes(int w, int h){ return (u32)(round4(w) * round4(h) * 4); }
+
+static int decode_texture(TexEntry *e, const GeRasterState *r){
+	int w = e->w, h = e->h, gxfmt = GX_TF_RGBA8, i;
+	u32 bytes = 0, off = 0;
+	u8 *data;
+	for(i = 0; i < e->levels; i++){
+		int lw = w >> i, lh = h >> i;
+		bytes += level_bytes(lw ? lw : 1, lh ? lh : 1);
+	}
+	data = memalign(32, bytes);
 	if(!data) return 0;
 	memset(data, 0, bytes);
-	ge_texture_decode(0, decode_buf, w, h, w);
-	for(y = 0; y < h; y++)
-		for(x = 0; x < w; x++){
-			core_u32 c = decode_buf[y * w + x];
-			u8 *t = tile_ptr(data, tw, x, y);
-			t[0] = (u8)(c >> 24); t[1] = (u8)c; t[32] = (u8)(c >> 8); t[33] = (u8)(c >> 16);
-		}
+	for(i = 0; i < e->levels; i++){
+		int lw = w >> i ? w >> i : 1, lh = h >> i ? h >> i : 1;
+		gxfmt = decode_into(r, i, data + off, lw, lh, round4(lw), e->levels == 1);
+		off += level_bytes(lw, lh);
+	}
+	if(gxfmt == GX_TF_RGB565) bytes /= 2;
 	DCFlushRange(data, bytes);
 	e->data = data;
 	e->bytes = bytes;
 	tex_total += bytes;
-	GX_InitTexObj(&e->obj, data, (u16)w, (u16)h, GX_TF_RGBA8, GX_REPEAT, GX_REPEAT, GX_FALSE);
+	GX_InitTexObj(&e->obj, data, (u16)w, (u16)h, (u8)gxfmt, GX_REPEAT, GX_REPEAT, e->levels > 1 ? GX_TRUE : GX_FALSE);
 	GX_InvalidateTexAll();
 	return 1;
 }
@@ -703,11 +905,20 @@ static TexEntry *lookup_texture(const GeRasterState *r){
 	const u8 *p;
 	TexEntry *e = NULL;
 
+	int levels = 1;
+	core_u32 mipkey = 0;
 	if(ws > 9) ws = 9;
 	if(hs > 9) hs = 9;
 	w = 1 << ws;
 	h = 1 << hs;
 	size = (core_u32)w | ((core_u32)h << 16);
+	/* Mipmaps: los niveles que van a la mitad, como los quiere GX */
+	for(i = 1; i <= r->max_tex_level; i++){
+		int lw = w >> i ? w >> i : 1, lh = h >> i ? h >> i : 1;
+		if(!r->texvalid[i] || r->size_w[i] != lw || r->size_h[i] != lh) break;
+		levels = i + 1;
+		mipkey = (mipkey ^ r->texaddr[i] ^ ((core_u32)r->texbufw[i] << 20)) * 0x9E3779B1u;
+	}
 	if(r->texfmt >= GE_TFMT_CLUT4 && r->texfmt <= GE_TFMT_CLUT32){
 		clutfmt = r->clutformat;
 		clut_hash = hash_bytes(ge.clut, ge.clut_bytes ? ge.clut_bytes : 1024, 0x12345u);
@@ -716,27 +927,35 @@ static TexEntry *lookup_texture(const GeRasterState *r){
 	/* Misma textura que la anterior y nada la ha podido cambiar */
 	if(last_tex && !tex_flushed && last_clut_gen == ge.clut_gen && last_tex->addr == addr && last_tex->fmt == fmt &&
 	   last_tex->size == size && last_tex->bufw == (core_u32)bufw && last_tex->clutfmt == clutfmt &&
-	   last_tex->checked_frame == frame && last_tex->clut_hash == clut_hash)
+	   last_tex->checked_frame == frame && last_tex->clut_hash == clut_hash && last_tex->levels == levels &&
+	   last_tex->mipkey == mipkey)
 		return last_tex;
 
-	want = texture_bytes(r->texfmt, bufw, h);
-	avail = available_bytes(addr, want);
-	p = avail ? mem_ptr_r(addr, avail) : NULL;
-	/* Sin puntero contiguo (espejos con swizzle): se decodifica cada cuadro */
-	hash = p ? hash_bytes(p, avail, 0x811C9DC5u) : frame * 0x9E3779B1u;
+	hash = 0x811C9DC5u;
+	for(i = 0; i < levels; i++){
+		int lh = h >> i ? h >> i : 1;
+		want = texture_bytes(r->texfmt, r->texbufw[i], lh);
+		avail = available_bytes(r->texaddr[i], want);
+		p = avail ? mem_ptr_r(r->texaddr[i], avail) : NULL;
+		/* Sin puntero contiguo (espejos con swizzle): se decodifica cada cuadro */
+		hash = p ? hash_bytes(p, avail, hash) : hash ^ frame * 0x9E3779B1u;
+	}
 
 	for(i = 0; i < MAX_TEX; i++){
 		TexEntry *t = &texc[i];
 		if(t->used && t->addr == addr && t->fmt == fmt && t->size == size && t->bufw == (core_u32)bufw &&
-		   t->clutfmt == clutfmt && t->clut_hash == clut_hash && t->hash == hash){ e = t; break; }
+		   t->clutfmt == clutfmt && t->clut_hash == clut_hash && t->hash == hash && t->levels == levels &&
+		   t->mipkey == mipkey){ e = t; break; }
 	}
 	if(!e){
 		e = alloc_texture_slot();
 		e->used = 1;
 		e->addr = addr; e->fmt = fmt; e->size = size; e->bufw = (core_u32)bufw;
 		e->clutfmt = clutfmt; e->clut_hash = clut_hash; e->hash = hash;
+		e->levels = levels; e->mipkey = mipkey;
 		e->w = w; e->h = h;
-		if(!decode_texture(e)){ memset(e, 0, sizeof(*e)); return NULL; }
+		prof_decodes++;
+		if(!decode_texture(e, r)){ memset(e, 0, sizeof(*e)); return NULL; }
 		trim_textures();
 	}
 	e->checked_frame = frame;
@@ -745,6 +964,25 @@ static TexEntry *lookup_texture(const GeRasterState *r){
 	last_clut_gen = ge.clut_gen;
 	last_tex = e;
 	return e;
+}
+
+/* La textura es un framebuffer que está en la GPU: se usa su copia sin
+   pasar por la VRAM (efectos que dibujan en un búfer y lo usan después) */
+static int texture_from_surface(const GeRasterState *r){
+	core_u32 addr = r->texaddr[0] & PSP_ADDR_MASK;
+	Surface *ts;
+	if(r->texfmt > GE_FMT_8888 || r->swizzle || addr < PSP_VRAM_BASE || addr >= PSP_VRAM_BASE + PSP_VRAM_SIZE) return 0;
+	ts = find_surface(addr - PSP_VRAM_BASE, r->texbufw[0], r->texfmt);
+	if(!ts || ts->state == VRAM_NEWER) return 0;
+	/* El alfa del búfer solo está en la GPU en modo A_GPU */
+	if(r->use_tex_alpha && ts->amode != A_GPU && !(ts->amode == A_UNIFORM && ts->ualpha == 255) && has_alpha_fmt(ts->fmt))
+		return 0;
+	if(ts == cur_c && efb_c_newer){ efb_to_tex(ts); efb_c_newer = 0; }
+	if(!ts->has_tex) return 0;
+	GX_InitTexObj(&rtt_obj, ts->tex, (u16)ts->w, (u16)ts->h, GX_TF_RGBA8, GX_CLAMP, GX_CLAMP, GX_FALSE);
+	tex_su = (float)(1 << r->width0_shift) / (float)ts->w;
+	tex_sv = (float)(1 << r->height0_shift) / (float)ts->h;
+	return 1;
 }
 
 /* --- Estado de GX a partir del GE ---------------------------------------------- */
@@ -810,11 +1048,14 @@ static void setup_targets(void){
 	through = (ge.cmd[GE_VERTEXTYPE] >> 23) & 1;
 	tex_on = r->enable_textures;
 	cur_tex = NULL;
+	use_rtt = 0;
+	tex_su = tex_sv = 1.0f;
 	if(!writes_c) tex_on = 0;
 	if(tex_on){
-		cur_tex = r->texvalid[0] ? lookup_texture(r) : NULL;
-		inv_tw = 1.0f / (float)(1 << r->width0_shift);
-		inv_th = 1.0f / (float)(1 << r->height0_shift);
+		use_rtt = r->texvalid[0] && texture_from_surface(r);
+		if(!use_rtt) cur_tex = r->texvalid[0] ? lookup_texture(r) : NULL;
+		inv_tw = tex_su / (float)(1 << r->width0_shift);
+		inv_th = tex_sv / (float)(1 << r->height0_shift);
 		tex_proj = r->texture_proj;
 	}
 	flat = !r->shade_gouraud;
@@ -1016,9 +1257,26 @@ static void apply_gx(void){
 		int rgba = r->use_tex_alpha;
 		u8 sc = r->color_doubling ? GX_CS_SCALE_2 : GX_CS_SCALE_1;
 		u8 aa = GX_CA_ZERO, ab = rgba ? GX_CA_TEXA : GX_CA_ZERO, ac = rgba ? GX_CA_RASA : GX_CA_ZERO, ad = rgba ? GX_CA_ZERO : GX_CA_RASA;
-		if(cur_tex){
+		if(use_rtt){
+			GX_InitTexObjFilterMode(&rtt_obj, r->min_filt ? GX_LINEAR : GX_NEAR, r->mag_filt ? GX_LINEAR : GX_NEAR);
+			GX_LoadTexObj(&rtt_obj, GX_TEXMAP0);
+		} else if(cur_tex){
 			GX_InitTexObjWrapMode(&cur_tex->obj, r->clamp_s ? GX_CLAMP : GX_REPEAT, r->clamp_t ? GX_CLAMP : GX_REPEAT);
-			GX_InitTexObjFilterMode(&cur_tex->obj, r->min_filt ? GX_LINEAR : GX_NEAR, r->mag_filt ? GX_LINEAR : GX_NEAR);
+			if(cur_tex->levels > 1){
+				/* LOD automático con el desplazamiento de la PSP; en modo
+				   constante, el nivel fijo */
+				float maxlod = (float)(cur_tex->levels - 1), bias = (float)r->tex_level_offset / 16.0f, minlod = 0.0f;
+				u8 minf = r->mip_filt ? (r->min_filt ? GX_LIN_MIP_LIN : GX_NEAR_MIP_LIN)
+				                      : (r->min_filt ? GX_LIN_MIP_NEAR : GX_NEAR_MIP_NEAR);
+				if(r->tex_level_mode == LOD_CONST){
+					minlod = bias < 0.0f ? 0.0f : bias > maxlod ? maxlod : bias;
+					maxlod = minlod;
+					bias = 0.0f;
+				}
+				GX_InitTexObjLOD(&cur_tex->obj, minf, r->mag_filt ? GX_LINEAR : GX_NEAR, minlod, maxlod, bias,
+				                 GX_FALSE, GX_TRUE, GX_ANISO_1);
+			} else
+				GX_InitTexObjFilterMode(&cur_tex->obj, r->min_filt ? GX_LINEAR : GX_NEAR, r->mag_filt ? GX_LINEAR : GX_NEAR);
 			GX_LoadTexObj(&cur_tex->obj, GX_TEXMAP0);
 		} else GX_LoadTexObj(&empty_obj, GX_TEXMAP0);
 		switch(r->tex_func){
@@ -1102,9 +1360,11 @@ static void apply_gx(void){
    profundidad (2), que no hace falta restaurar. 0 = no dibujar. */
 static int prepare_targets(int full){
 	if(targets_dirty){
+		u64 t0 = gettime();
 		setup_targets();
 		targets_dirty = 0;
 		gx_dirty = 1;
+		prof_setup += gettime() - t0;
 	}
 	if(skip_draws) return 0;
 	if(touch_c && !restored_c){
@@ -1127,8 +1387,10 @@ static void prepare_state(void){
 		want_promote = 0;
 	}
 	if(gx_dirty){
+		u64 t0 = gettime();
 		apply_gx();
 		gx_dirty = 0;
+		prof_state += gettime() - t0;
 	}
 }
 
@@ -1182,7 +1444,7 @@ static inline void put_vertex(const GeVertex *v, const GeVertex *cv){
 		else {
 			float iw = 1.0f / v->clipw;
 			if(tex_proj) q = v->q;
-			s *= iw; t *= iw; q *= iw;
+			s *= iw * tex_su; t *= iw * tex_sv; q *= iw;
 		}
 	}
 	put((float)v->x * (1.0f / 16.0f) + pos_off, (float)v->y * (1.0f / 16.0f) + pos_off, (float)v->z, s, t, q,
@@ -1211,7 +1473,7 @@ static void put_corner(const GeVertex *vx, const GeVertex *vy, const GeVertex *v
 		else {
 			float iw = 1.0f / vx->clipw;
 			if(tex_proj) q = vx->q;
-			s *= iw; t *= iw; q *= iw;
+			s *= iw * tex_su; t *= iw * tex_sv; q *= iw;
 		}
 	}
 	put((float)vx->x * (1.0f / 16.0f) + pos_off, (float)vy->y * (1.0f / 16.0f) + pos_off, (float)v1->z, s, t, q,
@@ -1318,7 +1580,24 @@ static const GeHwRenderer gx_renderer = {
 
 static Surface display_tmp;
 
+static int present_body(void *xfb, GXRModeObj *rm, int widescreen);
+
 int gx_ge_present(void *xfb, GXRModeObj *rm, int widescreen){
+	u64 t0 = gettime();
+	int r = present_body(xfb, rm, widescreen);
+	prof_present += gettime() - t0;
+	return r;
+}
+
+void gx_ge_profile(unsigned long long *setup, unsigned long long *state, unsigned long long *present,
+                   unsigned *counts){
+	*setup = prof_setup; *state = prof_state; *present = prof_present;
+	counts[0] = prof_vram_presents; counts[1] = prof_downloads; counts[2] = prof_uploads; counts[3] = prof_decodes;
+	prof_setup = prof_state = prof_present = 0;
+	prof_vram_presents = prof_downloads = prof_uploads = prof_decodes = 0;
+}
+
+static int present_body(void *xfb, GXRModeObj *rm, int widescreen){
 	HleFramebuffer fb;
 	Surface *s = NULL;
 	float x0, y0, x1, y1;
@@ -1349,6 +1628,7 @@ int gx_ge_present(void *xfb, GXRModeObj *rm, int widescreen){
 			d->tex = memalign(32, 480 * 272 * 4);
 			if(!d->tex) return 0;
 		}
+		prof_vram_presents++;
 		/* Lo que la GPU tenga encima de esa memoria baja antes */
 		mem_ptr_r(fb.addr, fb.stride * 271 * (fb.format == 3 ? 4u : 2u) + 480 * (fb.format == 3 ? 4u : 2u));
 		wait_gpu();
@@ -1467,6 +1747,7 @@ void gx_ge_enable(int on){
 	gx_ge_reset();
 	enabled = on;
 	ge_hw = on ? &gx_renderer : NULL;
+	ge_fast_math = on;
 	mem_vram_hook = on ? vram_hook : NULL;
 	recompute_watch();
 }

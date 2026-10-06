@@ -24,6 +24,12 @@ void gx_ge_reset(void);
    al XFB y devuelve 1. Devuelve 0 si hay que convertirlo desde la VRAM. */
 int  gx_ge_present(void *xfb, GXRModeObj *rmode, int widescreen);
 
+/* Ticks gastados desde la última llamada: preparar búferes y texturas,
+   estado de GX y presentar; counts: presentaciones desde la VRAM, bajadas
+   a la VRAM, subidas desde la VRAM y texturas decodificadas */
+void gx_ge_profile(unsigned long long *setup, unsigned long long *state, unsigned long long *present,
+                   unsigned *counts);
+
 /* Copia a la VRAM emulada todo lo que solo está en la GPU */
 void gx_ge_sync_vram(void);
 
