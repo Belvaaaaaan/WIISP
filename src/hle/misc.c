@@ -121,7 +121,7 @@ static void dmac_copy(int try_only){
 	}
 	if(try_only && dmac_deadline > cpu_cycles){ RETURN(SCE_KERNEL_ERROR_BUSY); return; }
 	d = mem_ptr(dst, size);
-	s = mem_ptr(src, size);
+	s = mem_ptr_r(src, size);
 	if(d && s) memmove(d, s, size);
 	else {
 		u32 i;

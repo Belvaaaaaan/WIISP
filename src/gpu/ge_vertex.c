@@ -1196,7 +1196,7 @@ static void read_raw(const VSource *s, u32 index, GeClipVertex *out){
 	DecVertex d;
 	if(s->list) d = s->list[index];
 	else if(s->zero) memset(&d, 0, sizeof(d));
-	else decode_vertex(s->f, mem_ptr(s->vaddr + index * s->f->size, s->f->size), &d);
+	else decode_vertex(s->f, mem_ptr_r(s->vaddr + index * s->f->size, s->f->size), &d);
 	read_vertex(s->f, &d, out);
 	ge_stats.vertices++;
 }
@@ -1464,7 +1464,7 @@ static int test_bounding_box(const VFormat *f, u32 vaddr, u32 iaddr, int count){
 		DecVertex d;
 		float p[4], w, dx, dy;
 		u32 idx = f->idx ? index_at(&src, i) : (u32)i;
-		decode_vertex(&nt, mem_ptr(vaddr + idx * f->size, f->size), &d);
+		decode_vertex(&nt, mem_ptr_r(vaddr + idx * f->size, f->size), &d);
 		for(k = 0; k < 4; k++) p[k] = d.pos[0] * wvp[k] + d.pos[1] * wvp[4 + k] + d.pos[2] * wvp[8 + k] + wvp[12 + k];
 		if(p[2] >= -p[3]) inside[4]++;
 		if(p[2] <= p[3]) inside[5]++;
@@ -1842,7 +1842,7 @@ static void submit_curve(u32 arg, int is_spline){
 		for(i = (int)lo; i <= (int)hi; i++){
 			DecVertex *d = &curve_cp[i];
 			if(vaddr & (f.biggest - 1)) memset(d, 0, sizeof(*d));
-			else decode_vertex(&f, mem_ptr(vaddr + (u32)i * f.size, f.size), d);
+			else decode_vertex(&f, mem_ptr_r(vaddr + (u32)i * f.size, f.size), d);
 			if(!f.tc){ d->uv[0] = 0.0f; d->uv[1] = 0.0f; }
 			if(!f.col) d->color0 = material_ambient_rgba();
 			if(!f.nrm){ d->nrm[0] = 0.0f; d->nrm[1] = 0.0f; d->nrm[2] = 1.0f; }

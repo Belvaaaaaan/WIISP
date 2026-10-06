@@ -71,9 +71,21 @@ int  mem_init(u8 *ram, u32 ram_size, u8 *vram, u8 *scratch);
 void mem_reset(void);
 
 /* Devuelve un puntero host a [addr, addr+len) o NULL si el rango no es
-   válido o cruza el final de una región. */
+   válido o cruza el final de una región. mem_ptr_r es para accesos que
+   solo leen. */
 u8  *mem_ptr(u32 addr, u32 len);
+const u8 *mem_ptr_r(u32 addr, u32 len);
 int  mem_valid(u32 addr, u32 len);
+
+/* Coherencia con un renderizador por hardware que guarda en su GPU la
+   versión más nueva de parte de la VRAM (framebuffers dibujados por GX).
+   Antes de acceder a bytes de la VRAM física dentro de
+   [mem_vram_watch_lo[w], mem_vram_watch_hi[w]) se llama al gancho con el
+   rango físico tocado; w = 0 para lecturas y 1 para accesos que pueden
+   escribir. Sin renderizador por hardware los rangos están vacíos. */
+typedef void (*MemVramHook)(u32 off, u32 len, int write);
+extern MemVramHook mem_vram_hook;
+extern u32 mem_vram_watch_lo[2], mem_vram_watch_hi[2];
 
 /* Accesos sueltos. Una dirección inválida lee 0 e ignora la escritura
    (el intérprete/dynarec decidirá luego si eso es una excepción). */

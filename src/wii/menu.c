@@ -8,8 +8,8 @@
  *   1 (Wiimote) o X (GameCube): cambiar entre SD y USB
  *   HOME (Wiimote) o START (GameCube): salir al Homebrew Channel
  *
- * La carpeta del último archivo ejecutado se guarda en un pequeño archivo
- * de configuración para volver a ella la próxima vez.
+ * La carpeta del último archivo ejecutado y el renderizador elegido (GX o
+ * software) se guardan en un pequeño archivo de configuración.
  *
  * SPDX-License-Identifier: GPL-2.0-or-later
 **/
@@ -27,9 +27,36 @@ static const char *const devices[] = { "sd:/", "usb:/" };
 #define NUM_DEVICES 2
 
 static char config_path[256];
+static char last_dir[FILELIST_PATH_LEN];
+static int renderer_gx = 1;
+
+static void save_config(void){
+	FILE *f;
+	if(!config_path[0]) return;
+	f = fopen(config_path, "w");
+	if(!f) return;
+	fprintf(f, "%s\n%s\n", last_dir, renderer_gx ? "gx" : "soft");
+	fclose(f);
+}
 
 void menu_set_config_path(const char *path){
+	FILE *f;
+	char line[16];
 	snprintf(config_path, sizeof(config_path), "%s", path);
+	f = fopen(config_path, "r");
+	if(!f) return;
+	if(fgets(last_dir, sizeof(last_dir), f)){
+		last_dir[strcspn(last_dir, "\r\n")] = 0;
+		if(fgets(line, sizeof(line), f)) renderer_gx = strncmp(line, "soft", 4) != 0;
+	}
+	fclose(f);
+}
+
+int menu_renderer_gx(void){ return renderer_gx; }
+
+void menu_set_renderer_gx(int on){
+	renderer_gx = on;
+	save_config();
 }
 
 static int dir_exists(const char *path){
@@ -40,27 +67,14 @@ static int dir_exists(const char *path){
 }
 
 void menu_remember(const char *file_path){
-	char dir[FILELIST_PATH_LEN];
-	FILE *f;
-	if(!config_path[0]) return;
-	filelist_parent(file_path, dir, sizeof(dir));
-	f = fopen(config_path, "w");
-	if(!f) return;
-	fprintf(f, "%s\n", dir);
-	fclose(f);
+	filelist_parent(file_path, last_dir, sizeof(last_dir));
+	save_config();
 }
 
 /* Carpeta inicial: la recordada, o sd:/wiisp, o la raíz de la SD o USB */
 static void initial_dir(char *out, size_t size){
-	FILE *f = config_path[0] ? fopen(config_path, "r") : NULL;
 	int i;
-	if(f){
-		if(fgets(out, (int)size, f)){
-			out[strcspn(out, "\r\n")] = 0;
-			if(out[0] && dir_exists(out)){ fclose(f); return; }
-		}
-		fclose(f);
-	}
+	if(last_dir[0] && dir_exists(last_dir)){ snprintf(out, size, "%s", last_dir); return; }
 	if(dir_exists("sd:/wiisp")){ snprintf(out, size, "sd:/wiisp"); return; }
 	for(i = 0; i < NUM_DEVICES; i++)
 		if(dir_exists(devices[i])){ snprintf(out, size, "%s", devices[i]); return; }

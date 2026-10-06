@@ -18,7 +18,8 @@ enum {
 	IN_ACCEPT = 1 << 4,   /* A */
 	IN_BACK = 1 << 5,     /* B */
 	IN_SWITCH = 1 << 6,   /* 1 / X: cambiar SD <-> USB */
-	IN_EXIT = 1 << 7      /* HOME / START */
+	IN_EXIT = 1 << 7,     /* HOME / START */
+	IN_OPTION = 1 << 8    /* 2 / Y */
 };
 
 typedef struct {
@@ -32,6 +33,8 @@ void input_read(Input *in);
 void input_send_to_psp(const Input *in);
 /* HOME (Wiimote) o Z+START (GameCube) durante la emulación */
 int  input_wants_exit(const Input *in);
+/* Botón de apagado (consola o Wiimote): apaga de forma ordenada */
+void input_check_power(void);
 
 /* --- Vídeo (video.c) ------------------------------------------------------ */
 
@@ -48,6 +51,10 @@ void video_draw_psp_frame(const char *overlay);
 int  menu_choose_file(char *out, int out_size);
 /* Recuerda la carpeta del último archivo ejecutado */
 void menu_remember(const char *file_path);
+/* Lee la configuración (carpeta y renderizador) de path */
 void menu_set_config_path(const char *path);
+/* 1 = el GE dibuja con GX (rápido); 0 = por software (exacto, lento) */
+int  menu_renderer_gx(void);
+void menu_set_renderer_gx(int on);
 
 #endif

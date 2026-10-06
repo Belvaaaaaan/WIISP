@@ -6,6 +6,7 @@
 **/
 
 #include <wiiuse/wpad.h>
+#include <fat.h>
 #include "wii/wii.h"
 #include "frontend/app.h"
 
@@ -15,15 +16,30 @@
 #define REPEAT_DELAY 18
 #define REPEAT_RATE  4
 
+static volatile int power_pressed;
+
+static void power_button(void){ power_pressed = 1; }
+static void wiimote_power_button(s32 chan){ (void)chan; power_pressed = 1; }
+
 void input_init(void){
 	WPAD_Init();
 	PAD_Init();
+	SYS_SetPowerCallback(power_button);
+	WPAD_SetPowerButtonCallback(wiimote_power_button);
+}
+
+void input_check_power(void){
+	if(!power_pressed) return;
+	fatUnmount("sd:");
+	fatUnmount("usb:");
+	SYS_ResetSystem(SYS_POWEROFF, 0, 0);
 }
 
 void input_read(Input *in){
 	static u32 hold_frames;
 	u32 dirs;
 
+	input_check_power();
 	WPAD_ScanPads();
 	PAD_ScanPads();
 	in->down = WPAD_ButtonsDown(0) | GC(PAD_ButtonsDown(0));
@@ -45,6 +61,7 @@ void input_read(Input *in){
 	if(in->down & (WPAD_BUTTON_B | GC(PAD_BUTTON_B))) in->menu |= IN_BACK;
 	if(in->down & (WPAD_BUTTON_1 | GC(PAD_BUTTON_X))) in->menu |= IN_SWITCH;
 	if(in->down & (WPAD_BUTTON_HOME | GC(PAD_BUTTON_START))) in->menu |= IN_EXIT;
+	if(in->down & (WPAD_BUTTON_2 | GC(PAD_BUTTON_Y))) in->menu |= IN_OPTION;
 }
 
 int input_wants_exit(const Input *in){

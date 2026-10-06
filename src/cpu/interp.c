@@ -49,9 +49,15 @@ static inline u8 *ptr(u32 addr, u32 size, u32 instr){
 	return p;
 }
 
-static inline u32 ld32(u32 a, u32 i){ u8 *p = ptr(a, 4, i); return p ? rd_le32(p) : 0; }
-static inline u32 ld16(u32 a, u32 i){ u8 *p = ptr(a, 2, i); return p ? rd_le16(p) : 0; }
-static inline u32 ld8 (u32 a, u32 i){ u8 *p = ptr(a, 1, i); return p ? *p : 0; }
+static inline const u8 *ptr_r(u32 addr, u32 size, u32 instr){
+	const u8 *p = mem_ptr_r(addr, size);
+	if(!p) cpu_fault("acceso a memoria invalido", addr, instr);
+	return p;
+}
+
+static inline u32 ld32(u32 a, u32 i){ const u8 *p = ptr_r(a, 4, i); return p ? rd_le32(p) : 0; }
+static inline u32 ld16(u32 a, u32 i){ const u8 *p = ptr_r(a, 2, i); return p ? rd_le16(p) : 0; }
+static inline u32 ld8 (u32 a, u32 i){ const u8 *p = ptr_r(a, 1, i); return p ? *p : 0; }
 static inline void st32(u32 a, u32 v, u32 i){ u8 *p = ptr(a, 4, i); if(p) wr_le32(p, v); }
 static inline void st16(u32 a, u32 v, u32 i){ u8 *p = ptr(a, 2, i); if(p) wr_le16(p, (u16)v); }
 static inline void st8 (u32 a, u32 v, u32 i){ u8 *p = ptr(a, 1, i); if(p) *p = (u8)v; }

@@ -8,6 +8,8 @@
 #include "core/memory.h"
 
 PspMemory psp_mem;
+MemVramHook mem_vram_hook;
+u32 mem_vram_watch_lo[2], mem_vram_watch_hi[2];
 
 int mem_init(u8 *ram, u32 ram_size, u8 *vram, u8 *scratch){
 	if(!ram || !vram || !scratch) return -1;
@@ -33,21 +35,39 @@ static inline u8 *region(u8 *base, u32 size, u32 off, u32 len){
 	return NULL;
 }
 
+static inline void vram_watch(u32 off, u32 len, int write){
+	if(off < mem_vram_watch_hi[write] && off + len > mem_vram_watch_lo[write])
+		mem_vram_hook(off, len, write);
+}
+
+static u8 *vram_ptr(u32 addr, u32 len, int write){
+	u32 off = addr - PSP_VRAM_BASE, mirror = off >> 21;
+	off &= PSP_VRAM_SIZE - 1;
+	if(mirror & 1){
+		/* El swizzle conserva los 5 bits bajos: solo hay puntero
+		   contiguo dentro de un bloque de 32 bytes */
+		if((off & 31) + len > 32) return NULL;
+		off = mem_vram_deswizzle(off, mirror == 3);
+	} else if(!(off < PSP_VRAM_SIZE && len <= PSP_VRAM_SIZE - off)) return NULL;
+	vram_watch(off, len, write);
+	return psp_mem.vram + off;
+}
+
 u8 *mem_ptr(u32 addr, u32 len){
 	addr &= PSP_ADDR_MASK;
 	if(addr >= PSP_RAM_BASE)
 		return region(psp_mem.ram, psp_mem.ram_size, addr - PSP_RAM_BASE, len);
-	if(addr >= PSP_VRAM_BASE && addr < PSP_VRAM_MIRROR_END){
-		u32 off = addr - PSP_VRAM_BASE, mirror = off >> 21;
-		off &= PSP_VRAM_SIZE - 1;
-		if(mirror & 1){
-			/* El swizzle conserva los 5 bits bajos: solo hay puntero
-			   contiguo dentro de un bloque de 32 bytes */
-			if((off & 31) + len > 32) return NULL;
-			return psp_mem.vram + mem_vram_deswizzle(off, mirror == 3);
-		}
-		return region(psp_mem.vram, PSP_VRAM_SIZE, off, len);
-	}
+	if(addr >= PSP_VRAM_BASE && addr < PSP_VRAM_MIRROR_END) return vram_ptr(addr, len, 1);
+	if(addr >= PSP_SCRATCH_BASE)
+		return region(psp_mem.scratch, PSP_SCRATCH_SIZE, addr - PSP_SCRATCH_BASE, len);
+	return NULL;
+}
+
+const u8 *mem_ptr_r(u32 addr, u32 len){
+	addr &= PSP_ADDR_MASK;
+	if(addr >= PSP_RAM_BASE)
+		return region(psp_mem.ram, psp_mem.ram_size, addr - PSP_RAM_BASE, len);
+	if(addr >= PSP_VRAM_BASE && addr < PSP_VRAM_MIRROR_END) return vram_ptr(addr, len, 0);
 	if(addr >= PSP_SCRATCH_BASE)
 		return region(psp_mem.scratch, PSP_SCRATCH_SIZE, addr - PSP_SCRATCH_BASE, len);
 	return NULL;
@@ -63,17 +83,17 @@ int mem_valid(u32 addr, u32 len){
 }
 
 u8 mem_read8(u32 addr){
-	u8 *p = mem_ptr(addr, 1);
+	const u8 *p = mem_ptr_r(addr, 1);
 	return p ? *p : 0;
 }
 
 u16 mem_read16(u32 addr){
-	u8 *p = mem_ptr(addr, 2);
+	const u8 *p = mem_ptr_r(addr, 2);
 	return p ? rd_le16(p) : 0;
 }
 
 u32 mem_read32(u32 addr){
-	u8 *p = mem_ptr(addr, 4);
+	const u8 *p = mem_ptr_r(addr, 4);
 	return p ? rd_le32(p) : 0;
 }
 
@@ -96,7 +116,7 @@ int mem_read_cstr(u32 addr, char *dst, u32 dst_size){
 	u32 i;
 	if(!dst_size) return -1;
 	for(i = 0; i + 1 < dst_size; i++){
-		u8 *p = mem_ptr(addr + i, 1);
+		const u8 *p = mem_ptr_r(addr + i, 1);
 		if(!p){ dst[i] = 0; return -1; }
 		dst[i] = (char)*p;
 		if(!*p) return 0;

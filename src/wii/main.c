@@ -9,9 +9,16 @@
  *   3. Con A lo ejecuta. El texto que escribe sale en la consola; si
  *      configura un framebuffer, se muestra en la tele con FPS, MIPS y
  *      velocidad respecto a una PSP real arriba. HOME / Z+START vuelven al
- *      menú.
+ *      menú. Con 2 / Y se cambia antes el renderizador: GX (la GPU del
+ *      Wii, rápido) o software (exacto pero lento).
  *
  * Si el Homebrew Channel nos pasa una ruta como argumento, se abre directa.
+ *
+ * Pruebas automáticas (en Dolphin o en la consola): si existe
+ * sd:/wiisp/autotest.txt, se ejecuta cada programa de la lista (rutas
+ * relativas a sd:/wiisp/autotest/) sin mandos; su salida va a
+ * <programa>.out y la captura que pida a <programa>.bmp. Las líneas "gx" y
+ * "soft" eligen el renderizador. Al acabar escribe autotest.done y apaga.
  *
  * SPDX-License-Identifier: GPL-2.0-or-later
 **/
@@ -23,6 +30,7 @@
 #include <ogc/lwp_watchdog.h>
 #include <fat.h>
 #include "wii/wii.h"
+#include "wii/gx_ge.h"
 #include "frontend/app.h"
 
 /* La RAM de la PSP (32 MB) no cabe en MEM1 (24 MB), así que se recorta
@@ -63,6 +71,7 @@ static void run_program(void){
 	u64 start = now_ms(), last = start, elapsed;
 	char overlay[48] = "";
 
+	gx_ge_enable(menu_renderer_gx());
 	app_set_output(program_output);
 	if(app_start()){
 		printf("Error: no se pudo iniciar el programa\n");
@@ -93,6 +102,7 @@ static void run_program(void){
 		}
 		video_draw_psp_frame(overlay);
 	}
+	gx_ge_reset();
 	video_show_console();
 
 	app_get_stats(&frames, &instr);
@@ -111,12 +121,71 @@ static void open_file(const char *path){
 	app_imports_path(path, imports, sizeof(imports));
 	if(app_load(path, 8, imports) == 0){
 		menu_remember(path);
-		printf("\nA: ejecutar   B: volver al menu\n");
-		if(wait_accept()) run_program();
-		else return;
+		for(;;){
+			Input in;
+			printf("\rA: ejecutar   B: volver al menu   2/Y: renderizador %s  ",
+			       menu_renderer_gx() ? "GX (rapido)        " : "software (exacto)  ");
+			fflush(stdout);
+			do {
+				VIDEO_WaitVSync();
+				input_read(&in);
+			} while(!(in.menu & (IN_ACCEPT | IN_BACK | IN_EXIT | IN_OPTION)));
+			if(in.menu & IN_OPTION){ menu_set_renderer_gx(!menu_renderer_gx()); continue; }
+			printf("\n");
+			if(in.menu & IN_ACCEPT) break;
+			return;
+		}
+		run_program();
 	}
 	printf("\nPulsa A o B para volver al menu.\n");
 	wait_accept();
+}
+
+/* --- Pruebas automáticas ------------------------------------------------ */
+
+static FILE *autotest_file;
+
+static void autotest_output(const char *text, unsigned len){
+	if(autotest_file) fwrite(text, 1, len, autotest_file);
+}
+
+static int autotest(void){
+	FILE *list = fopen("sd:/wiisp/autotest.txt", "r"), *done;
+	char line[256], path[320], out[340];
+	int count = 0;
+	if(!list) return 0;
+	printf("Pruebas automaticas (sd:/wiisp/autotest.txt)\n");
+	gx_ge_enable(1);
+	while(fgets(line, sizeof(line), list)){
+		int frames, exited = 0;
+		line[strcspn(line, "\r\n")] = 0;
+		if(!line[0] || line[0] == '#') continue;
+		if(!strcmp(line, "gx")){ gx_ge_enable(1); continue; }
+		if(!strcmp(line, "soft")){ gx_ge_enable(0); continue; }
+		snprintf(path, sizeof(path), "sd:/wiisp/autotest/%s", line);
+		printf("%s\n", line);
+		snprintf(out, sizeof(out), "%s.bmp", path);
+		app_set_screenshot_path(out);
+		snprintf(out, sizeof(out), "%s.out", path);
+		autotest_file = fopen(out, "w");
+		app_set_verbose(0);
+		app_set_output(autotest_output);
+		if(app_load(path, 8, NULL) == 0 && app_start() == 0)
+			for(frames = 0; frames < 1200 && !exited; frames++){
+				exited = app_run_frame();
+				if((frames & 7) == 7) video_draw_psp_frame(NULL);
+			}
+		if(autotest_file) fclose(autotest_file);
+		autotest_file = NULL;
+		gx_ge_reset();
+		count++;
+	}
+	fclose(list);
+	done = fopen("sd:/wiisp/autotest.done", "w");
+	if(done){ fprintf(done, "%d\n", count); fclose(done); }
+	fatUnmount("sd:");
+	SYS_ResetSystem(SYS_POWEROFF, 0, 0);
+	return 1;
 }
 
 int main(int argc, char **argv){
@@ -140,6 +209,8 @@ int main(int argc, char **argv){
 		snprintf(config, sizeof(config), "%.*s/wiisp.cfg", (int)(slash - argv[0]), argv[0]);
 		menu_set_config_path(config);
 	}
+
+	autotest();
 
 	if(argc > 1 && argv[1] && access(argv[1], F_OK) == 0)
 		open_file(argv[1]);

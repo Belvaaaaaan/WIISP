@@ -304,7 +304,7 @@ static void save_context(u32 addr){
 static void restore_context(u32 addr){
 	u32 buf[512];
 	const u32 *w;
-	const u8 *p = mem_ptr(addr, sizeof(buf));
+	const u8 *p = mem_ptr_r(addr, sizeof(buf));
 	unsigned r;
 	int n, i;
 	if(!p) return;
@@ -386,7 +386,8 @@ static void do_transfer(u32 arg){
 		for(y = 0; y < h; y++){
 			u32 sa = src_base + ((y + sy) * src_stride + sx) * bpp;
 			u32 da = dst_base + ((y + dy) * dst_stride + dx) * bpp;
-			u8 *s = mem_ptr(sa, line), *d = mem_ptr(da, line);
+			const u8 *s = mem_ptr_r(sa, line);
+			u8 *d = mem_ptr(da, line);
 			if(s && d) memcpy(d, s, line);
 			else { /* espejo con swizzle: byte a byte */
 				u32 i;
@@ -404,11 +405,12 @@ void ge_load_clut(u32 blocks){
 	if(bytes > 1024) bytes = 1024;
 	if(!mem_valid(addr, 1) && addr == 0) return;
 	for(off = 0; off < bytes; off += 16){
-		const u8 *p = mem_ptr(addr + off, 16);
+		const u8 *p = mem_ptr_r(addr + off, 16);
 		if(p) memcpy(ge.clut + off, p, 16);
 		else memset(ge.clut + off, 0, 16);
 	}
 	ge.clut_bytes = bytes;
+	ge.clut_gen++;
 }
 
 

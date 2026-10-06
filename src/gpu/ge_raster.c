@@ -33,15 +33,6 @@
 
 #define SSF 16  /* SCREEN_SCALE_FACTOR */
 
-enum { CMP_NEVER, CMP_ALWAYS, CMP_EQUAL, CMP_NOTEQUAL, CMP_LESS, CMP_LEQUAL, CMP_GREATER, CMP_GEQUAL };
-enum { SOP_KEEP, SOP_ZERO, SOP_REPLACE, SOP_INVERT, SOP_INCR, SOP_DECR };
-enum {
-	BF_OTHERCOLOR, BF_INVOTHERCOLOR, BF_SRCALPHA, BF_INVSRCALPHA, BF_DSTALPHA, BF_INVDSTALPHA,
-	BF_DOUBLESRCALPHA, BF_DOUBLEINVSRCALPHA, BF_DOUBLEDSTALPHA, BF_DOUBLEINVDSTALPHA, BF_FIX
-};
-enum { BEQ_ADD, BEQ_SUB, BEQ_REVSUB, BEQ_MIN, BEQ_MAX, BEQ_ABSDIFF };
-enum { TF_MODULATE, TF_DECAL, TF_BLEND, TF_REPLACE, TF_ADD };
-enum { LOD_AUTO, LOD_CONST, LOD_SLOPE };
 
 /* --- Conversiones de color -------------------------------------------------- */
 
@@ -90,45 +81,10 @@ static inline u32 pack_rgb(const int *c){
 
 /* --- Estado (PixelFuncID, SamplerID y RasterizerState de PPSSPP) ----------- */
 
-static struct {
-	/* Píxel */
-	int clear_mode, color_test, stencil_test, depth_write, apply_depth_range;
-	int alpha_test_func, depth_test_func, stencil_test_func, fb_format;
-	int alpha_test_ref, stencil_test_ref;
-	int alpha_blend, blend_eq, blend_src, blend_dst;
-	int has_alpha_test_mask, has_stencil_test_mask, dithering, apply_logic_op, apply_fog;
-	int apply_color_write_mask, sfail, zfail, zpass, early_z;
-	u32 color_write_mask;
-	int dither[16];
-	u32 fog_color;
-	int minz, maxz;
-	u32 fb_stride, z_stride, fb_off, z_off;
-	int stencil_ref, stencil_test_mask, alpha_test_mask;
-	int color_test_func;
-	u32 color_test_mask, color_test_ref, blend_fix_a, blend_fix_b;
-	int logic_op;
+static GeRasterState rs;
 
-	/* Muestreo */
-	int enable_textures;
-	int texfmt, swizzle, clut_fmt, has_clut_mask, has_clut_shift, has_clut_offset, use_shared_clut;
-	u32 clutformat;
-	int clamp_s, clamp_t, use_tex_alpha, color_doubling, tex_func;
-	u32 tex_blend_color;
-	int width0_shift, height0_shift, has_any_mips;
-	int size_w[8], size_h[8];
-	u32 texaddr[8];
-	int texvalid[8];
-	u16 texbufw[8];
-	int max_tex_level, tex_level_mode, tex_level_offset, mip_filt, min_filt, mag_filt;
-	float tex_lod_slope;
-	int texture_proj;
-	int self_texture;          /* textura dentro del búfer que se dibuja */
-	const u8 *snap[8];         /* instantánea del caché de texturas */
-	u32 snap_size[8];
-
-	int shade_gouraud, through_mode, antialias_lines;
-	int sc_x1, sc_y1, sc_x2, sc_y2;  /* tijera en coordenadas de pantalla */
-} rs;
+const GeRasterState *ge_raster_state(void){ return &rs; }
+const GeHwRenderer *ge_hw;
 
 static const u8 tex_bits[16] = { 16, 16, 16, 32, 4, 8, 16, 32, 4, 8, 8, 0, 0, 0, 0, 0 };
 /* bufw alineado a 16 bytes */
@@ -162,7 +118,7 @@ static void compute_pixel_state(void){
 	int through = (ge.cmd[GE_VERTEXTYPE] >> 23) & 1;
 	int x, y;
 
-	memset(&rs, 0, offsetof(__typeof__(rs), enable_textures));
+	memset(&rs, 0, offsetof(GeRasterState, enable_textures));
 	rs.apply_depth_range = !through;
 	rs.dithering = ge_on(GE_DITHERENABLE);
 	rs.fb_format = fmt;
@@ -386,7 +342,8 @@ void ge_raster_begin(void){
 	rs.enable_textures = ge_on(GE_TEXTUREMAPENABLE) && !rs.clear_mode;
 	if(rs.enable_textures){
 		compute_sampler_state();
-		compute_self_texture();
+		if(!ge_hw) compute_self_texture();
+		else rs.self_texture = 0;
 	} else rs.self_texture = 0;
 	memset(rs.snap, 0, sizeof(rs.snap));
 	rs.shade_gouraud = !(ge.cmd[GE_CLEARMODE] & 1) && (ge.cmd[GE_SHADEMODE] & 1);
@@ -401,6 +358,7 @@ void ge_raster_begin(void){
 	rs.sc_y1 = (int)((ge.cmd[GE_SCISSOR1] >> 10) & 0x3FF) * SSF;
 	rs.sc_x2 = sx2 * SSF + SSF - 1;
 	rs.sc_y2 = sy2 * SSF + SSF - 1;
+	if(ge_hw) ge_hw->begin();
 }
 
 int ge_raster_texture_proj(void){ return rs.enable_textures && rs.texture_proj; }
@@ -421,7 +379,10 @@ static struct {
 	u32 flush_gen;
 } st;
 
-void ge_raster_tex_flush(void){ tex_flush_gen++; }
+void ge_raster_tex_flush(void){
+	tex_flush_gen++;
+	if(ge_hw) ge_hw->tex_flush();
+}
 
 /* ¿Se cruza la textura (start, stride, w, h en bytes) con lo que se escribe? */
 static int overlaps_write(u32 start, u32 stride, u32 w, u32 h, u32 base, u32 stride_bytes, u32 width_bytes, u32 height){
@@ -467,7 +428,7 @@ static void compute_self_texture(void){
 }
 
 static void copy_texture_bytes(u8 *dst, u32 addr, u32 bytes){
-	const u8 *p = mem_ptr(addr, bytes);
+	const u8 *p = mem_ptr_r(addr, bytes);
 	u32 i;
 	if(p){ memcpy(dst, p, bytes); return; }
 	for(i = 0; i < bytes; i++) dst[i] = mem_read8(addr + i);
@@ -811,7 +772,7 @@ static u32 pixel_offset(int bits, u32 pitch, u32 u, u32 v, int swizzled){
 static int tex_lv;
 static inline const u8 *tex_p(u32 off, u32 len){
 	if(rs.snap[tex_lv]) return off + len <= rs.snap_size[tex_lv] ? rs.snap[tex_lv] + off : NULL;
-	return mem_ptr(rs.texaddr[tex_lv] + off, len);
+	return mem_ptr_r(rs.texaddr[tex_lv] + off, len);
 }
 static inline u32 tex_rd8(u32 off){ const u8 *p = tex_p(off, 1); return p ? *p : 0; }
 static inline u32 tex_rd16(u32 off){ const u8 *p = tex_p(off, 2); return p ? rd_le16(p) : 0; }
@@ -913,6 +874,12 @@ static u32 fetch_texel(int u, int v, int level){
 static inline u32 sample_texel(int u, int v, int level){
 	if(!rs.texvalid[level]) return 0;
 	return fetch_texel(u, v, level);
+}
+
+void ge_texture_decode(int level, u32 *out, int w, int h, int pitch){
+	int x, y;
+	for(y = 0; y < h; y++)
+		for(x = 0; x < w; x++) out[y * pitch + x] = sample_texel(x, y, level);
 }
 
 static inline int clamp_uv(int v, int size){
@@ -2081,6 +2048,7 @@ void ge_raster_triangle(const GeVertex *v0, const GeVertex *v1, const GeVertex *
 	if(d01x * d02y - d01y * d02x <= 0) return;
 	if(!range_of(v, 3, &x1, &y1, &x2, &y2)) return;
 	ge_stats.primitives++;
+	if(ge_hw){ ge_hw->triangle(v0, v1, v2); return; }
 	texture_snapshot();
 	draw_triangle(v0, v1, v2, x1, y1, x2, y2);
 }
@@ -2090,6 +2058,7 @@ void ge_raster_rect(const GeVertex *v0, const GeVertex *v1){
 	int x1, y1, x2, y2;
 	if(!range_of(v, 2, &x1, &y1, &x2, &y2)) return;
 	ge_stats.primitives++;
+	if(ge_hw){ ge_hw->rect(v0, v1); return; }
 	texture_snapshot();
 	draw_rectangle(v0, v1, x1, y1, x2, y2);
 }
@@ -2099,6 +2068,7 @@ void ge_raster_clear_rect(const GeVertex *v0, const GeVertex *v1){
 	int x1, y1, x2, y2;
 	if(!range_of(v, 2, &x1, &y1, &x2, &y2)) return;
 	ge_stats.primitives++;
+	if(ge_hw){ ge_hw->clear_rect(v0, v1); return; }
 	clear_rectangle(v0, v1, x1, y1, x2, y2);
 }
 
@@ -2107,6 +2077,7 @@ void ge_raster_line(const GeVertex *v0, const GeVertex *v1){
 	int x1, y1, x2, y2;
 	if(!range_of(v, 2, &x1, &y1, &x2, &y2)) return;
 	ge_stats.primitives++;
+	if(ge_hw){ ge_hw->line(v0, v1); return; }
 	texture_snapshot();
 	draw_line(v0, v1, x1, y1, x2, y2);
 }
@@ -2116,6 +2087,7 @@ void ge_raster_point(const GeVertex *v0){
 	int x1, y1, x2, y2;
 	if(!range_of(v, 1, &x1, &y1, &x2, &y2)) return;
 	ge_stats.primitives++;
+	if(ge_hw){ ge_hw->point(v0); return; }
 	texture_snapshot();
 	draw_point(v0);
 }

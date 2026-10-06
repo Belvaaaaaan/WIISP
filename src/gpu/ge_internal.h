@@ -89,6 +89,7 @@ typedef struct {
 
 	u8  clut[2048];            /* CLUT cargada (en orden de la PSP) */
 	u32 clut_bytes;
+	u32 clut_gen;              /* sube con cada LOADCLUT (cachés de texturas) */
 
 	int bbox_visible;          /* resultado de BOUNDINGBOX para BJUMP */
 
@@ -176,6 +177,83 @@ void ge_raster_line(const GeVertex *v0, const GeVertex *v1);
 void ge_raster_point(const GeVertex *v);
 int  ge_raster_texture_proj(void);  /* proyección de textura activa (decide rectángulos) */
 void ge_raster_tex_flush(void);     /* TEXFLUSH: vacía el caché de texturas */
+
+/* Estado de píxel y muestreo ya normalizado (PixelFuncID, SamplerID y
+   RasterizerState de PPSSPP); se recalcula en ge_raster_begin */
+enum { CMP_NEVER, CMP_ALWAYS, CMP_EQUAL, CMP_NOTEQUAL, CMP_LESS, CMP_LEQUAL, CMP_GREATER, CMP_GEQUAL };
+enum { SOP_KEEP, SOP_ZERO, SOP_REPLACE, SOP_INVERT, SOP_INCR, SOP_DECR };
+enum {
+	BF_OTHERCOLOR, BF_INVOTHERCOLOR, BF_SRCALPHA, BF_INVSRCALPHA, BF_DSTALPHA, BF_INVDSTALPHA,
+	BF_DOUBLESRCALPHA, BF_DOUBLEINVSRCALPHA, BF_DOUBLEDSTALPHA, BF_DOUBLEINVDSTALPHA, BF_FIX
+};
+enum { BEQ_ADD, BEQ_SUB, BEQ_REVSUB, BEQ_MIN, BEQ_MAX, BEQ_ABSDIFF };
+enum { TF_MODULATE, TF_DECAL, TF_BLEND, TF_REPLACE, TF_ADD };
+enum { LOD_AUTO, LOD_CONST, LOD_SLOPE };
+
+typedef struct {
+	/* Píxel */
+	int clear_mode, color_test, stencil_test, depth_write, apply_depth_range;
+	int alpha_test_func, depth_test_func, stencil_test_func, fb_format;
+	int alpha_test_ref, stencil_test_ref;
+	int alpha_blend, blend_eq, blend_src, blend_dst;
+	int has_alpha_test_mask, has_stencil_test_mask, dithering, apply_logic_op, apply_fog;
+	int apply_color_write_mask, sfail, zfail, zpass, early_z;
+	u32 color_write_mask;
+	int dither[16];
+	u32 fog_color;
+	int minz, maxz;
+	u32 fb_stride, z_stride, fb_off, z_off;
+	int stencil_ref, stencil_test_mask, alpha_test_mask;
+	int color_test_func;
+	u32 color_test_mask, color_test_ref, blend_fix_a, blend_fix_b;
+	int logic_op;
+
+	/* Muestreo */
+	int enable_textures;
+	int texfmt, swizzle, clut_fmt, has_clut_mask, has_clut_shift, has_clut_offset, use_shared_clut;
+	u32 clutformat;
+	int clamp_s, clamp_t, use_tex_alpha, color_doubling, tex_func;
+	u32 tex_blend_color;
+	int width0_shift, height0_shift, has_any_mips;
+	int size_w[8], size_h[8];
+	u32 texaddr[8];
+	int texvalid[8];
+	u16 texbufw[8];
+	int max_tex_level, tex_level_mode, tex_level_offset, mip_filt, min_filt, mag_filt;
+	float tex_lod_slope;
+	int texture_proj;
+	int self_texture;          /* textura dentro del búfer que se dibuja */
+	const u8 *snap[8];         /* instantánea del caché de texturas */
+	u32 snap_size[8];
+
+	int shade_gouraud, through_mode, antialias_lines;
+	int sc_x1, sc_y1, sc_x2, sc_y2;  /* tijera en coordenadas de pantalla */
+} GeRasterState;
+
+const GeRasterState *ge_raster_state(void);
+
+/* Texels del nivel `level` de la textura actual (estado de ge_raster_begin)
+   en RGBA de 8 bits (rojo en el byte bajo), fila a fila con `pitch` texels
+   por fila. Lee la memoria como el muestreador del GE. */
+void ge_texture_decode(int level, u32 *out, int w, int h, int pitch);
+
+/* --- Renderizador por hardware (opcional) ----------------------------- */
+
+/* Si hay uno, recibe las primitivas ya transformadas, recortadas, en el
+   orden correcto y dentro de la tijera, en lugar del rasterizador por
+   software. begin se llama antes de cada tanda, con el estado de
+   ge_raster_state() ya calculado. */
+typedef struct {
+	void (*begin)(void);
+	void (*triangle)(const GeVertex *v0, const GeVertex *v1, const GeVertex *v2);
+	void (*rect)(const GeVertex *v0, const GeVertex *v1);
+	void (*clear_rect)(const GeVertex *v0, const GeVertex *v1);
+	void (*line)(const GeVertex *v0, const GeVertex *v1);
+	void (*point)(const GeVertex *v0);
+	void (*tex_flush)(void);
+} GeHwRenderer;
+
+extern const GeHwRenderer *ge_hw;
 
 void ge_load_clut(u32 blocks);
 /* Convierte un color de 16/32 bits de la PSP a RGBA de 8 bits */

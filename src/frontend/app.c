@@ -142,7 +142,7 @@ int app_write_bmp(const char *path){
 	for(y = 0; y < 272; y++){
 		u8 row[512 * 4];
 		for(x = 0; x < 512; x++){
-			const u8 *p = fb.addr ? mem_ptr(fb.addr + ((271 - y) * fb.stride + x) * bpp, bpp) : NULL;
+			const u8 *p = fb.addr ? mem_ptr_r(fb.addr + ((271 - y) * fb.stride + x) * bpp, bpp) : NULL;
 			u32 v = p ? bmp_pixel(p, fb.format) : 0;
 			wr_le32(row + x * 4, v);
 		}
@@ -203,5 +203,5 @@ const unsigned char *app_get_framebuffer(unsigned *stride, unsigned *format){
 	bpp = fb.format == 3 ? 4 : 2;
 	*stride = fb.stride;
 	*format = fb.format;
-	return mem_ptr(fb.addr, fb.stride * (APP_SCREEN_H - 1) * bpp + APP_SCREEN_W * bpp);
+	return mem_ptr_r(fb.addr, fb.stride * (APP_SCREEN_H - 1) * bpp + APP_SCREEN_W * bpp);
 }
