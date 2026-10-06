@@ -273,6 +273,10 @@ píxel, el stencil y los modos de mezcla que GX no tiene.
 | 6 | VFPU con paired singles, skinning, audio (sceAudio, Atrac3+) | |
 | 7 | ISO/CSO, descifrado, compatibilidad con juegos comerciales, menú | |
 
+El plan de optimización para juegos comerciales pesados (fastmem, caché
+persistente de código, VFPU, audio en el DSP, E/S asíncrona) está en
+`docs/OPTIMIZACION.md`.
+
 ## 9. Metodología de pruebas
 
 1. **Primero en PC, después en el Wii.** Todo se desarrolla con el CLI
