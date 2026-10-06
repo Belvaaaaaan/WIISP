@@ -101,7 +101,6 @@ static int interrupt_running, isbreak;
 static GeIntrData ge_pending[GE_MAX_INTRS];
 static int ge_pending_len;
 static GeCallback callbacks[GE_MAX_CALLBACKS];
-static u32 edram_translation;
 
 static void process_dl_queue(void);
 static const KernelIntrHandler ge_intr_handler;
@@ -151,7 +150,7 @@ void ge_init(void){
 	cycles_executed = 0;
 	interrupt_running = isbreak = 0;
 	ge_pending_len = 0;
-	edram_translation = 0x400;
+	psp_mem.vram_translation = 0x400;
 	ge.last_prim = GE_PRIM_TRIANGLES;
 	kernel_register_intr(PSP_GE_INTR, &ge_intr_handler);
 }
@@ -385,9 +384,14 @@ static void do_transfer(u32 arg){
 		}
 	} else if(src_ok && dst_ok){
 		for(y = 0; y < h; y++){
-			u8 *s = mem_ptr(src_base + ((y + sy) * src_stride + sx) * bpp, line);
-			u8 *d = mem_ptr(dst_base + ((y + dy) * dst_stride + dx) * bpp, line);
+			u32 sa = src_base + ((y + sy) * src_stride + sx) * bpp;
+			u32 da = dst_base + ((y + dy) * dst_stride + dx) * bpp;
+			u8 *s = mem_ptr(sa, line), *d = mem_ptr(da, line);
 			if(s && d) memcpy(d, s, line);
+			else { /* espejo con swizzle: byte a byte */
+				u32 i;
+				for(i = 0; i < line; i++) mem_write8(da + i, mem_read8(sa + i));
+			}
 		}
 	}
 }
@@ -625,6 +629,9 @@ static void execute(DisplayList *l, u32 op){
 	case GE_BONEMATRIXDATA:  matrix_data(GE_BONEMATRIXNUMBER, cmd, &ge.bone[0][0], 96, 0x7F, arg); break;
 	case GE_LOADCLUT:
 		ge_load_clut(arg);
+		break;
+	case GE_TEXFLUSH:
+		ge_raster_tex_flush();
 		break;
 	case GE_TRANSFERSTART:
 		do_transfer(arg);
@@ -1092,8 +1099,8 @@ static void sceGeEdramGetSize(void){ RETURN(PSP_VRAM_SIZE); }
 static void sceGeEdramSetAddrTranslation(void){
 	u32 v = ARG(0);
 	if((v != 0 && (v < 0x200 || v > 0x1000)) || (v & (v - 1))){ RETURN(ERR_INVALID_VALUE); return; }
-	RETURN(edram_translation);
-	edram_translation = v;
+	RETURN(psp_mem.vram_translation);
+	psp_mem.vram_translation = v;
 }
 
 /* Devuelve la palabra entera; los registros de matrices no se leen */

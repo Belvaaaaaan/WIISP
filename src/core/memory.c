@@ -24,6 +24,7 @@ void mem_reset(void){
 	memset(psp_mem.ram, 0, psp_mem.ram_size);
 	memset(psp_mem.vram, 0, PSP_VRAM_SIZE);
 	memset(psp_mem.scratch, 0, PSP_SCRATCH_SIZE);
+	psp_mem.vram_translation = 0x400;
 }
 
 /* off < size && len <= size - off evita desbordes con direcciones altas */
@@ -36,17 +37,28 @@ u8 *mem_ptr(u32 addr, u32 len){
 	addr &= PSP_ADDR_MASK;
 	if(addr >= PSP_RAM_BASE)
 		return region(psp_mem.ram, psp_mem.ram_size, addr - PSP_RAM_BASE, len);
-	if(addr >= PSP_VRAM_BASE && addr < PSP_VRAM_MIRROR_END)
-		/* Los espejos de VRAM (con swizzle de profundidad) aún no se
-		   emulan: todos apuntan a la misma VRAM lineal. */
-		return region(psp_mem.vram, PSP_VRAM_SIZE,
-		              (addr - PSP_VRAM_BASE) & (PSP_VRAM_SIZE - 1), len);
+	if(addr >= PSP_VRAM_BASE && addr < PSP_VRAM_MIRROR_END){
+		u32 off = addr - PSP_VRAM_BASE, mirror = off >> 21;
+		off &= PSP_VRAM_SIZE - 1;
+		if(mirror & 1){
+			/* El swizzle conserva los 5 bits bajos: solo hay puntero
+			   contiguo dentro de un bloque de 32 bytes */
+			if((off & 31) + len > 32) return NULL;
+			return psp_mem.vram + mem_vram_deswizzle(off, mirror == 3);
+		}
+		return region(psp_mem.vram, PSP_VRAM_SIZE, off, len);
+	}
 	if(addr >= PSP_SCRATCH_BASE)
 		return region(psp_mem.scratch, PSP_SCRATCH_SIZE, addr - PSP_SCRATCH_BASE, len);
 	return NULL;
 }
 
+/* Un rango por los espejos con swizzle es válido aunque no sea contiguo */
 int mem_valid(u32 addr, u32 len){
+	u32 a = addr & PSP_ADDR_MASK;
+	if(a >= PSP_VRAM_BASE + PSP_VRAM_SIZE && a < PSP_VRAM_MIRROR_END)
+		return ((a - PSP_VRAM_BASE) & (PSP_VRAM_SIZE - 1)) + len <= PSP_VRAM_SIZE &&
+		       len <= PSP_VRAM_SIZE;
 	return mem_ptr(addr, len) != NULL;
 }
 

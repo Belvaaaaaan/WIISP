@@ -135,17 +135,30 @@ static inline u32 ge_fb_format(void){ return ge.cmd[GE_FRAMEBUFPIXFORMAT] & 3; }
 static inline u32 ge_z_addr(void){ return 0x04000000u | (ge.cmd[GE_ZBUFPTR] & 0x1FFFF0u); }
 static inline u32 ge_z_stride(void){ return ge.cmd[GE_ZBUFWIDTH] & 0x7FC; }
 
-/* --- Geometría (ge_vertex.c) ------------------------------------------ */
+/* --- Vértices para el rasterizador ----------------------------------- */
 
-/* Vértice ya en coordenadas de dibujo (píxeles, tras el offset) */
+/* Vértice listo para rasterizar (VertexData de PPSSPP): posición de
+   pantalla en 1/16 de píxel ya sin el offset, z entera, w de recorte,
+   colores de 8 bits por canal (rojo en el byte bajo) y niebla 0..1 */
 typedef struct {
-	float x, y, z;       /* z en 0..65535 */
-	float w;             /* 1/w de clip (1 en modo through) para corrección de perspectiva */
-	float s, t, q;       /* coordenadas de textura (s/q, t/q en unidades de textura 0..1) */
-	float r, g, b, a;    /* color primario 0..255 */
-	float sr, sg, sb;    /* color secundario (especular separada) */
-	float fog;           /* factor de niebla 0..1 (1 = sin niebla) */
+	float s, t, q;      /* coordenadas de textura (en texels en modo through) */
+	float clipw;        /* w de recorte (1 en modo through) */
+	u32 color0;         /* RGBA */
+	u32 color1;         /* RGB especular */
+	int x, y;           /* GE_OUTSIDE en x: fuera del rango de pantalla */
+	u16 z;
+	float fogdepth;
 } GeVertex;
+
+#define GE_OUTSIDE 0x7FFFFFFF
+
+/* Vértice con sus coordenadas de recorte (ClipVertexData) */
+typedef struct {
+	float clip[4];
+	GeVertex v;
+} GeClipVertex;
+
+/* --- Geometría (ge_vertex.c) ------------------------------------------ */
 
 void ge_draw_prim(u32 prim, u32 count);
 void ge_draw_bezier(u32 arg);
@@ -157,25 +170,25 @@ void ge_immediate_vertex(void);
 
 void ge_raster_begin(void);   /* lee el estado del GE antes de una tanda */
 void ge_raster_triangle(const GeVertex *v0, const GeVertex *v1, const GeVertex *v2);
-void ge_raster_rectangle(const GeVertex *v0, const GeVertex *v1);
+void ge_raster_rect(const GeVertex *v0, const GeVertex *v1);
+void ge_raster_clear_rect(const GeVertex *v0, const GeVertex *v1);
 void ge_raster_line(const GeVertex *v0, const GeVertex *v1);
 void ge_raster_point(const GeVertex *v);
+int  ge_raster_texture_proj(void);  /* proyección de textura activa (decide rectángulos) */
+void ge_raster_tex_flush(void);     /* TEXFLUSH: vacía el caché de texturas */
 
-/* --- Texturas (ge_texture.c) ----------------------------------------- */
-
-typedef struct {
-	u32 addr, stride, width, height;  /* nivel 0 */
-	u32 format;
-	int swizzled;
-	int levels;
-	u32 level_addr[8], level_stride[8], level_w[8], level_h[8];
-} GeTexture;
-
-void ge_texture_setup(GeTexture *tex);
-/* Lee un texel (nivel lvl) en coordenadas enteras ya envueltas: RGBA 8 bits */
-void ge_texture_fetch(const GeTexture *tex, int lvl, int x, int y, u8 rgba[4]);
 void ge_load_clut(u32 blocks);
 /* Convierte un color de 16/32 bits de la PSP a RGBA de 8 bits */
 void ge_decode_color(u32 format, u32 raw, u8 rgba[4]);
+/* Colores de 8 bits empaquetados (rojo en el byte bajo) */
+static inline u32 ge_pack_rgba(const int *c){
+	int i;
+	u32 r = 0;
+	for(i = 0; i < 4; i++){
+		int v = c[i] < 0 ? 0 : c[i] > 255 ? 255 : c[i];
+		r |= (u32)v << (8 * i);
+	}
+	return r;
+}
 
 #endif

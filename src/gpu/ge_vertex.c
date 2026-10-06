@@ -3,21 +3,24 @@
  * GE: decodificación de vértices, transformación, luces, coordenadas de
  * textura, recorte y ensamblado de primitivas.
  *
+ * Es un port a C de la parte de geometría del renderizador por software de
+ * PPSSPP (GPU/Software/TransformUnit.cpp, Clipper.cpp, Lighting.cpp y el
+ * decodificador de GPU/Common/VertexDecoderCommon.cpp; (c) PPSSPP Project,
+ * GPLv2+), con la aritmética del GE que midieron sus pruebas "gpu/probe":
+ * matrices sumadas como filas de punto fijo, float24, el recíproco del GE,
+ * morph y skinning en el orden del hardware, luces con factores de 8 bits.
+ *
  * VERTEXTYPE (bits):  0-1 uv, 2-4 color, 5-6 normal, 7-8 posición,
  * 9-10 pesos, 11-12 índices, 14-16 nº de pesos - 1, 18-20 nº de morph - 1,
- * 23 modo through. Cada componente se alinea a su propio tamaño y el
- * vértice completo al mayor de ellos.
- *
- * Matrices: mundo, vista, textura y huesos son 4x3 (cuatro columnas de 3
- * floats, en el orden en que sceGuSetMatrix las envía); la proyección 4x4.
- *
- * Las luces se calculan en espacio mundo como en el hardware: ambiente,
- * difusa (o "powered diffuse") y especular con atenuación y focos.
+ * 23 modo through.
  *
  * SPDX-License-Identifier: GPL-2.0-or-later
 **/
 
 #include <math.h>
+#include <float.h>
+#include <limits.h>
+#include <stdlib.h>
 #include "gpu/ge_internal.h"
 #include "gpu/ge_math.h"
 #include "core/memory.h"
@@ -28,14 +31,24 @@ typedef struct {
 	u32 vtype;
 	int tc, col, nrm, pos, wt, idx, nweights, nmorph, through;
 	u32 off_w, off_tc, off_col, off_nrm, off_pos;
-	u32 stride;       /* de un objetivo de morph */
-	u32 total;        /* de un vértice completo (todos los objetivos) */
+	u32 onesize;   /* un objetivo de morph */
+	u32 size;      /* el vértice completo */
+	u32 biggest;   /* alineación */
 } VFormat;
 
-static const u8 comp_size[4] = { 0, 1, 2, 4 };
+static const u8 tc_size[4] = { 0, 2, 4, 8 }, tc_align[4] = { 0, 1, 2, 4 };
+static const u8 col_size[8] = { 0, 0, 0, 0, 2, 2, 2, 4 };
+static const u8 nrm_size[4] = { 0, 3, 6, 12 }, nrm_align[4] = { 0, 1, 2, 4 };
+static const u8 pos_size[4] = { 3, 3, 6, 12 }, pos_align[4] = { 1, 1, 2, 4 };
+static const u8 wt_size[4] = { 0, 1, 2, 4 };
+static const u8 idx_size[4] = { 0, 1, 2, 4 };
+
+/* Como el align() de PPSSPP: con alineación 0 (color no válido) da 0 */
+static inline u32 align_to(u32 n, u32 a){ return (n + (a - 1)) & ~(a - 1); }
 
 static void vformat_setup(VFormat *f, u32 vt){
-	u32 off = 0, align = 1, sz;
+	u32 size = 0, biggest = 0;
+	memset(f, 0, sizeof(*f));
 	f->vtype = vt;
 	f->tc = vt & 3;
 	f->col = (vt >> 2) & 7;
@@ -47,181 +60,585 @@ static void vformat_setup(VFormat *f, u32 vt){
 	f->nmorph = ((vt >> 18) & 7) + 1;
 	f->through = (vt >> 23) & 1;
 
-#define PLACE(fmt_size, count, field) do { \
-		sz = (fmt_size); \
-		if(sz){ off = (off + sz - 1) & ~(sz - 1); f->field = off; off += sz * (count); if(sz > align) align = sz; } \
-	} while(0)
+	if(f->wt){
+		f->off_w = size;
+		size += wt_size[f->wt] * (u32)f->nweights;
+		if(wt_size[f->wt] > biggest) biggest = wt_size[f->wt];
+	}
+	if(f->tc){
+		size = align_to(size, tc_align[f->tc]);
+		f->off_tc = size;
+		size += tc_size[f->tc];
+		if(tc_align[f->tc] > biggest) biggest = tc_align[f->tc];
+	}
+	if(f->col){
+		size = align_to(size, col_size[f->col]);
+		f->off_col = size;
+		size += col_size[f->col];
+		if(col_size[f->col] > biggest) biggest = col_size[f->col];
+	}
+	if(f->nrm){
+		size = align_to(size, nrm_align[f->nrm]);
+		f->off_nrm = size;
+		size += nrm_size[f->nrm];
+		if(nrm_align[f->nrm] > biggest) biggest = nrm_align[f->nrm];
+	}
+	/* Siempre hay sitio para la posición, aunque no haya formato */
+	size = align_to(size, pos_align[f->pos]);
+	f->off_pos = size;
+	size += pos_size[f->pos];
+	if(pos_align[f->pos] > biggest) biggest = pos_align[f->pos];
 
-	PLACE(comp_size[f->wt & 3], (u32)f->nweights, off_w);
-	PLACE(comp_size[f->tc & 3], 2, off_tc);
-	PLACE(f->col >= 4 ? (f->col == 7 ? 4u : 2u) : 0u, 1, off_col);
-	PLACE(comp_size[f->nrm & 3], 3, off_nrm);
-	PLACE(comp_size[f->pos & 3], 3, off_pos);
-#undef PLACE
-	f->stride = (off + align - 1) & ~(align - 1);
-	f->total = f->stride * (u32)f->nmorph;
+	f->biggest = biggest;
+	f->onesize = align_to(size, biggest);
+	f->size = f->onesize * (u32)f->nmorph;
 }
 
-/* --- Decodificación --------------------------------------------------------- */
+/* --- Decodificación (VertexDecoder + ApplyGEMorph/ApplyGESkinning) -------- */
 
 typedef struct {
-	float w[8];
-	float uv[2];
-	float col[4];
-	float nrm[3];
-	float pos[3];
-} RawVertex;
+	float pos[3], nrm[3], uv[2];
+	u32 color0;
+} DecVertex;
 
-static inline float rd_comp(const u8 *p, int fmt, int is_signed, float scale){
+static inline float f32_from(u32 v){ float f; memcpy(&f, &v, 4); return f; }
+
+/* Componente con signo: s8/128, s16/32768 o float */
+static float raw_comp(const u8 *p, int fmt, int i){
 	switch(fmt){
-	case 1: return (is_signed ? (float)(s8)p[0] : (float)p[0]) * scale;
-	case 2: { u16 v = rd_le16(p); return (is_signed ? (float)(s16)v : (float)v) * scale; }
-	case 3: { u32 v = rd_le32(p); float f; memcpy(&f, &v, 4); return f; }
+	case 1: return (float)(s8)p[i] * (1.0f / 128.0f);
+	case 2: return (float)(s16)rd_le16(p + 2 * i) * (1.0f / 32768.0f);
+	case 3: return f32_from(rd_le32(p + 4 * i));
 	default: return 0.0f;
 	}
 }
 
-/* Expansión de 4/5/6 bits a 8 igual que el hardware (replica bits altos) */
-static inline u32 x4(u32 v){ return (v << 4) | v; }
-static inline u32 x5(u32 v){ return (v << 3) | (v >> 2); }
-static inline u32 x6(u32 v){ return (v << 2) | (v >> 4); }
-
-void ge_decode_color(u32 format, u32 raw, u8 rgba[4]){
-	switch(format){
-	case GE_FMT_565:
-		rgba[0] = (u8)x5(raw & 31); rgba[1] = (u8)x6((raw >> 5) & 63); rgba[2] = (u8)x5((raw >> 11) & 31); rgba[3] = 255;
-		break;
-	case GE_FMT_5551:
-		rgba[0] = (u8)x5(raw & 31); rgba[1] = (u8)x5((raw >> 5) & 31); rgba[2] = (u8)x5((raw >> 10) & 31);
-		rgba[3] = (raw & 0x8000) ? 255 : 0;
-		break;
-	case GE_FMT_4444:
-		rgba[0] = (u8)x4(raw & 15); rgba[1] = (u8)x4((raw >> 4) & 15); rgba[2] = (u8)x4((raw >> 8) & 15);
-		rgba[3] = (u8)x4((raw >> 12) & 15);
-		break;
-	default:
-		rgba[0] = (u8)raw; rgba[1] = (u8)(raw >> 8); rgba[2] = (u8)(raw >> 16); rgba[3] = (u8)(raw >> 24);
-		break;
+/* Peso o uv: sin signo */
+static float raw_weight(const u8 *p, int fmt, int i){
+	switch(fmt){
+	case 1: return (float)p[i] * (1.0f / 128.0f);
+	case 2: return (float)rd_le16(p + 2 * i) * (1.0f / 32768.0f);
+	case 3: return f32_from(rd_le32(p + 4 * i));
+	default: return 0.0f;
 	}
 }
 
-/* El GE conserva la última coordenada de textura y la última normal: un
-   vértice sin ellas usa las anteriores, incluso de otra llamada de dibujo
-   (pspautotests gpu/vertices/carry). La uv se guarda ya escalada. */
-static float last_uv[2], last_nrm[3];
+static inline u32 c5to8(u32 v){ return (v << 3) | (v >> 2); }
+static inline u32 c6to8(u32 v){ return (v << 2) | (v >> 4); }
 
-static void decode_one(const VFormat *f, const u8 *p, RawVertex *v){
-	int i;
-	/* En modo transformado los enteros se normalizan; en "through" no */
-	float s16n = f->through ? 1.0f : 1.0f / 32768.0f;
+static u32 color_to_8888(int col, const u8 *p){
+	u32 c;
+	switch(col){
+	case 4:
+		c = rd_le16(p);
+		return c5to8(c & 0x1F) | (c6to8((c >> 5) & 0x3F) << 8) | (c5to8((c >> 11) & 0x1F) << 16) | 0xFF000000u;
+	case 5:
+		c = rd_le16(p);
+		return c5to8(c & 0x1F) | (c5to8((c >> 5) & 0x1F) << 8) | (c5to8((c >> 10) & 0x1F) << 16) |
+		       ((c & 0x8000) ? 0xFF000000u : 0);
+	case 6:
+		c = rd_le16(p);
+		return ((c & 0xF) * 0x11) | ((((c >> 4) & 0xF) * 0x11) << 8) | ((((c >> 8) & 0xF) * 0x11) << 16) |
+		       ((((c >> 12) & 0xF) * 0x11) << 24);
+	case 7:
+		return rd_le32(p);
+	default:
+		return 0;
+	}
+}
 
-	for(i = 0; i < f->nweights && f->wt; i++)
-		v->w[i] = rd_comp(p + f->off_w + i * comp_size[f->wt & 3], f->wt, 0,
-		                  f->wt == 1 ? 1.0f / 128.0f : 1.0f / 32768.0f);
-	if(f->tc){
-		/* uv de 8 bits: siempre /128, también en modo through (hardware) */
-		float sc = f->tc == 1 ? 1.0f / 128.0f : s16n;
-		v->uv[0] = rd_comp(p + f->off_tc, f->tc, 0, sc);
-		v->uv[1] = rd_comp(p + f->off_tc + comp_size[f->tc & 3], f->tc, 0, sc);
+enum { RD_COMP, RD_WEIGHT, RD_COLOR };
+
+static float morph_weights[8];
+
+static float read_kind(const u8 *p, int kind, int fmt, int c){
+	switch(kind){
+	case RD_COMP:   return raw_comp(p, fmt, c);
+	case RD_WEIGHT: return raw_weight(p, fmt, c);
+	default:        return (float)((color_to_8888(fmt, p) >> (8 * c)) & 0xFF);
 	}
-	if(f->col >= 4){
-		u8 c[4];
-		u32 raw = f->col == 7 ? rd_le32(p + f->off_col) : rd_le16(p + f->off_col);
-		ge_decode_color(f->col - 4, raw, c);
-		for(i = 0; i < 4; i++) v->col[i] = c[i];
+}
+
+/* Un componente con morph como lo hace el GE (gpu/probe exp67, exp107):
+   el valor de cada objetivo por su peso en float24, sumados en orden con
+   el sumador del GE */
+static float ge_morph_component(const VFormat *f, const u8 *in, u32 off, int c, int kind, int fmt){
+	float acc = 0.0f;
+	int k;
+	for(k = 0; k < f->nmorph; k++){
+		float v = ge_trunc24(read_kind(in + (u32)k * f->onesize + off, kind, fmt, c));
+		float w = ge_trunc24(morph_weights[k]);
+		float term = v == 0.0f || w == 0.0f ? 0.0f : ge_product24((double)v * w);
+		if(term != 0.0f) acc = acc == 0.0f ? term : ge_trunc24(ge_add(acc, term));
 	}
-	if(f->nrm){
-		float sc = f->nrm == 1 ? 1.0f / 128.0f : 1.0f / 32768.0f;
-		for(i = 0; i < 3; i++) v->nrm[i] = rd_comp(p + f->off_nrm + i * comp_size[f->nrm & 3], f->nrm, 1, sc);
+	return acc;
+}
+
+static float component(const VFormat *f, const u8 *in, u32 off, int c, int kind, int fmt){
+	if(f->nmorph > 1) return ge_morph_component(f, in, off, c, kind, fmt);
+	return read_kind(in + off, kind, fmt, c);
+}
+
+static inline float row_value(GeRowTerm t){ return t.mantissa ? ldexpf((float)t.mantissa, t.lsb_exp) : 0.0f; }
+
+static void skin_add(float *acc, float term){
+	if(term != 0.0f) *acc = *acc == 0.0f ? ge_trunc24(term) : ge_trunc24(ge_add(*acc, term));
+}
+
+/* Skinning como el GE (gpu/probe exp68, exp70, exp71): cada matriz de hueso
+   escalada por su peso, cada entrada un producto float24, y un acumulador
+   que recorre los huesos en orden sumando su traslación y luego x, y, z por
+   su columna. Las normales igual, sin traslación. El morph va antes. */
+static void ge_skin(const VFormat *f, const u8 *in, float *pos, float *nrm){
+	float bones[8][12], src[3];
+	int b, k, c, j;
+	for(b = 0; b < f->nweights; b++){
+		float w = ge_trunc24(component(f, in, f->off_w, b, RD_WEIGHT, f->wt));
+		for(k = 0; k < 12; k++){
+			float m = ge.bone[b][k];
+			bones[b][k] = m == 0.0f || w == 0.0f ? 0.0f : ge_product24((double)ge_trunc24(m) * w);
+		}
 	}
 	if(f->pos){
-		if(f->through && f->pos == 1){
-			/* En modo through las posiciones de 8 bits siempre valen 0 (hardware) */
-			v->pos[0] = v->pos[1] = v->pos[2] = 0.0f;
-		} else if(f->through){
-			/* x, y con signo; z sin signo */
-			for(i = 0; i < 2; i++) v->pos[i] = rd_comp(p + f->off_pos + i * comp_size[f->pos & 3], f->pos, 1, 1.0f);
-			v->pos[2] = rd_comp(p + f->off_pos + 2 * comp_size[f->pos & 3], f->pos, 0, 1.0f);
-		} else {
-			float sc = f->pos == 1 ? 1.0f / 128.0f : 1.0f / 32768.0f;
-			for(i = 0; i < 3; i++) v->pos[i] = rd_comp(p + f->off_pos + i * comp_size[f->pos & 3], f->pos, 1, sc);
+		for(c = 0; c < 3; c++) src[c] = component(f, in, f->off_pos, c, RD_COMP, f->pos);
+		for(c = 0; c < 3; c++){
+			float acc = 0.0f;
+			for(b = 0; b < f->nweights; b++){
+				skin_add(&acc, bones[b][9 + c]);
+				for(j = 0; j < 3; j++) skin_add(&acc, row_value(ge_product(ge_trunc24(src[j]), bones[b][j * 3 + c])));
+			}
+			pos[c] = acc;
+		}
+	}
+	if(f->nrm){
+		for(c = 0; c < 3; c++) src[c] = component(f, in, f->off_nrm, c, RD_COMP, f->nrm);
+		for(c = 0; c < 3; c++){
+			float acc = 0.0f;
+			for(b = 0; b < f->nweights; b++)
+				for(j = 0; j < 3; j++) skin_add(&acc, row_value(ge_product(ge_trunc24(src[j]), bones[b][j * 3 + c])));
+			nrm[c] = acc;
 		}
 	}
 }
 
-/* Lee el vértice completo (mezclando los objetivos de morph) */
-static int decode_vertex(const VFormat *f, u32 addr, RawVertex *v){
-	const u8 *p = mem_ptr(addr, f->total ? f->total : 1);
-	memset(v, 0, sizeof(*v));
-	if(!p) return 0;
-	if(f->nmorph == 1){
-		decode_one(f, p, v);
-	} else {
-		int m, i;
-		for(m = 0; m < f->nmorph; m++){
-			RawVertex t;
-			float w = ge_f24(ge.cmd[GE_MORPHWEIGHT0 + m]);
-			memset(&t, 0, sizeof(t));
-			decode_one(f, p + m * f->stride, &t);
-			for(i = 0; i < 8; i++) v->w[i] += t.w[i] * w;
-			for(i = 0; i < 2; i++) v->uv[i] += t.uv[i] * w;
-			for(i = 0; i < 4; i++) v->col[i] += t.col[i] * w;
-			for(i = 0; i < 3; i++){ v->nrm[i] += t.nrm[i] * w; v->pos[i] += t.pos[i] * w; }
-		}
-	}
-	if(f->nrm) memcpy(last_nrm, v->nrm, sizeof(last_nrm));
-	else memcpy(v->nrm, last_nrm, sizeof(last_nrm));
-	if(f->col < 4){
-		/* Sin color en el vértice: color de material ambiente */
-		u32 c = ge.cmd[GE_MATERIALAMBIENT];
-		v->col[0] = (float)(c & 0xFF);
-		v->col[1] = (float)((c >> 8) & 0xFF);
-		v->col[2] = (float)((c >> 16) & 0xFF);
-		v->col[3] = (float)(ge.cmd[GE_MATERIALALPHA] & 0xFF);
-	}
-	return 1;
+/* NaN e infinitos de una posición float quedan finitos (como SSE en x86) */
+static inline float clean_nan_inf(float x){
+	if(isnan(x)) return FLT_MAX;
+	if(x > FLT_MAX) return FLT_MAX;
+	if(x < -FLT_MAX) return -FLT_MAX;
+	return x;
 }
 
-/* --- Matemáticas ------------------------------------------------------------- */
-
-static inline void mul43(const float *m, const float *v, float *out){
-	out[0] = v[0] * m[0] + v[1] * m[3] + v[2] * m[6] + m[9];
-	out[1] = v[0] * m[1] + v[1] * m[4] + v[2] * m[7] + m[10];
-	out[2] = v[0] * m[2] + v[1] * m[5] + v[2] * m[8] + m[11];
+static inline u8 sat_u8_trunc(float v){
+	if(!(v > 0.0f)) return 0;      /* también NaN */
+	if(v >= 255.0f) return 255;
+	return (u8)(int)v;
 }
 
-/* Solo la parte 3x3 (para normales) */
-static inline void mul33(const float *m, const float *v, float *out){
-	out[0] = v[0] * m[0] + v[1] * m[3] + v[2] * m[6];
-	out[1] = v[0] * m[1] + v[1] * m[4] + v[2] * m[7];
-	out[2] = v[0] * m[2] + v[1] * m[5] + v[2] * m[8];
-}
+/* Prescalado de uv del decodificador (solo con UV gen 3 en modo transformado) */
+static int uv_prescale;
+static float uv_ps_scale[2], uv_ps_off[2];
 
-static inline void mul44(const float *m, const float *v3, float *out){
+static void decode_vertex(const VFormat *f, const u8 *p, DecVertex *d){
 	int i;
-	for(i = 0; i < 4; i++)
-		out[i] = v3[0] * m[i] + v3[1] * m[4 + i] + v3[2] * m[8 + i] + m[12 + i];
+	memset(d, 0, sizeof(*d));
+	if(!p) return;
+
+	/* uv */
+	if(f->tc){
+		if(f->through){
+			const u8 *t = p + f->off_tc;
+			if(f->tc == 1){ d->uv[0] = (float)t[0] * (1.0f / 128.0f); d->uv[1] = (float)t[1] * (1.0f / 128.0f); }
+			else if(f->tc == 2){ d->uv[0] = (float)rd_le16(t); d->uv[1] = (float)rd_le16(t + 2); }
+			else { d->uv[0] = f32_from(rd_le32(t)); d->uv[1] = f32_from(rd_le32(t + 4)); }
+		} else if(f->nmorph > 1){
+			for(i = 0; i < 2; i++) d->uv[i] = ge_morph_component(f, p, f->off_tc, i, RD_WEIGHT, f->tc);
+		} else {
+			for(i = 0; i < 2; i++) d->uv[i] = raw_weight(p + f->off_tc, f->tc, i);
+		}
+	}
+
+	/* color */
+	if(f->col >= 4){
+		if(f->nmorph == 1){
+			d->color0 = color_to_8888(f->col, p + f->off_col);
+		} else if(!f->through){
+			for(i = 0; i < 4; i++){
+				float ch = floorf(ge_morph_component(f, p, f->off_col, i, RD_COLOR, f->col));
+				int v = isnan(ch) ? 0 : ch < 0.0f ? 0 : ch > 255.0f ? 255 : (int)ch;
+				d->color0 |= (u32)v << (8 * i);
+			}
+		} else {
+			/* Modo through con morph: la mezcla en float del decodificador */
+			float col[4] = { 0, 0, 0, 0 };
+			int k;
+			for(k = 0; k < f->nmorph; k++){
+				float w = morph_weights[k];
+				const u8 *cp = p + (u32)k * f->onesize + f->off_col;
+				u32 c = f->col == 7 ? rd_le32(cp) : rd_le16(cp);
+				switch(f->col){
+				case 4:
+					col[0] += w * (float)(c & 0x1F) * (255.0f / 31.0f);
+					col[1] += w * (float)((c >> 5) & 0x3F) * (255.0f / 63.0f);
+					col[2] += w * (float)((c >> 11) & 0x1F) * (255.0f / 31.0f);
+					break;
+				case 5:
+					col[0] += w * (float)(c & 0x1F) * (255.0f / 31.0f);
+					col[1] += w * (float)((c >> 5) & 0x1F) * (255.0f / 31.0f);
+					col[2] += w * (float)((c >> 10) & 0x1F) * (255.0f / 31.0f);
+					col[3] += w * ((c >> 15) ? 255.0f : 0.0f);
+					break;
+				case 6:
+					for(i = 0; i < 4; i++) col[i] += w * (float)((c >> (i * 4)) & 0xF) * (255.0f / 15.0f);
+					break;
+				default:
+					for(i = 0; i < 4; i++) col[i] += (float)((c >> (i * 8)) & 0xFF) * w;
+					break;
+				}
+			}
+			if(f->col == 4) col[3] = 255.0f;
+			for(i = 0; i < 4; i++) d->color0 |= (u32)sat_u8_trunc(col[i]) << (8 * i);
+		}
+	}
+
+	if(f->through){
+		/* Posiciones de 8 bits: siempre 0; de 16: x, y con signo y z sin
+		   signo; float: z truncada a entero en 0..65535 */
+		if(f->pos == 2){
+			d->pos[0] = (float)(s16)rd_le16(p + f->off_pos);
+			d->pos[1] = (float)(s16)rd_le16(p + f->off_pos + 2);
+			d->pos[2] = (float)rd_le16(p + f->off_pos + 4);
+		} else if(f->pos == 3){
+			float z = f32_from(rd_le32(p + f->off_pos + 8));
+			d->pos[0] = f32_from(rd_le32(p + f->off_pos));
+			d->pos[1] = f32_from(rd_le32(p + f->off_pos + 4));
+			d->pos[2] = z >= 65535.0f ? 65535.0f : (z > 0.0f ? (float)(int)z : 0.0f);
+		}
+		if(f->nrm) for(i = 0; i < 3; i++) d->nrm[i] = raw_comp(p + f->off_nrm, f->nrm, i);
+		return;
+	}
+
+	if(f->wt){
+		ge_skin(f, p, d->pos, d->nrm);
+		return;
+	}
+	if(f->nmorph > 1){
+		for(i = 0; i < 3; i++){
+			if(f->pos) d->pos[i] = ge_morph_component(f, p, f->off_pos, i, RD_COMP, f->pos);
+			if(f->nrm) d->nrm[i] = ge_morph_component(f, p, f->off_nrm, i, RD_COMP, f->nrm);
+		}
+		return;
+	}
+	for(i = 0; i < 3; i++){
+		if(f->pos){
+			d->pos[i] = raw_comp(p + f->off_pos, f->pos, i);
+			if(f->pos == 3) d->pos[i] = clean_nan_inf(d->pos[i]);
+		}
+		if(f->nrm) d->nrm[i] = raw_comp(p + f->off_nrm, f->nrm, i);
+	}
 }
 
-static inline float dot3(const float *a, const float *b){ return a[0] * b[0] + a[1] * b[1] + a[2] * b[2]; }
-
-static inline void normalize3(float *v){
-	float l = sqrtf(dot3(v, v));
-	if(l > 0.0f){ v[0] /= l; v[1] /= l; v[2] /= l; }
-}
-
-static inline float clamp255(float v){ return v < 0.0f ? 0.0f : (v > 255.0f ? 255.0f : v); }
-
-/* --- Vértice transformado (antes de proyectar) --------------------------- */
+/* --- Luces (Lighting.cpp) --------------------------------------------------- */
 
 typedef struct {
-	float clip[4];      /* coordenadas de recorte */
-	GeVertex v;         /* color, uv, niebla (x, y, z, w se rellenan al proyectar) */
-	int outside;        /* fuera del rango de pantalla del GE: se descarta la primitiva */
-} TVertex;
+	float pos[3], att[3], spot_dir[3];
+	float spot_dir_rsqrt, spot_cutoff, spot_exp;
+	int ambient_cf[4], diffuse_cf[4], specular_cf[4];
+	int enabled, spot, directional, powered_diffuse, ambient, diffuse, specular;
+} LightSt;
 
-/* Matriz mundo * vista * proyección combinada con la precisión del GE */
-static float combined[16];
+typedef struct {
+	LightSt lights[4];
+	int mat_ambient_cf[4], mat_diffuse_cf[4], mat_specular_cf[4];
+	int base_ambient_cf[4];
+	float specular_exp;
+	float view_dir[3];
+	int color_for_ambient, color_for_diffuse, color_for_specular;
+	int set_color1, add_color1, uses_world_pos, uses_world_normal;
+} LightState;
+
+/* 2c + 1 por canal: las luces redondean con medio paso, como la mezcla */
+static void light_color_factor(u32 c, int *out){
+	int i;
+	for(i = 0; i < 4; i++) out[i] = (int)((c >> (8 * i)) & 0xFF) * 2 + 1;
+}
+
+/* Algún canal de color (no alfa) por encima de 0 */
+static inline int larger_than_half(const int *v){ return v[0] > 1 || v[1] > 1 || v[2] > 1; }
+
+static inline void light_vec(int base, int light, float *out){
+	int i;
+	for(i = 0; i < 3; i++) out[i] = ge_f24(ge.cmd[base + light * 3 + i]);
+}
+
+/* Exponente de la potencia de luces (especular y focos): los 4 bits altos
+   de la mantisa, truncado, y saturado por debajo de 512 (gpu/probe exp221) */
+static float light_exponent(float e){
+	u32 bits;
+	if(isnan(e)) return signbit(e) ? 0.0f : 496.0f;
+	if(e >= 512.0f) return 496.0f;
+	memcpy(&bits, &e, 4);
+	bits &= 0xFFF80000u;
+	memcpy(&e, &bits, 4);
+	return e;
+}
+
+static inline int light_type(int l){ return (int)((ge.cmd[GE_LIGHTTYPE0 + l] >> 8) & 3); }
+static inline int light_comp(int l){ return (int)(ge.cmd[GE_LIGHTTYPE0 + l] & 3); }
+static inline u32 material_ambient_rgba(void){
+	return (ge.cmd[GE_MATERIALAMBIENT] & 0xFFFFFF) | ((ge.cmd[GE_MATERIALALPHA] & 0xFF) << 24);
+}
+
+static void lighting_compute_state(LightState *s, int has_color0){
+	int any_ambient = 0, any_diffuse = 0, any_specular = 0, any_nondir = 0, light, i, upd;
+	for(light = 0; light < 4; light++){
+		LightSt *l = &s->lights[light];
+		memset(l, 0, sizeof(*l));
+		l->enabled = ge.cmd[GE_LIGHTENABLE0 + light] & 1;
+		if(!l->enabled) continue;
+
+		l->powered_diffuse = light_comp(light) == 2;
+		l->specular = light_comp(light) == 1;
+
+		light_color_factor(ge.cmd[GE_LAC0 + light * 3] & 0xFFFFFF, l->ambient_cf);
+		l->ambient = larger_than_half(l->ambient_cf);
+		any_ambient |= l->ambient;
+
+		light_color_factor(ge.cmd[GE_LAC0 + light * 3 + 1] & 0xFFFFFF, l->diffuse_cf);
+		l->diffuse = larger_than_half(l->diffuse_cf);
+		any_diffuse |= l->diffuse;
+
+		if(l->specular){
+			light_color_factor(ge.cmd[GE_LAC0 + light * 3 + 2] & 0xFFFFFF, l->specular_cf);
+			l->specular = larger_than_half(l->specular_cf);
+			any_specular |= l->specular;
+		}
+
+		if(!l->specular && !l->ambient && !l->diffuse){ l->enabled = 0; continue; }
+
+		light_vec(GE_LX0, light, l->pos);
+		l->directional = light_type(light) == 0;
+		if(l->directional){
+			/* Una dirección nula se queda nula (gpu/probe exp164) */
+			ge_normalize(l->pos);
+		} else {
+			light_vec(GE_LKA0, light, l->att);
+			any_nondir = 1;
+		}
+
+		l->spot = light_type(light) >= 2;
+		if(l->spot){
+			float len2;
+			/* La dirección no se normaliza: su producto con L se escala por
+			   el rsqrt (gpu/probe exp100). Un componente inf o NaN actúa como
+			   el mayor valor de su signo (gpu/commands/light). */
+			light_vec(GE_LDX0, light, l->spot_dir);
+			if(!isfinite(l->spot_dir[0]) || !isfinite(l->spot_dir[1]) || !isfinite(l->spot_dir[2]))
+				for(i = 0; i < 3; i++)
+					l->spot_dir[i] = isfinite(l->spot_dir[i]) ? 0.0f : (signbit(l->spot_dir[i]) ? -1.0f : 1.0f);
+			len2 = ge_dot(l->spot_dir, l->spot_dir);
+			l->spot_dir_rsqrt = len2 > 0.0f && isfinite(len2) ? ge_rsqrt(len2) : 0.0f;
+			l->spot_cutoff = ge_f24(ge.cmd[GE_LKO0 + light]);
+			if(isnan(l->spot_cutoff) && signbit(l->spot_cutoff)) l->spot_cutoff = 0.0f;
+			l->spot_exp = light_exponent(ge_f24(ge.cmd[GE_LKS0 + light]));
+			if(l->spot_exp <= 0.0f) l->spot_exp = 0.0f;
+		}
+	}
+
+	upd = (int)(ge.cmd[GE_MATERIALUPDATE] & (has_color0 ? 7 : 0));
+	s->color_for_ambient = (upd & 1) != 0;
+	s->color_for_diffuse = (upd & 2) != 0;
+	s->color_for_specular = (upd & 4) != 0;
+
+	if(!s->color_for_ambient){
+		light_color_factor(material_ambient_rgba(), s->mat_ambient_cf);
+		if(!larger_than_half(s->mat_ambient_cf) && any_ambient)
+			for(i = 0; i < 4; i++) s->lights[i].ambient = 0;
+	}
+	if(any_diffuse && !s->color_for_diffuse){
+		light_color_factor(ge.cmd[GE_MATERIALDIFFUSE] & 0xFFFFFF, s->mat_diffuse_cf);
+		if(!larger_than_half(s->mat_diffuse_cf)){
+			any_diffuse = 0;
+			for(i = 0; i < 4; i++) s->lights[i].diffuse = 0;
+		}
+	}
+	if(any_specular && !s->color_for_specular){
+		light_color_factor(ge.cmd[GE_MATERIALSPECULAR] & 0xFFFFFF, s->mat_specular_cf);
+		if(!larger_than_half(s->mat_specular_cf)){
+			any_specular = 0;
+			for(i = 0; i < 4; i++) s->lights[i].specular = 0;
+		}
+	}
+	if(any_diffuse || any_specular){
+		s->specular_exp = light_exponent(ge_f24(ge.cmd[GE_MATERIALSPECULARCOEF]));
+		if(s->specular_exp <= 0.0f) s->specular_exp = 0.0f;
+	}
+
+	light_color_factor((ge.cmd[GE_AMBIENTCOLOR] & 0xFFFFFF) | ((ge.cmd[GE_AMBIENTALPHA] & 0xFF) << 24), s->base_ambient_cf);
+	s->set_color1 = (ge.cmd[GE_LIGHTMODE] & 1) && any_specular;
+	s->add_color1 = !(ge.cmd[GE_LIGHTMODE] & 1) && any_specular;
+	s->uses_world_pos = any_nondir;
+	s->uses_world_normal = (ge.cmd[GE_TEXMAPMODE] & 3) == 2 || any_diffuse || any_specular;
+}
+
+/* v . N para la normal sin normalizar, escalado por su rsqrt */
+static inline float ge_normal_dot(const float *v, const float *n, float n_rsqrt){
+	return ge_product24((double)ge_dot(v, n) * n_rsqrt);
+}
+
+/* Vector del vértice a una luz puntual como lo calcula el GE (gpu/probe
+   exp153-158): la posición de la luz menos la traslación del mundo, menos
+   la posición del modelo por la matriz de mundo, sumado como una fila */
+static void ge_light_vector(const float *lpos, const float *mpos, float *L){
+	const float *m = ge.world;
+	float out[3];
+	int i;
+	for(i = 0; i < 3; i++){
+		GeRowTerm t[4];
+		t[0] = ge_product(1.0f, ge_add24(lpos[i], -ge_trunc24(m[9 + i])));
+		t[1] = ge_product(ge_trunc24(mpos[0]), -m[i]);
+		t[2] = ge_product(ge_trunc24(mpos[1]), -m[3 + i]);
+		t[3] = ge_product(ge_trunc24(mpos[2]), -m[6 + i]);
+		out[i] = ge_row_sum(t, 4);
+	}
+	memcpy(L, out, sizeof(out));
+}
+
+static float ge_shade_map_coord(int l, const float *mpos, const float *wn, float n_rsqrt, const float *view_dir){
+	float L[3];
+	int i;
+	light_vec(GE_LX0, l, L);
+	if(light_type(l) != 0) ge_light_vector(L, mpos, L);
+	ge_normalize(L);
+	if(light_comp(l) == 1){
+		for(i = 0; i < 3; i++) L[i] = ge_add24(L[i], view_dir[i]);
+		ge_normalize(L);
+	}
+	return ge_add24(ge_normal_dot(L, wn, n_rsqrt), 1.0f) * 0.5f;
+}
+
+/* Producto de factores de luz y material: x = ((2l + 1) * (2m + 1)) >> 10 */
+static inline void light_color_product(const int *l, const int *m, int *out){
+	int i;
+	for(i = 0; i < 4; i++) out[i] = (l[i] * m[i]) >> 10;
+}
+
+/* Escala por un factor f como un color de 8 bits s = floor(256 f)
+   (gpu/probe exp61-63) */
+static inline void light_color_scale(int *x, float f){
+	float sf = 256.0f * f;
+	int s, i;
+	s = !(sf > 0.0f) ? 0 : sf >= 256.0f ? 256 : (int)sf;
+	for(i = 0; i < 4; i++) x[i] = ((x[i] * 2 + 1) * (2 * s + 1)) >> 10;
+}
+
+static void lighting_process(GeVertex *v, const float *mpos, const float *wn, float n_rsqrt, const LightState *s){
+	int color_factor[4] = { 0, 0, 0, 0 }, mac[4], final_color[4], spec_color[4] = { 0, 0, 0, 0 };
+	int i, light;
+	if(s->color_for_ambient || s->color_for_diffuse || s->color_for_specular)
+		light_color_factor(v->color0, color_factor);
+	memcpy(mac, s->color_for_ambient ? color_factor : s->mat_ambient_cf, sizeof(mac));
+	for(i = 0; i < 4; i++){
+		int mec = (int)(((ge.cmd[GE_MATERIALEMISSIVE] & 0xFFFFFF) >> (8 * i)) & 0xFF);
+		final_color[i] = mec + ((mac[i] * s->base_ambient_cf[i]) >> 10);
+	}
+
+	for(light = 0; light < 4; light++){
+		const LightSt *l = &s->lights[light];
+		float L[3], att = 1.0f, spot = 1.0f, diffuse_factor = 0.0f;
+		if(!l->enabled) continue;
+
+		memcpy(L, l->pos, sizeof(L));
+		/* Atenuación y foco escalan cada uno los colores de la luz como su
+		   propio factor de 8 bits (gpu/probe exp100) */
+		if(!l->directional){
+			float d2, d, den, k[3];
+			ge_light_vector(l->pos, mpos, L);
+			/* El término cuadrático usa la longitud al cuadrado de la
+			   normalización, no d * d (gpu/probe exp63) */
+			d2 = ge_dot(L, L);
+			d = ge_normalize(L);
+			if(d == 0.0f){ L[0] = 0.0f; L[1] = 0.0f; L[2] = 1.0f; }
+			k[0] = 1.0f; k[1] = d; k[2] = d2;
+			den = ge_dot(l->att, k);
+			att = den > 0.0f ? ge_recip(den) : 0.0f;
+			if(!(att > 0.0f)) att = 0.0f;
+			else if(att > 1.0f) att = 1.0f;
+		}
+
+		if(l->spot){
+			float raw = ge_product24((double)ge_dot(l->spot_dir, L) * l->spot_dir_rsqrt);
+			if(isnan(raw)) raw = signbit(raw) ? 0.0f : 1.0f;
+			if(raw >= l->spot_cutoff){
+				spot = ge_light_pow(raw, l->spot_exp);
+				if(isnan(spot)) spot = 0.0f;
+			} else spot = 0.0f;
+		}
+
+#define SCALE_ATT_SPOT(c) do { if(att < 1.0f) light_color_scale(c, att); if(spot < 1.0f) light_color_scale(c, spot); } while(0)
+
+		if(l->ambient){
+			int la[4];
+			light_color_product(l->ambient_cf, mac, la);
+			SCALE_ATT_SPOT(la);
+			for(i = 0; i < 4; i++) final_color[i] += la[i];
+		}
+
+		if(l->diffuse || l->specular){
+			diffuse_factor = ge_normal_dot(L, wn, n_rsqrt);
+			if(l->powered_diffuse) diffuse_factor = ge_light_pow(diffuse_factor, s->specular_exp);
+		}
+
+		if(l->diffuse && diffuse_factor > 0.0f){
+			int ld[4];
+			light_color_product(l->diffuse_cf, s->color_for_diffuse ? color_factor : s->mat_diffuse_cf, ld);
+			light_color_scale(ld, diffuse_factor);
+			SCALE_ATT_SPOT(ld);
+			for(i = 0; i < 4; i++) final_color[i] += ld[i];
+		}
+
+		if(l->specular && diffuse_factor >= 0.0f){
+			float H[3], sf;
+			for(i = 0; i < 3; i++) H[i] = ge_add24(L[i], s->view_dir[i]);
+			if(ge_normalize(H) == 0.0f){ H[0] = 0.0f; H[1] = 0.0f; H[2] = 1.0f; }
+			sf = ge_light_pow(ge_normal_dot(H, wn, n_rsqrt), s->specular_exp);
+			if(sf > 0.0f){
+				int ls[4];
+				light_color_product(l->specular_cf, s->color_for_specular ? color_factor : s->mat_specular_cf, ls);
+				light_color_scale(ls, sf);
+				SCALE_ATT_SPOT(ls);
+				for(i = 0; i < 4; i++) spec_color[i] += ls[i];
+			}
+		}
+#undef SCALE_ATT_SPOT
+	}
+
+	if(s->set_color1){
+		v->color0 = ge_pack_rgba(final_color);
+		v->color1 = ge_pack_rgba(spec_color) & 0x00FFFFFF;
+	} else if(s->add_color1){
+		for(i = 0; i < 4; i++) final_color[i] += spec_color[i];
+		v->color0 = ge_pack_rgba(final_color);
+	} else {
+		v->color0 = ge_pack_rgba(final_color);
+	}
+}
+
+/* --- Transformación (ComputeTransformState / ReadVertex) ------------------ */
+
+typedef struct {
+	int enable_transform, enable_lighting, enable_fog, negate_normals, uv_gen_mode;
+	int ge_uv_scale;
+	float uv_scale[2], uv_offset[2];
+	float matrix[16];
+	int fog_ge;
+	float view_z_col[4], fog_end, fog_slope, pos_to_fog[4];
+	float screen_scale[3], screen_add[3];
+	int depth_clip;
+	LightState light;
+} TState;
+
+static TState ts;
 
 static void to4x4(const float *m43, float *out){
 	int r, c;
@@ -231,511 +648,945 @@ static void to4x4(const float *m43, float *out){
 	}
 }
 
-static void update_combined(void){
-	float w[16], v[16], wv[16];
-	to4x4(ge.world, w);
-	to4x4(ge.view, v);
-	ge_combine_matrices(wv, w, v);
-	ge_combine_matrices(combined, wv, ge.proj);
-}
+static void compute_transform_state(const VFormat *f){
+	int texmode = (int)(ge.cmd[GE_TEXMAPMODE] & 3);
+	ts.enable_transform = !f->through;
+	ts.enable_lighting = ge.cmd[GE_LIGHTINGENABLE] & 1;
+	ts.enable_fog = ge.cmd[GE_FOGENABLE] & 1;
+	ts.ge_uv_scale = !f->through && texmode == 0;
+	ts.uv_scale[0] = ge_trunc24(ge_f24(ge.cmd[GE_TEXSCALEU]));
+	ts.uv_scale[1] = ge_trunc24(ge_f24(ge.cmd[GE_TEXSCALEV]));
+	ts.uv_offset[0] = ge_trunc24(ge_f24(ge.cmd[GE_TEXOFFSETU]));
+	ts.uv_offset[1] = ge_trunc24(ge_f24(ge.cmd[GE_TEXOFFSETV]));
+	ts.negate_normals = ge.cmd[GE_REVERSENORMAL] & 1;
+	ts.uv_gen_mode = texmode == 3 ? 0 : texmode;
+	ts.depth_clip = ge.cmd[GE_DEPTHCLAMPENABLE] & 1;
 
-static inline void color24(u32 c, float *out){
-	out[0] = (float)(c & 0xFF); out[1] = (float)((c >> 8) & 0xFF); out[2] = (float)((c >> 16) & 0xFF);
-}
+	if(ts.enable_transform){
+		float world[16], view[16], worldview[16], vd[3];
+		int i;
+		if(ts.enable_lighting) lighting_compute_state(&ts.light, f->col != 0);
+		else ts.light.uses_world_normal = ts.uv_gen_mode == 2;
+		/* El observador en el infinito por +z de vista, normalizado como el GE */
+		vd[0] = ge.view[2]; vd[1] = ge.view[5]; vd[2] = ge.view[8];
+		if(ge_normalize(vd) == 0.0f){ vd[0] = 0.0f; vd[1] = 0.0f; vd[2] = 1.0f; }
+		memcpy(ts.light.view_dir, vd, sizeof(vd));
 
-static void light_vertex(const RawVertex *raw, const float *wpos, const float *wnrm, GeVertex *out){
-	float emissive[3], amb_light[3], mat_amb[4], mat_dif[3], mat_spe[3];
-	float col[3], spec[3] = { 0, 0, 0 };
-	float spec_coef = ge_f24(ge.cmd[GE_MATERIALSPECULARCOEF]);
-	u32 upd = ge.cmd[GE_MATERIALUPDATE];
-	int i, k;
+		to4x4(ge.view, view);
+		to4x4(ge.world, world);
+		ge_combine_matrices(worldview, world, view);
+		/* (mundo * vista) * proyección, como el GE */
+		ge_combine_matrices(ts.matrix, worldview, ge.proj);
 
-	color24(ge.cmd[GE_MATERIALEMISSIVE], emissive);
-	color24(ge.cmd[GE_AMBIENTCOLOR], amb_light);
-	if(upd & 1){ for(k = 0; k < 4; k++) mat_amb[k] = raw->col[k]; }
-	else { color24(ge.cmd[GE_MATERIALAMBIENT], mat_amb); mat_amb[3] = (float)(ge.cmd[GE_MATERIALALPHA] & 0xFF); }
-	if(upd & 2){ for(k = 0; k < 3; k++) mat_dif[k] = raw->col[k]; }
-	else color24(ge.cmd[GE_MATERIALDIFFUSE], mat_dif);
-	if(upd & 4){ for(k = 0; k < 3; k++) mat_spe[k] = raw->col[k]; }
-	else color24(ge.cmd[GE_MATERIALSPECULAR], mat_spe);
-
-	for(k = 0; k < 3; k++) col[k] = emissive[k] + amb_light[k] * mat_amb[k] / 255.0f;
-	out->a = clamp255((float)(ge.cmd[GE_AMBIENTALPHA] & 0xFF) * mat_amb[3] / 255.0f);
-
-	for(i = 0; i < 4; i++){
-		u32 type = ge.cmd[GE_LIGHTTYPE0 + i];
-		u32 kind = (type >> 8) & 3, comp = type & 3;
-		float L[3], att = 1.0f, ndotl, lac[3], ldc[3], lsc[3];
-
-		if(!(ge.cmd[GE_LIGHTENABLE0 + i] & 1)) continue;
-		L[0] = ge_f24(ge.cmd[GE_LX0 + i * 3]);
-		L[1] = ge_f24(ge.cmd[GE_LX0 + i * 3 + 1]);
-		L[2] = ge_f24(ge.cmd[GE_LX0 + i * 3 + 2]);
-		if(kind != 0){
-			float d;
-			for(k = 0; k < 3; k++) L[k] -= wpos[k];
-			d = sqrtf(dot3(L, L));
-			{
-				float ka = ge_f24(ge.cmd[GE_LKA0 + i * 3]), kb = ge_f24(ge.cmd[GE_LKA0 + i * 3 + 1]),
-				      kc = ge_f24(ge.cmd[GE_LKA0 + i * 3 + 2]);
-				float den = ka + kb * d + kc * d * d;
-				att = den > 0.0f ? 1.0f / den : 1.0f;
-				if(att > 1.0f) att = 1.0f;
-				if(att < 0.0f) att = 0.0f;
+		if(ts.enable_fog){
+			float fog_end = ge_f24(ge.cmd[GE_FOG1]), fog_slope = ge_f24(ge.cmd[GE_FOG2]);
+			ts.pos_to_fog[0] = worldview[2];
+			ts.pos_to_fog[1] = worldview[6];
+			ts.pos_to_fog[2] = worldview[10];
+			ts.pos_to_fog[3] = worldview[14] + fog_end;
+			/* Con parámetros finitos, la aritmética del GE (gpu/probe exp20) */
+			ts.fog_ge = isfinite(fog_end) && isfinite(fog_slope);
+			for(i = 0; i < 4; i++) ts.view_z_col[i] = worldview[2 + 4 * i];
+			ts.fog_end = ge_trunc24(fog_end);
+			ts.fog_slope = ge_trunc24(fog_slope);
+			if(!isfinite(fog_end)){
+				/* Con inf o NaN no se mezclan inf + -inf (cielos de Outrun) */
+				int sign = signbit(fog_end) != 0;
+				if(signbit(fog_slope)) sign = !sign;
+				if(fog_slope == 0.0f) sign = 1;
+				ts.pos_to_fog[0] = ts.pos_to_fog[1] = ts.pos_to_fog[2] = 0.0f;
+				ts.pos_to_fog[3] = sign ? 0.0f : 1.0f;
+			} else {
+				if(!isfinite(fog_slope)) fog_slope = signbit(fog_slope) ? -262144.0f : 262144.0f;
+				for(i = 0; i < 4; i++) ts.pos_to_fog[i] *= fog_slope;
 			}
 		}
-		normalize3(L);
-		if(kind == 2){
-			float dir[3], spot;
-			dir[0] = ge_f24(ge.cmd[GE_LDX0 + i * 3]);
-			dir[1] = ge_f24(ge.cmd[GE_LDX0 + i * 3 + 1]);
-			dir[2] = ge_f24(ge.cmd[GE_LDX0 + i * 3 + 2]);
-			normalize3(dir);
-			spot = -dot3(L, dir);
-			if(spot >= ge_f24(ge.cmd[GE_LKO0 + i])) att *= powf(spot > 0 ? spot : 0, ge_f24(ge.cmd[GE_LKS0 + i]));
-			else att = 0.0f;
-		}
 
-		color24(ge.cmd[GE_LAC0 + i * 3], lac);
-		color24(ge.cmd[GE_LAC0 + i * 3 + 1], ldc);
-		color24(ge.cmd[GE_LAC0 + i * 3 + 2], lsc);
-
-		ndotl = dot3(L, wnrm);
-		{
-			float dif = ndotl > 0.0f ? ndotl : 0.0f;
-			if(comp == 2) dif = dif > 0.0f ? powf(dif, spec_coef) : 0.0f;
-			for(k = 0; k < 3; k++)
-				col[k] += att * (lac[k] * mat_amb[k] / 255.0f + ldc[k] * mat_dif[k] / 255.0f * dif);
-		}
-		if(comp == 1 && ndotl >= 0.0f){
-			float H[3] = { L[0], L[1], L[2] + 1.0f }, s;
-			normalize3(H);
-			s = dot3(H, wnrm);
-			s = s > 0.0f ? powf(s, spec_coef) : 0.0f;
-			for(k = 0; k < 3; k++) spec[k] += att * lsc[k] * mat_spe[k] / 255.0f * s;
-		}
-	}
-
-	if(ge.cmd[GE_LIGHTMODE] & 1){
-		/* Especular separada: va al color secundario, que se suma tras texturizar */
-		out->sr = clamp255(spec[0]); out->sg = clamp255(spec[1]); out->sb = clamp255(spec[2]);
-	} else {
-		for(k = 0; k < 3; k++) col[k] += spec[k];
-	}
-	out->r = clamp255(col[0]); out->g = clamp255(col[1]); out->b = clamp255(col[2]);
-}
-
-static void tex_coords(const RawVertex *raw, const float *wnrm, int has_nrm, GeVertex *out){
-	u32 mode = ge.cmd[GE_TEXMAPMODE] & 3;
-	out->q = 1.0f;
-	if(mode == 1){
-		/* Proyección: matriz de textura sobre posición, uv o normal */
-		float src[3], r[3];
-		switch((ge.cmd[GE_TEXMAPMODE] >> 8) & 3){
-		case 0: src[0] = raw->pos[0]; src[1] = raw->pos[1]; src[2] = raw->pos[2]; break;
-		case 1: src[0] = raw->uv[0]; src[1] = raw->uv[1]; src[2] = 0.0f; break;
-		case 2: src[0] = raw->nrm[0]; src[1] = raw->nrm[1]; src[2] = raw->nrm[2]; normalize3(src); break;
-		default: src[0] = raw->nrm[0]; src[1] = raw->nrm[1]; src[2] = raw->nrm[2]; break;
-		}
-		mul43(ge.tgen, src, r);
-		out->s = r[0]; out->t = r[1]; out->q = r[2];
-	} else if(mode == 2){
-		/* Mapa de entorno: dirección de dos luces contra la normal */
-		int lu = (int)(ge.cmd[GE_TEXSHADELS] & 3), lv = (int)((ge.cmd[GE_TEXSHADELS] >> 8) & 3);
-		float pu[3], pv[3], n[3] = { 0, 0, 1 };
-		int k;
-		for(k = 0; k < 3; k++){
-			pu[k] = ge_f24(ge.cmd[GE_LX0 + lu * 3 + k]);
-			pv[k] = ge_f24(ge.cmd[GE_LX0 + lv * 3 + k]);
-			if(has_nrm) n[k] = wnrm[k];
-		}
-		normalize3(pu);
-		normalize3(pv);
-		out->s = (1.0f + dot3(pu, n)) * 0.5f;
-		out->t = (1.0f + dot3(pv, n)) * 0.5f;
-	} else {
-		out->s = raw->uv[0] * ge_f24(ge.cmd[GE_TEXSCALEU]) + ge_f24(ge.cmd[GE_TEXOFFSETU]);
-		out->t = raw->uv[1] * ge_f24(ge.cmd[GE_TEXSCALEV]) + ge_f24(ge.cmd[GE_TEXOFFSETV]);
+		ts.screen_scale[0] = ge_f24(ge.cmd[GE_VIEWPORTXSCALE]);
+		ts.screen_scale[1] = ge_f24(ge.cmd[GE_VIEWPORTYSCALE]);
+		ts.screen_scale[2] = ge_f24(ge.cmd[GE_VIEWPORTZSCALE]);
+		ts.screen_add[0] = ge_f24(ge.cmd[GE_VIEWPORTXCENTER]);
+		ts.screen_add[1] = ge_f24(ge.cmd[GE_VIEWPORTYCENTER]);
+		ts.screen_add[2] = ge_f24(ge.cmd[GE_VIEWPORTZCENTER]);
 	}
 }
 
-/* Transforma un vértice decodificado (modo no-through) */
-static void transform(const VFormat *f, const RawVertex *raw, TVertex *out){
-	float pos[3], nrm[3], wpos[3], wnrm[3] = { 0, 0, 1 }, vpos[3];
-	int k;
-
-	memcpy(pos, raw->pos, sizeof(pos));
-	memcpy(nrm, raw->nrm, sizeof(nrm));
-
-	/* Skinning: suma ponderada de las matrices de huesos */
-	if(f->wt){
-		float sp[3] = { 0, 0, 0 }, sn[3] = { 0, 0, 0 }, t[3];
-		int i;
-		for(i = 0; i < f->nweights; i++){
-			if(raw->w[i] == 0.0f) continue;
-			mul43(ge.bone[i], raw->pos, t);
-			for(k = 0; k < 3; k++) sp[k] += t[k] * raw->w[i];
-			mul33(ge.bone[i], raw->nrm, t);
-			for(k = 0; k < 3; k++) sn[k] += t[k] * raw->w[i];
-		}
-		memcpy(pos, sp, sizeof(pos));
-		memcpy(nrm, sn, sizeof(nrm));
-	}
-
-	mul43(ge.world, pos, wpos);
-	mul43(ge.view, wpos, vpos);
-	for(k = 0; k < 4; k++) out->clip[k] = ge_clip_component(pos, combined, k);
-
-	memset(&out->v, 0, sizeof(out->v));
-	out->v.r = raw->col[0]; out->v.g = raw->col[1]; out->v.b = raw->col[2]; out->v.a = raw->col[3];
-
-	{
-		mul33(ge.world, nrm, wnrm);
-		if(ge.cmd[GE_REVERSENORMAL] & 1){ wnrm[0] = -wnrm[0]; wnrm[1] = -wnrm[1]; wnrm[2] = -wnrm[2]; }
-		normalize3(wnrm);
-	}
-	if(ge_enabled(GE_LIGHTINGENABLE)) light_vertex(raw, wpos, wnrm, &out->v);
-	if(f->tc || (ge.cmd[GE_TEXMAPMODE] & 3) != 0){
-		tex_coords(raw, wnrm, f->nrm != 0, &out->v);
-		if((ge.cmd[GE_TEXMAPMODE] & 3) == 0){ last_uv[0] = out->v.s; last_uv[1] = out->v.t; }
-	} else {
-		out->v.s = last_uv[0]; out->v.t = last_uv[1]; out->v.q = 1.0f;
-	}
-
-	if(ge_enabled(GE_FOGENABLE)){
-		float fog = (ge_f24(ge.cmd[GE_FOG1]) + vpos[2]) * ge_f24(ge.cmd[GE_FOG2]);
-		out->v.fog = fog < 0.0f ? 0.0f : (fog > 1.0f ? 1.0f : fog);
-	} else out->v.fog = 1.0f;
-}
-
-/* Clip -> coordenadas de dibujo (píxeles), como el GE: x, y en 1/16 de
-   píxel (truncado), z truncada. Marca los vértices fuera del rango de
-   pantalla (0..4096): el hardware descarta la primitiva entera. */
+/* Pantalla en 1/16 de píxel sin el offset. Con el recorte de profundidad
+   activo, z se satura y un vértice que el plano cercano recorta (z < -w) no
+   cuenta para el rango, salvo que se pida (always) */
 #define SCREEN_BOUND (4095.0f + 15.5f / 16.0f)
 
-static void project(TVertex *t){
-	float sx = ge_viewport(t->clip[0], t->clip[3], ge_f24(ge.cmd[GE_VIEWPORTXSCALE]), ge_f24(ge.cmd[GE_VIEWPORTXCENTER]));
-	float sy = ge_viewport(t->clip[1], t->clip[3], ge_f24(ge.cmd[GE_VIEWPORTYSCALE]), ge_f24(ge.cmd[GE_VIEWPORTYCENTER]));
-	float sz = floorf(ge_viewport(t->clip[2], t->clip[3], ge_f24(ge.cmd[GE_VIEWPORTZSCALE]), ge_f24(ge.cmd[GE_VIEWPORTZCENTER])));
-	int depth_clamp = ge_enabled(GE_DEPTHCLAMPENABLE);
-
-	t->outside = 0;
-	if(depth_clamp){
-		if(!(t->clip[2] < -t->clip[3]) && (sx >= SCREEN_BOUND || sy >= SCREEN_BOUND || sx < 0 || sy < 0))
-			t->outside = 1;
+static int round_to_screen(float sx, float sy, float sz, const float *clip, int depth_clip, int always, GeVertex *v){
+	int outside = 0;
+	if(depth_clip){
+		if((always || !(clip[2] < -clip[3])) && (sx >= SCREEN_BOUND || sy >= SCREEN_BOUND || sx < 0 || sy < 0))
+			outside = 1;
 		if(sz < 0.0f) sz = 0.0f;
 		else if(sz > 65535.0f) sz = 65535.0f;
 	} else if(sx > SCREEN_BOUND || sy >= SCREEN_BOUND || sx < 0 || sy < 0 || sz < 0.0f || sz >= 65536.0f)
-		t->outside = 1;
-
-	if(t->outside) return;
-	t->v.x = (float)(ge_f2i(floorf(sx * 16.0f)) - (s32)(ge.cmd[GE_OFFSETX] & 0xFFFF)) / 16.0f;
-	t->v.y = (float)(ge_f2i(floorf(sy * 16.0f)) - (s32)(ge.cmd[GE_OFFSETY] & 0xFFFF)) / 16.0f;
-	t->v.z = sz;
-	t->v.w = t->clip[3] != 0.0f ? 1.0f / t->clip[3] : 1.0f;
+		outside = 1;
+	v->x = ge_f2i(floorf(sx * 16.0f)) - (int)(ge.cmd[GE_OFFSETX] & 0xFFFF);
+	v->y = ge_f2i(floorf(sy * 16.0f)) - (int)(ge.cmd[GE_OFFSETY] & 0xFFFF);
+	v->z = (u16)(u32)ge_f2i(sz);
+	return outside;
 }
 
-/* Bits de los planos que deja fuera un vértice (|c| > w), sin dividir */
-static int outside_mask(const float *c){
-	int m = 0;
-	if(c[0] > c[3]) m |= 1;
-	if(-c[0] > c[3]) m |= 2;
-	if(c[1] > c[3]) m |= 4;
-	if(-c[1] > c[3]) m |= 8;
-	if(c[2] > c[3]) m |= 16;
-	if(-c[2] > c[3]) m |= 32;
-	return m;
+/* ClipToScreen (recorte): siempre comprueba el rango */
+static int clip_to_screen(const float *clip, GeVertex *v){
+	float x = ge_viewport(clip[0], clip[3], ge_f24(ge.cmd[GE_VIEWPORTXSCALE]), ge_f24(ge.cmd[GE_VIEWPORTXCENTER]));
+	float y = ge_viewport(clip[1], clip[3], ge_f24(ge.cmd[GE_VIEWPORTYSCALE]), ge_f24(ge.cmd[GE_VIEWPORTYCENTER]));
+	float z = floorf(ge_viewport(clip[2], clip[3], ge_f24(ge.cmd[GE_VIEWPORTZSCALE]), ge_f24(ge.cmd[GE_VIEWPORTZCENTER])));
+	return round_to_screen(x, y, z, clip, ge.cmd[GE_DEPTHCLAMPENABLE] & 1, 1, v);
 }
 
-/* Vértice through: ya en coordenadas de dibujo; uv en texels */
-static void through_vertex(const RawVertex *raw, GeVertex *v){
-	u32 tw = 1u << (ge.cmd[GE_TEXSIZE0] & 0xF), th = 1u << ((ge.cmd[GE_TEXSIZE0] >> 8) & 0xF);
-	memset(v, 0, sizeof(*v));
-	v->x = raw->pos[0];
-	v->y = raw->pos[1];
-	v->z = raw->pos[2];
-	v->w = 1.0f;
-	v->s = raw->uv[0] / (float)tw;
-	v->t = raw->uv[1] / (float)th;
-	v->q = 1.0f;
-	v->r = raw->col[0]; v->g = raw->col[1]; v->b = raw->col[2]; v->a = raw->col[3];
-	v->fog = 1.0f;
+/* El factor de niebla de 8 bits: min(floor(256 f), 255), NaN e inf por signo */
+static int ge_fog_factor(float f){
+	u32 bits, e, m;
+	memcpy(&bits, &f, 4);
+	e = bits >> 23;
+	if((bits & 0x80000000u) || e <= 126 - 8) return 0;
+	if(e > 126) return 255;
+	m = (bits & 0x007FFFFF) | 0x00800000;
+	return (int)(m >> (16 + 126 - e));
 }
 
-/* --- Recorte en el plano cercano --------------------------------------------- */
+/* Componente de la matriz de textura 4x3, sumada como una fila (gpu/probe exp64) */
+static float texgen_component(const float *v, const float *m, int c){
+	GeRowTerm t[4];
+	t[0] = ge_product(ge_trunc24(v[0]), m[c]);
+	t[1] = ge_product(ge_trunc24(v[1]), m[3 + c]);
+	t[2] = ge_product(ge_trunc24(v[2]), m[6 + c]);
+	t[3] = ge_product(1.0f, m[9 + c]);
+	return ge_row_sum(t, 4);
+}
 
-static void lerp_tvertex(const TVertex *a, const TVertex *b, float t, TVertex *out){
+/* El GE conserva la última uv y la última normal: un vértice sin ellas usa
+   las anteriores, incluso de otra llamada (gpu/vertices/carry). La uv se
+   guarda aunque la textura esté desactivada y sin escalar: la escala y el
+   desplazamiento actuales se aplican al usarla. */
+static float last_uv[2], last_normal[3];
+
+static void read_vertex(const VFormat *f, const DecVertex *d, GeClipVertex *out){
+	GeVertex *v = &out->v;
+	float pos[3], normal[3];
 	int i;
-	const float *pa = &a->v.s, *pb = &b->v.s;
-	float *po = &out->v.s;
-	for(i = 0; i < 4; i++) out->clip[i] = a->clip[i] + (b->clip[i] - a->clip[i]) * t;
-	/* s, t, q, r, g, b, a, sr, sg, sb, fog: campos consecutivos */
-	for(i = 0; i < 11; i++) po[i] = pa[i] + (pb[i] - pa[i]) * t;
+
+	memset(out, 0, sizeof(*out));
+	memcpy(pos, d->pos, sizeof(pos));
+
+	if(f->tc){ last_uv[0] = d->uv[0]; last_uv[1] = d->uv[1]; }
+	{
+		float tc[2];
+		tc[0] = last_uv[0]; tc[1] = last_uv[1];
+		if(ts.ge_uv_scale){
+			/* El decodificador solo las normalizó (8 y 16 bits sin signo) */
+			for(i = 0; i < 2; i++){
+				float scaled = ge_product24((double)ge_trunc24(tc[i]) * ts.uv_scale[i]);
+				tc[i] = ge_trunc24(ge_add(scaled, ts.uv_offset[i]));
+			}
+		} else if(uv_prescale){
+			for(i = 0; i < 2; i++) tc[i] = tc[i] * uv_ps_scale[i] + uv_ps_off[i];
+		}
+		v->s = tc[0]; v->t = tc[1]; v->q = 0.0f;
+	}
+
+	if(f->nrm) memcpy(last_normal, d->nrm, sizeof(last_normal));
+	memcpy(normal, last_normal, sizeof(normal));
+	if(ts.negate_normals) for(i = 0; i < 3; i++) normal[i] = -normal[i];
+
+	v->color0 = f->col ? d->color0 : material_ambient_rgba();
+	v->color1 = 0;
+
+	if(ts.enable_transform){
+		float sx, sy, sz, worldnormal[3] = { 0, 0, 0 }, n_rsqrt = 1.0f;
+		for(i = 0; i < 4; i++) out->clip[i] = ge_clip_component(pos, ts.matrix, i);
+		sx = ge_viewport(out->clip[0], out->clip[3], ts.screen_scale[0], ts.screen_add[0]);
+		sy = ge_viewport(out->clip[1], out->clip[3], ts.screen_scale[1], ts.screen_add[1]);
+		sz = floorf(ge_viewport(out->clip[2], out->clip[3], ts.screen_scale[2], ts.screen_add[2]));
+		v->clipw = out->clip[3];
+		v->fogdepth = 1.0f;
+		if(round_to_screen(sx, sy, sz, out->clip, ts.depth_clip, 0, v)){
+			v->x = GE_OUTSIDE;
+			return;
+		}
+
+		if(ts.enable_fog && ts.fog_ge){
+			GeRowTerm t[4];
+			float vz, fz;
+			t[0] = ge_product(ge_trunc24(pos[0]), ts.view_z_col[0]);
+			t[1] = ge_product(ge_trunc24(pos[1]), ts.view_z_col[1]);
+			t[2] = ge_product(ge_trunc24(pos[2]), ts.view_z_col[2]);
+			t[3] = ge_product(1.0f, ts.view_z_col[3]);
+			vz = ge_row_sum(t, 4);
+			fz = ge_product24((double)ge_trunc24(ge_add(vz, ts.fog_end)) * ts.fog_slope);
+			v->fogdepth = (float)ge_fog_factor(fz) * (1.0f / 256.0f);
+		} else if(ts.enable_fog){
+			float f4 = ts.pos_to_fog[0] * pos[0] + ts.pos_to_fog[1] * pos[1] + ts.pos_to_fog[2] * pos[2] + ts.pos_to_fog[3];
+			v->fogdepth = (float)ge_fog_factor(f4) * (1.0f / 256.0f);
+		}
+
+		/* La normal se queda como la deja la matriz de mundo: las luces
+		   escalan sus productos por el inverso de su longitud (gpu/probe exp3) */
+		if(ts.light.uses_world_normal){
+			const float *m = ge.world;
+			float c0[3], c1[3], c2[3], len2;
+			c0[0] = m[0]; c0[1] = m[3]; c0[2] = m[6];
+			c1[0] = m[1]; c1[1] = m[4]; c1[2] = m[7];
+			c2[0] = m[2]; c2[1] = m[5]; c2[2] = m[8];
+			worldnormal[0] = ge_dot(normal, c0);
+			worldnormal[1] = ge_dot(normal, c1);
+			worldnormal[2] = ge_dot(normal, c2);
+			len2 = ge_dot(worldnormal, worldnormal);
+			if(len2 > 0.0f && isfinite(len2)) n_rsqrt = ge_rsqrt(len2);
+			else if(len2 != 0.0f){ worldnormal[0] = 0.0f; worldnormal[1] = 0.0f; worldnormal[2] = 1.0f; }
+			/* Una normal nula sigue nula: ni difusa ni especular (gpu/probe exp173) */
+		}
+
+		if(ts.uv_gen_mode == 1){
+			float src[3], r[3];
+			switch((ge.cmd[GE_TEXMAPMODE] >> 8) & 3){
+			case 0: memcpy(src, pos, sizeof(src)); break;
+			case 1: src[0] = v->s; src[1] = v->t; src[2] = 0.0f; break;
+			case 2: memcpy(src, normal, sizeof(src)); ge_normalize(src); break;  /* sin (0, 0, 1) si es nula */
+			default: memcpy(src, normal, sizeof(src)); break;
+			}
+			/* Aquí no se usan la escala ni el desplazamiento de uv */
+			for(i = 0; i < 3; i++) r[i] = texgen_component(src, ge.tgen, i);
+			v->s = r[0]; v->t = r[1]; v->q = r[2];
+		} else if(ts.uv_gen_mode == 2){
+			v->s = ge_shade_map_coord((int)(ge.cmd[GE_TEXSHADELS] & 3), pos, worldnormal, n_rsqrt, ts.light.view_dir);
+			v->t = ge_shade_map_coord((int)((ge.cmd[GE_TEXSHADELS] >> 8) & 3), pos, worldnormal, n_rsqrt, ts.light.view_dir);
+		}
+
+		if(ts.enable_lighting) lighting_process(v, pos, worldnormal, n_rsqrt, &ts.light);
+	} else {
+		v->x = ge_f2i(pos[0] * 16.0f);
+		v->y = ge_f2i(pos[1] * 16.0f);
+		v->z = (u16)(u32)ge_f2i(pos[2]);
+		v->clipw = 1.0f;
+		v->fogdepth = 1.0f;
+	}
 }
 
-/* Recorta contra z >= -w (delante del plano cercano). Devuelve nº de vértices. */
-static int clip_near(const TVertex *in, int n, TVertex *out){
-	int i, m = 0;
-	for(i = 0; i < n; i++){
-		const TVertex *a = &in[i], *b = &in[(i + 1) % n];
-		float da = a->clip[2] + a->clip[3], db = b->clip[2] + b->clip[3];
-		if(da >= 0.0f) out[m++] = *a;
-		if((da >= 0.0f) != (db >= 0.0f)){
-			float t = da / (da - db);
-			lerp_tvertex(a, b, t, &out[m++]);
-		}
+/* --- Recorte (Clipper.cpp) -------------------------------------------------- */
+
+static int cull_xy = 1;
+
+static inline int outside_range(const GeClipVertex *v){ return v->v.x == GE_OUTSIDE; }
+static inline int calc_clip_mask(const float *c){ return c[2] < -c[3] ? -1 : 0; }
+
+/* Con recorte de profundidad, un vértice más allá del plano cercano se
+   recorta antes del viewport: su rango no importa */
+static inline int outside_range_before_clip(const GeClipVertex *v, int depth_clip){
+	return outside_range(v) && !(depth_clip && calc_clip_mask(v->clip) != 0);
+}
+
+/* El GE compara las coordenadas de recorte directamente: fuera de un plano
+   si |c| > w. Se descarta la primitiva con todos sus vértices fuera del
+   mismo plano (gpu/probe exp176) */
+static int outside_mask(const float *p){
+	int m = 0;
+	if(cull_xy){
+		if(p[0] > p[3]) m |= 1;
+		if(-p[0] > p[3]) m |= 2;
+		if(p[1] > p[3]) m |= 4;
+		if(-p[1] > p[3]) m |= 8;
 	}
+	if(p[2] > p[3]) m |= 16;
+	if(-p[2] > p[3]) m |= 32;
 	return m;
 }
 
-/* --- Primitivas -------------------------------------------------------------- */
-
-static inline int cull_enabled(void){
-	return ge_enabled(GE_CULLFACEENABLE);
+/* Interpolación del recortador: posición y uv en float; color y niebla con
+   t redondeada a 1/256 (gpu/probe exp136) */
+static void clip_lerp(GeClipVertex *d, float t, const GeClipVertex *a, const GeClipVertex *b){
+	int ti = (int)(t * 256.0f + 0.5f), i, c0[4], c1[4];
+	for(i = 0; i < 4; i++) d->clip[i] = a->clip[i] * (1.0f - t) + b->clip[i] * t;
+	d->v.s = a->v.s * (1.0f - t) + b->v.s * t;
+	d->v.t = a->v.t * (1.0f - t) + b->v.t * t;
+	d->v.q = a->v.q * (1.0f - t) + b->v.q * t;
+	d->v.fogdepth = (float)(((int)(a->v.fogdepth * 256.0f) * (256 - ti) + (int)(b->v.fogdepth * 256.0f) * ti) >> 8) * (1.0f / 256.0f);
+	for(i = 0; i < 4; i++){
+		int ca = (int)((a->v.color0 >> (8 * i)) & 0xFF), cb = (int)((b->v.color0 >> (8 * i)) & 0xFF);
+		int sa = (int)((a->v.color1 >> (8 * i)) & 0xFF), sb = (int)((b->v.color1 >> (8 * i)) & 0xFF);
+		c0[i] = (ca * (256 - ti) + cb * ti) / 256;
+		c1[i] = i < 3 ? (sa * (256 - ti) + sb * ti) / 256 : 0;
+	}
+	d->v.color0 = ge_pack_rgba(c0);
+	d->v.color1 = ge_pack_rgba(c1) & 0x00FFFFFF;
 }
 
-/* ¿Se descarta el triángulo por su orientación? (cw = 1 si va en sentido horario) */
-static int culled(const GeVertex *a, const GeVertex *b, const GeVertex *c, int flip){
-	float area = (b->x - a->x) * (c->y - a->y) - (c->x - a->x) * (b->y - a->y);
-	int cw = area > 0.0f;   /* y crece hacia abajo: área positiva = horario en pantalla */
-	if(!cull_enabled()) return 0;
-	if(area == 0.0f) return 1;
-	if(flip) cw = !cw;
-	/* CULL = 1 (frente horario) descarta los antihorarios y viceversa */
-	return (ge.cmd[GE_CULL] & 1) ? !cw : cw;
+static void clip_interpolate(GeClipVertex *d, float t, const GeClipVertex *a, const GeClipVertex *b){
+	GeClipVertex tmp = *d;
+	clip_lerp(&tmp, t, a, b);
+	if(clip_to_screen(tmp.clip, &tmp.v)) tmp.v.x = GE_OUTSIDE;
+	tmp.v.clipw = tmp.clip[3];
+	*d = tmp;
 }
 
-static void flat_color(GeVertex *a, GeVertex *b, const GeVertex *src){
-	a->r = b->r = src->r; a->g = b->g = src->g; a->b = b->b = src->b; a->a = b->a = src->a;
-	a->sr = b->sr = src->sr; a->sg = b->sg = src->sg; a->sb = b->sb = src->sb;
+/* Recorte en el plano cercano como el GE (gpu/probe exp43-46): desde el
+   vértice de dentro, t = d_in / (d_in - d_out) con d = z + w y el
+   recíproco del GE, y cada coordenada in + t * (out - in), en float24 */
+static float near_plane_t(const float *in, const float *out){
+	float d_in = ge_add(in[2], in[3]), d_out = ge_add(out[2], out[3]);
+	float den = ge_trunc24(ge_add(d_in, -d_out));
+	return ge_product24((double)ge_trunc24(d_in) * ge_recip(den));
 }
 
-static void emit_triangle(const TVertex *t0, const TVertex *t1, const TVertex *t2, int through, int flip){
-	GeVertex a, b, c;
-	if(through){
-		a = t0->v; b = t1->v; c = t2->v;
-		if(culled(&a, &b, &c, flip)) return;
-		if(!(ge.cmd[GE_SHADEMODE] & 1)) flat_color(&a, &b, &c);
-		ge_raster_triangle(&a, &b, &c);
+static void near_point(GeClipVertex *d, const GeClipVertex *in, const GeClipVertex *out){
+	float t = near_plane_t(in->clip, out->clip), delta, in_tc[3], out_tc[3], tc[3];
+	int c;
+	memset(d, 0, sizeof(*d));
+	clip_lerp(d, t, in, out);
+	for(c = 0; c < 4; c++){
+		delta = ge_trunc24(ge_add(out->clip[c], -in->clip[c]));
+		d->clip[c] = ge_trunc24(ge_add(ge_product24((double)t * delta), in->clip[c]));
+	}
+	/* Las uv con la misma aritmética que la posición (gpu/probe exp136) */
+	in_tc[0] = in->v.s; in_tc[1] = in->v.t; in_tc[2] = in->v.q;
+	out_tc[0] = out->v.s; out_tc[1] = out->v.t; out_tc[2] = out->v.q;
+	for(c = 0; c < 3; c++){
+		delta = ge_trunc24(ge_add(out_tc[c], -in_tc[c]));
+		tc[c] = ge_trunc24(ge_add(ge_product24((double)t * delta), in_tc[c]));
+	}
+	d->v.s = tc[0]; d->v.t = tc[1]; d->v.q = tc[2];
+	if(clip_to_screen(d->clip, &d->v)) d->v.x = GE_OUTSIDE;
+	d->v.clipw = d->clip[3];
+}
+
+/* Rectángulo con proyección de textura: como triángulos */
+static void add_triangle_rect(const GeVertex *v0, const GeVertex *v1){
+	GeVertex buf[4], *tl = &buf[0], *tr = &buf[1], *bl = &buf[2], *br = &buf[3];
+	int i;
+	buf[0] = *v1; buf[0].x = v0->x; buf[0].y = v0->y;
+	buf[0].s = v0->s; buf[0].t = v0->t; buf[0].q = v0->q;
+	buf[1] = *v1; buf[1].x = v0->x;
+	buf[1].s = v0->s; buf[1].q = v0->q;
+	buf[2] = *v1; buf[2].y = v0->y;
+	buf[2].t = v0->t;
+	buf[3] = *v1;
+
+	/* El rasterizador siempre descarta por orientación: se ordenan */
+	for(i = 0; i < 4; i++){
+		if(buf[i].x < tl->x && buf[i].y < tl->y) tl = &buf[i];
+		if(buf[i].x > tr->x && buf[i].y < tr->y) tr = &buf[i];
+		if(buf[i].x < bl->x && buf[i].y > bl->y) bl = &buf[i];
+		if(buf[i].x > br->x && buf[i].y > br->y) br = &buf[i];
+	}
+	if((v0->x < v1->x && v0->y > v1->y) || (v0->x > v1->x && v0->y < v1->y)){
+		float s = bl->s, t = bl->t, q = bl->q;
+		bl->s = tr->s; bl->t = tr->t; bl->q = tr->q;
+		tr->s = s; tr->t = t; tr->q = q;
+	}
+	ge_raster_triangle(tl, tr, bl);
+	ge_raster_triangle(bl, tr, tl);
+	ge_raster_triangle(tr, br, bl);
+	ge_raster_triangle(bl, br, tr);
+}
+
+static void process_rect(const GeClipVertex *v0, const GeClipVertex *v1){
+	if(!ge_through()){
+		int split_fog;
+		if(outside_range(v0) || outside_range(v1)) return;
+		if(outside_mask(v0->clip) & outside_mask(v1->clip)) return;
+		/* No se recortan: con un vértice detrás de la cámara se descarta */
+		if(!(v0->clip[3] > 0.0f && v1->clip[3] > 0.0f)) return;
+
+		split_fog = v0->v.fogdepth != v1->v.fogdepth;
+		if(split_fog){
+			/* En el mismo 1/255 la niebla es plana (Resistance) */
+			const float half = 0.5f / 255.0f;
+			if(v1->v.fogdepth - half <= v0->v.fogdepth && v1->v.fogdepth + half >= v0->v.fogdepth) split_fog = 0;
+		}
+		if(split_fog){
+			/* La niebla de un rectángulo va por el más cercano en x, al revés */
+			GeVertex h0 = v1->v, h1 = v1->v, rev = v1->v;
+			h0.x = v0->v.x + (v1->v.x - v0->v.x) / 2;
+			h0.s = v0->v.s + (v1->v.s - v0->v.s) / 2;
+			h1.x = v0->v.x + (v1->v.x - v0->v.x) / 2;
+			h1.y = v0->v.y;
+			h1.s = v0->v.s + (v1->v.s - v0->v.s) / 2;
+			h1.t = v0->v.t;
+			rev.fogdepth = v0->v.fogdepth;
+			if(ge_raster_texture_proj()){
+				add_triangle_rect(&v0->v, &h0);
+				add_triangle_rect(&h1, &rev);
+			} else {
+				ge_raster_rect(&v0->v, &h0);
+				ge_raster_rect(&h1, &rev);
+			}
+		} else if(ge_raster_texture_proj()){
+			add_triangle_rect(&v0->v, &v1->v);
+		} else {
+			ge_raster_rect(&v0->v, &v1->v);
+		}
+	} else {
+		if((ge.cmd[GE_CLEARMODE] & 1) && !(ge.cmd[GE_DITHERENABLE] & 1)) ge_raster_clear_rect(&v0->v, &v1->v);
+		else ge_raster_rect(&v0->v, &v1->v);
+	}
+}
+
+static void process_point(const GeClipVertex *v0){
+	if(!ge_through()){
+		if(outside_range(v0)) return;
+		if(outside_mask(v0->clip)) return;
+	}
+	ge_raster_point(&v0->v);
+}
+
+static void process_line(const GeClipVertex *v0, const GeClipVertex *v1){
+	int depth_clip, mask0, mask1, mask;
+	GeClipVertex c0, c1;
+	if(ge_through()){
+		ge_raster_line(&v0->v, &v1->v);
 		return;
 	}
+	depth_clip = ge.cmd[GE_DEPTHCLAMPENABLE] & 1;
+	if(outside_range_before_clip(v0, depth_clip) || outside_range_before_clip(v1, depth_clip)) return;
+	if(outside_mask(v0->clip) & outside_mask(v1->clip)) return;
+
+	mask0 = calc_clip_mask(v0->clip);
+	mask1 = calc_clip_mask(v1->clip);
+	mask = mask0 | mask1;
+	if(!depth_clip){
+		if(!(v0->clip[3] > 0.0f && v1->clip[3] > 0.0f)) return;
+		mask = 0;
+	}
+	if(mask == 0){
+		ge_raster_line(&v0->v, &v1->v);
+		return;
+	}
+
+	/* CLIP_LINE con el plano z + w >= 0 */
+	c0 = *v0; c1 = *v1;
 	{
-		TVertex in[3] = { *t0, *t1, *t2 }, poly[4];
-		int n, i, behind = 0, depth_clip = ge_enabled(GE_DEPTHCLAMPENABLE);
-		for(i = 0; i < 3; i++){
-			project(&in[i]);
-			if(in[i].outside) return;
-			behind += in[i].clip[2] < -in[i].clip[3];
+		float dp0 = c0.clip[2] + c0.clip[3];
+		float dp1 = c1.clip[2] + c1.clip[3];
+		if(mask0 && dp0 < 0){
+			float t = dp1 / (dp1 - dp0);
+			clip_interpolate(&c0, t, &c1, &c0);
 		}
-		if(in[0].clip[3] < 0.0f && in[1].clip[3] < 0.0f && in[2].clip[3] < 0.0f) return;
-		if(outside_mask(in[0].clip) & outside_mask(in[1].clip) & outside_mask(in[2].clip)) return;
+		dp0 = c0.clip[2] + c0.clip[3];
+		if(mask1 && dp1 < 0){
+			float t = dp1 / (dp1 - dp0);
+			clip_interpolate(&c1, t, &c1, &c0);
+		}
+	}
+	if(!outside_range(&c0) && !outside_range(&c1)) ge_raster_line(&c0.v, &c1.v);
+}
+
+static void add_tri_flat(const GeClipVertex *a, const GeClipVertex *b, const GeClipVertex *c, const GeClipVertex *provoking){
+	if(!(ge.cmd[GE_SHADEMODE] & 1)){
+		/* Sombreado plano: así el orden del recorte no importa */
+		GeVertex c2 = c->v;
+		c2.color0 = provoking->v.color0;
+		c2.color1 = provoking->v.color1;
+		ge_raster_triangle(&a->v, &b->v, &c2);
+	} else ge_raster_triangle(&a->v, &b->v, &c->v);
+}
+
+static void process_triangle(const GeClipVertex *v0, const GeClipVertex *v1, const GeClipVertex *v2,
+                             const GeClipVertex *provoking, int reversed){
+	int mask = 0, i, num_outside = 0, num_tris = 0, outside[3];
+	const GeClipVertex *src[3], *tris[2][3];
+	GeClipVertex made[2];
+
+	if(!ge_through()){
+		int depth_clip = ge.cmd[GE_DEPTHCLAMPENABLE] & 1;
+		if(outside_range_before_clip(v0, depth_clip) || outside_range_before_clip(v1, depth_clip) ||
+		   outside_range_before_clip(v2, depth_clip)) return;
+		/* Con w negativa en todos también se descarta */
+		if(v0->clip[3] < 0.0f && v1->clip[3] < 0.0f && v2->clip[3] < 0.0f) return;
+		mask |= calc_clip_mask(v0->clip);
+		mask |= calc_clip_mask(v1->clip);
+		mask |= calc_clip_mask(v2->clip);
+		if(outside_mask(v0->clip) & outside_mask(v1->clip) & outside_mask(v2->clip)) return;
+		/* Sin recorte de profundidad, la parte detrás del plano cercano se
+		   dibuja con la z extrapolada; un vértice detrás de la cámara
+		   (w <= 0) descarta el triángulo */
 		if(!depth_clip){
-			/* Sin recorte: la parte detrás del plano cercano se dibuja; w <= 0 descarta */
-			if(!(in[0].clip[3] > 0.0f && in[1].clip[3] > 0.0f && in[2].clip[3] > 0.0f)) return;
-			behind = 0;
+			if(!(v0->clip[3] > 0.0f && v1->clip[3] > 0.0f && v2->clip[3] > 0.0f)) return;
+			mask = 0;
 		}
-		if(!behind){
-			n = 3;
-			memcpy(poly, in, sizeof(in));
-		} else {
-			n = clip_near(in, 3, poly);
-			for(i = 0; i < n; i++) project(&poly[i]);
-		}
-		if(n < 3) return;
-		/* La orientación se decide con el triángulo recortado (conserva el orden) */
-		if(culled(&poly[0].v, &poly[1].v, &poly[2].v, flip)) return;
-		for(i = 1; i + 1 < n; i++){
-			a = poly[0].v; b = poly[i].v; c = poly[i + 1].v;
-			/* Sombreado plano: el color del último vértice del triángulo */
-			if(!(ge.cmd[GE_SHADEMODE] & 1)){
-				flat_color(&a, &b, &t2->v);
-				c.r = a.r; c.g = a.g; c.b = a.b; c.a = a.a;
-				c.sr = a.sr; c.sg = a.sg; c.sb = a.sb;
-			}
-			ge_raster_triangle(&a, &b, &c);
-		}
+	}
+
+	if(mask == 0){
+		add_tri_flat(v0, v1, v2, provoking);
+		return;
+	}
+
+	/* Recorte como el GE (gpu/probe exp43, exp44): con un vértice fuera (o),
+	   el cuadrilátero se parte desde el vértice anterior (p) en el orden
+	   enviado: (p, a, b) y (p, b, n) */
+	src[0] = v0; src[1] = v1; src[2] = v2;
+	for(i = 0; i < 3; i++){
+		outside[i] = src[i]->clip[2] < -src[i]->clip[3];
+		num_outside += outside[i];
+	}
+	if(num_outside == 1){
+		int o = outside[0] ? 0 : (outside[1] ? 1 : 2);
+		int p = reversed ? (o + 1) % 3 : (o + 2) % 3;
+		int n = reversed ? (o + 2) % 3 : (o + 1) % 3;
+		int first = reversed ? 2 : 1, second = reversed ? 1 : 2;
+		near_point(&made[0], src[p], src[o]);
+		near_point(&made[1], src[n], src[o]);
+		tris[0][0] = src[p]; tris[0][first] = &made[0]; tris[0][second] = &made[1];
+		tris[1][0] = src[p]; tris[1][first] = &made[1]; tris[1][second] = src[n];
+		num_tris = 2;
+	} else if(num_outside == 2){
+		int in = !outside[0] ? 0 : (!outside[1] ? 1 : 2);
+		int n = (in + 1) % 3, p = (in + 2) % 3;
+		near_point(&made[0], src[in], src[n]);
+		near_point(&made[1], src[in], src[p]);
+		tris[0][0] = src[in]; tris[0][1] = &made[0]; tris[0][2] = &made[1];
+		num_tris = 1;
+	}
+	for(i = 0; i < num_tris; i++){
+		if(outside_range(tris[i][0]) || outside_range(tris[i][1]) || outside_range(tris[i][2])) continue;
+		add_tri_flat(tris[i][0], tris[i][1], tris[i][2], provoking);
 	}
 }
 
-static void emit_two(const TVertex *t0, const TVertex *t1, int through, int is_rect){
-	GeVertex a = t0->v, b = t1->v;
-	if(!through){
-		TVertex p0 = *t0, p1 = *t1;
-		project(&p0); project(&p1);
-		if(p0.outside || p1.outside) return;
-		if(outside_mask(p0.clip) & outside_mask(p1.clip)) return;
-		if(!(p0.clip[3] > 0.0f && p1.clip[3] > 0.0f)) return;
-		a = p0.v; b = p1.v;
-	}
-	if(is_rect) ge_raster_rectangle(&a, &b);
-	else {
-		if(!(ge.cmd[GE_SHADEMODE] & 1)){ a.r = b.r; a.g = b.g; a.b = b.b; a.a = b.a; }
-		ge_raster_line(&a, &b);
+/* --- Ensamblado (SubmitPrimitive) ------------------------------------------ */
+
+enum { CULL_CW = 0, CULL_CCW = 1, CULL_OFF = 2 };
+
+static GeClipVertex data_[4];
+static int data_index_;
+static u32 prev_prim_ = GE_PRIM_POINTS;
+static int is_imm_draw;
+
+static void send_triangle(int cull, const GeClipVertex *v, int provoking, int reversed){
+	if(cull == CULL_OFF){
+		process_triangle(&v[0], &v[1], &v[2], &v[provoking], reversed);
+		process_triangle(&v[2], &v[1], &v[0], &v[provoking], !reversed);
+	} else if(cull == CULL_CW){
+		process_triangle(&v[2], &v[1], &v[0], &v[provoking], !reversed);
+	} else {
+		process_triangle(&v[0], &v[1], &v[2], &v[provoking], reversed);
 	}
 }
 
-static void emit_point(const TVertex *t, int through){
-	if(through) ge_raster_point(&t->v);
-	else {
-		TVertex p = *t;
-		project(&p);
-		if(p.outside || outside_mask(p.clip)) return;
-		ge_raster_point(&p.v);
+/* Fuente de vértices de una llamada: memoria (con índices) o una lista ya
+   decodificada (curvas) */
+typedef struct {
+	const VFormat *f;
+	u32 vaddr, iaddr;
+	int use_indices, use_cache, zero;
+	u32 lower, upper;
+	const DecVertex *list;
+	GeClipVertex *cache;
+} VSource;
+
+static GeClipVertex *vcache;
+static int vcache_cap;
+
+static u32 index_at(const VSource *s, int i){
+	switch(s->f->idx){
+	case 1: return mem_read8(s->iaddr + (u32)i);
+	case 2: return mem_read16(s->iaddr + (u32)i * 2);
+	case 3: return mem_read32(s->iaddr + (u32)i * 4) & 0xFFFF;  /* solo 16 bits (hardware) */
+	default: return (u32)i;
 	}
 }
 
-/* Lee y transforma el vértice número i de la llamada actual */
-static void fetch(const VFormat *f, u32 vaddr, u32 iaddr, u32 i, TVertex *out){
-	RawVertex raw;
-	u32 index = i;
-	if(f->idx == 1) index = mem_read8(iaddr + i);
-	else if(f->idx == 2) index = mem_read16(iaddr + i * 2);
-	else if(f->idx == 3) index = mem_read32(iaddr + i * 4) & 0xFFFF; /* solo 16 bits (hardware) */
-	decode_vertex(f, vaddr + index * f->total, &raw);
-	if(f->through){
-		if(f->tc){ last_uv[0] = raw.uv[0]; last_uv[1] = raw.uv[1]; }
-		else { raw.uv[0] = last_uv[0]; raw.uv[1] = last_uv[1]; }
-		memset(out->clip, 0, sizeof(out->clip));
-		through_vertex(&raw, &out->v);
-	} else transform(f, &raw, out);
+static void read_raw(const VSource *s, u32 index, GeClipVertex *out){
+	DecVertex d;
+	if(s->list) d = s->list[index];
+	else if(s->zero) memset(&d, 0, sizeof(d));
+	else decode_vertex(s->f, mem_ptr(s->vaddr + index * s->f->size, s->f->size), &d);
+	read_vertex(s->f, &d, out);
 	ge_stats.vertices++;
 }
 
-/* Estado de ensamblado que conserva PRIM "continuar" (tipo 7): vértices
-   pendientes de una primitiva incompleta, la tira o el abanico en curso.
-   Se guardan ya transformados, así que el formato puede cambiar. */
-static TVertex pend[2], fan_first;
-static int npend, strip_parity, fan_have;
+static void vsource_read(const VSource *s, int vtx, GeClipVertex *out){
+	if(s->use_indices){
+		u32 idx = index_at(s, vtx);
+		if(s->use_cache){ *out = s->cache[idx - s->lower]; return; }
+		read_raw(s, idx, out);
+	} else read_raw(s, (u32)vtx, out);
+}
+
+static void vsource_init(VSource *s, const VFormat *f, u32 vaddr, u32 iaddr, int count){
+	int i;
+	memset(s, 0, sizeof(*s));
+	s->f = f;
+	s->vaddr = vaddr;
+	s->iaddr = iaddr;
+	s->use_indices = f->idx != 0;
+	s->upper = count == 0 ? 0 : (u32)(count - 1);
+	if(s->use_indices && count > 0){
+		u32 lo = 0xFFFF, hi = 0;
+		for(i = 0; i < count; i++){
+			u32 v = index_at(s, i);
+			if(v > hi) hi = v;
+			if(v < lo) lo = v;
+		}
+		s->lower = lo;
+		s->upper = hi;
+	}
+	/* Datos desalineados: el decodificador los deja a cero */
+	if(vaddr & (f->biggest - 1)) s->zero = 1;
+	/* Con índices repetidos se leen una vez todos los del rango, en orden
+	   (eso decide qué uv o normal "arrastra" cada vértice) */
+	s->use_cache = s->use_indices && count > (int)(s->upper - s->lower + 1);
+	if(s->use_cache){
+		int n = (int)(s->upper - s->lower + 1);
+		if(n > vcache_cap){
+			GeClipVertex *nc = realloc(vcache, (size_t)n * sizeof(GeClipVertex));
+			if(!nc){ s->use_cache = 0; return; }
+			vcache = nc;
+			vcache_cap = n;
+		}
+		s->cache = vcache;
+		for(i = 0; i < n; i++) read_raw(s, s->lower + (u32)i, &s->cache[i]);
+	}
+}
+
+static void submit_primitive(const VSource *vr, u32 prim_type, int vertex_count){
+	int cull_on = (ge.cmd[GE_CULLFACEENABLE] & 1) && !(ge.cmd[GE_CLEARMODE] & 1);
+	int cull = cull_on ? ((ge.cmd[GE_CULL] & 1) ? CULL_CCW : CULL_CW) : CULL_OFF;
+	int vtx, i;
+
+	if(prim_type != GE_PRIM_CONTINUE){
+		data_index_ = 0;
+		prev_prim_ = prim_type;
+	} else prim_type = prev_prim_;
+
+	ge_raster_begin();
+
+	/* Se permiten 0 vértices con data_index_ > 0: modo inmediato */
+	switch(prim_type){
+	case GE_PRIM_POINTS:
+		for(i = 0; i < data_index_; i++) process_point(&data_[i]);
+		data_index_ = 0;
+		for(vtx = 0; vtx < vertex_count; vtx++){
+			vsource_read(vr, vtx, &data_[0]);
+			process_point(&data_[0]);
+		}
+		break;
+
+	case GE_PRIM_LINES:
+		for(i = 0; i < data_index_ - 1; i += 2) process_line(&data_[i], &data_[i + 1]);
+		data_index_ &= 1;
+		for(vtx = 0; vtx < vertex_count; vtx++){
+			vsource_read(vr, vtx, &data_[data_index_++]);
+			if(data_index_ == 2){
+				process_line(&data_[0], &data_[1]);
+				data_index_ = 0;
+			}
+		}
+		break;
+
+	case GE_PRIM_TRIANGLES:
+		for(vtx = 0; vtx < vertex_count; vtx++){
+			vsource_read(vr, vtx, &data_[data_index_++]);
+			if(data_index_ < 3) continue;  /* uno incompleto sigue para PRIM continuar */
+			data_index_ = 0;
+			send_triangle(cull, data_, 2, 0);
+		}
+		if(data_index_ >= 3){
+			send_triangle(cull, data_, 2, 0);
+			data_index_ = 0;
+		}
+		break;
+
+	case GE_PRIM_RECTANGLES:
+		for(vtx = 0; vtx < vertex_count; vtx++){
+			vsource_read(vr, vtx, &data_[data_index_++]);
+			if(data_index_ == 4){
+				process_rect(&data_[0], &data_[1]);
+				process_rect(&data_[2], &data_[3]);
+				data_index_ = 0;
+			}
+		}
+		if(data_index_ >= 2){
+			process_rect(&data_[0], &data_[1]);
+			data_index_ -= 2;
+		}
+		break;
+
+	case GE_PRIM_LINE_STRIP: {
+		/* Sin línea al cargar el primer vértice */
+		int skip = data_index_ == 0 ? 1 : 0;
+		for(vtx = 0; vtx < vertex_count; vtx++){
+			vsource_read(vr, vtx, &data_[(data_index_++) & 1]);
+			if(skip) skip--;
+			else process_line(&data_[data_index_ & 1], &data_[(data_index_ & 1) ^ 1]);
+		}
+		if(is_imm_draw && data_index_ >= 2)
+			process_line(&data_[data_index_ & 1], &data_[(data_index_ & 1) ^ 1]);
+		break;
+	}
+
+	case GE_PRIM_TRIANGLE_STRIP: {
+		int skip = data_index_ >= 2 ? 0 : 2 - data_index_, start = 0;
+		for(vtx = start; vtx < vertex_count && skip > 0; vtx++){
+			vsource_read(vr, vtx, &data_[(data_index_++) % 3]);
+			skip--;
+			start++;
+		}
+		for(vtx = start; vtx < vertex_count; vtx++){
+			int provoking = (data_index_++) % 3, wind = (data_index_ - 1) % 2;
+			int alt = cull == CULL_OFF ? cull : (cull ^ wind);
+			vsource_read(vr, vtx, &data_[provoking]);
+			/* Los impares llegan en el orden contrario al del GE (gpu/probe exp45) */
+			send_triangle(alt, data_, provoking, wind != 0);
+		}
+		if(is_imm_draw && data_index_ >= 3){
+			int provoking = (data_index_ - 1) % 3, wind = (data_index_ - 1) % 2;
+			int alt = cull == CULL_OFF ? cull : (cull ^ wind);
+			send_triangle(alt, data_, provoking, wind != 0);
+		}
+		break;
+	}
+
+	case GE_PRIM_TRIANGLE_FAN: {
+		int skip = data_index_ <= 1 ? 1 : 0, start = 0;
+		/* El centro solo se lee si no se continúa */
+		if(data_index_ == 0 && vertex_count > 0){
+			vsource_read(vr, 0, &data_[0]);
+			data_index_++;
+			start = 1;
+		}
+		for(vtx = start; vtx < vertex_count && skip > 0; vtx++){
+			int provoking = 2 - ((data_index_++) % 2);
+			vsource_read(vr, vtx, &data_[provoking]);
+			skip--;
+			start++;
+		}
+		for(vtx = start; vtx < vertex_count; vtx++){
+			int provoking = 2 - ((data_index_++) % 2), wind = (data_index_ - 1) % 2;
+			int alt = cull == CULL_OFF ? cull : (cull ^ wind);
+			vsource_read(vr, vtx, &data_[provoking]);
+			send_triangle(alt, data_, provoking, wind != 0);
+		}
+		if(is_imm_draw && data_index_ >= 3){
+			int wind = (data_index_ - 1) % 2, provoking = 2 - wind;
+			int alt = cull == CULL_OFF ? cull : (cull ^ wind);
+			send_triangle(alt, data_, provoking, wind != 0);
+		}
+		break;
+	}
+
+	default:
+		break;
+	}
+}
+
+static void load_morph_weights(void){
+	int i;
+	for(i = 0; i < 8; i++) morph_weights[i] = ge_f24(ge.cmd[GE_MORPHWEIGHT0 + i]);
+}
+
+static void setup_uv_prescale(const VFormat *f){
+	/* Solo con UV gen 3 (desconocido) en modo transformado prescala el
+	   decodificador; con 0 lo hace read_vertex con la aritmética del GE */
+	uv_prescale = !f->through && (ge.cmd[GE_TEXMAPMODE] & 3) == 3;
+	uv_ps_scale[0] = ge_f24(ge.cmd[GE_TEXSCALEU]);
+	uv_ps_scale[1] = ge_f24(ge.cmd[GE_TEXSCALEV]);
+	uv_ps_off[0] = ge_f24(ge.cmd[GE_TEXOFFSETU]);
+	uv_ps_off[1] = ge_f24(ge.cmd[GE_TEXOFFSETV]);
+}
 
 void ge_draw_prim(u32 prim, u32 count){
 	VFormat f;
-	u32 vaddr = ge.vaddr, iaddr = ge.iaddr, i;
-	int cont = 0;
-	TVertex cur;
+	VSource vr;
+	u32 vaddr = ge.vaddr, iaddr = ge.iaddr;
 
+	if(count == 0) return;
 	vformat_setup(&f, ge.cmd[GE_VERTEXTYPE]);
-	if(prim == GE_PRIM_CONTINUE){ prim = ge.last_prim; cont = 1; }
-	if(!cont || prim != ge.last_prim){ npend = 0; strip_parity = 0; fan_have = 0; }
-	ge.last_prim = prim;
-	if(!count) return;
-	/* Sin formato de posición el GE no dibuja nada (pero avanza la dirección) */
-	if(!f.pos){
-		if(f.idx) ge.iaddr = iaddr + count * comp_size[f.idx & 3];
-		else ge.vaddr = vaddr + count * f.total;
-		return;
-	}
-	if(!f.through) update_combined();
-	ge_stats.primitives++;
-	ge_raster_begin();
+	if(!mem_valid(vaddr, 1)) return;
+	if(f.idx && !mem_valid(iaddr, 1)) return;
 
-	for(i = 0; i < count; i++){
-		fetch(&f, vaddr, iaddr, i, &cur);
-		switch(prim){
-		case GE_PRIM_POINTS:
-			emit_point(&cur, f.through);
-			break;
-		case GE_PRIM_LINES:
-		case GE_PRIM_RECTANGLES:
-			if(npend == 1){
-				emit_two(&pend[0], &cur, f.through, prim == GE_PRIM_RECTANGLES);
-				npend = 0;
-			} else pend[npend++] = cur;
-			break;
-		case GE_PRIM_LINE_STRIP:
-			if(npend == 1) emit_two(&pend[0], &cur, f.through, 0);
-			pend[0] = cur;
-			npend = 1;
-			break;
-		case GE_PRIM_TRIANGLES:
-			if(npend == 2){
-				emit_triangle(&pend[0], &pend[1], &cur, f.through, 0);
-				npend = 0;
-			} else pend[npend++] = cur;
-			break;
-		case GE_PRIM_TRIANGLE_STRIP:
-			if(npend == 2){
-				/* Los triángulos impares van invertidos para conservar la orientación */
-				if(strip_parity) emit_triangle(&pend[1], &pend[0], &cur, f.through, 0);
-				else emit_triangle(&pend[0], &pend[1], &cur, f.through, 0);
-				strip_parity ^= 1;
-				pend[0] = pend[1];
-				pend[1] = cur;
-			} else pend[npend++] = cur;
-			break;
-		case GE_PRIM_TRIANGLE_FAN:
-			if(!fan_have){ fan_first = cur; fan_have = 1; npend = 0; }
-			else if(npend == 1){
-				emit_triangle(&fan_first, &pend[0], &cur, f.through, 0);
-				pend[0] = cur;
-			} else { pend[0] = cur; npend = 1; }
-			break;
-		}
+	/* Sin formato de posición no se dibuja, pero se avanza */
+	if(f.pos){
+		load_morph_weights();
+		setup_uv_prescale(&f);
+		compute_transform_state(&f);
+		vsource_init(&vr, &f, vaddr, iaddr, (int)count);
+		submit_primitive(&vr, prim, (int)count);
 	}
 
 	/* El GE avanza las direcciones tras dibujar */
-	if(f.idx) ge.iaddr = iaddr + count * comp_size[f.idx & 3];
-	else ge.vaddr = vaddr + count * f.total;
+	if(f.idx) ge.iaddr = iaddr + count * idx_size[f.idx];
+	else ge.vaddr = vaddr + count * f.size;
 }
 
 /* --- Bounding box (para BJUMP) --------------------------------------------- */
 
+/* La prueba aproximada de PPSSPP (DrawEngineCommon::TestBoundingBox) */
+static int test_bounding_box(const VFormat *f, u32 vaddr, u32 iaddr, int count){
+	float world[16], view[16], vp[16], wvp[16];
+	float fox, foy, left, top, right, bottom;
+	int inside[6] = { 0, 0, 0, 0, 0, 0 }, i, k, r, c, check;
+	int sx1 = (int)(ge.cmd[GE_SCISSOR1] & 0x3FF), sy1 = (int)((ge.cmd[GE_SCISSOR1] >> 10) & 0x3FF);
+	int sx2 = (int)(ge.cmd[GE_SCISSOR2] & 0x3FF), sy2 = (int)((ge.cmd[GE_SCISSOR2] >> 10) & 0x3FF);
+	int rx1 = (int)(ge.cmd[GE_REGION1] & 0x3FF), ry1 = (int)((ge.cmd[GE_REGION1] >> 10) & 0x3FF);
+	int rx2 = (int)(ge.cmd[GE_REGION2] & 0x3FF), ry2 = (int)((ge.cmd[GE_REGION2] >> 10) & 0x3FF);
+	float xs = ge_f24(ge.cmd[GE_VIEWPORTXSCALE]), xc = ge_f24(ge.cmd[GE_VIEWPORTXCENTER]);
+	float ys = ge_f24(ge.cmd[GE_VIEWPORTYSCALE]), yc = ge_f24(ge.cmd[GE_VIEWPORTYCENTER]);
+	VSource src;
+	VFormat nt = *f;
+
+	if(count > 1024) return 1;
+
+	to4x4(ge.world, world);
+	to4x4(ge.view, view);
+	for(r = 0; r < 4; r++)
+		for(c = 0; c < 4; c++){
+			vp[r * 4 + c] = 0.0f;
+			for(k = 0; k < 4; k++) vp[r * 4 + c] += view[r * 4 + k] * ge.proj[k * 4 + c];
+		}
+	for(r = 0; r < 4; r++)
+		for(c = 0; c < 4; c++){
+			wvp[r * 4 + c] = 0.0f;
+			for(k = 0; k < 4; k++) wvp[r * 4 + c] += world[r * 4 + k] * vp[k * 4 + c];
+		}
+
+	/* No se sabe por qué arriba e izquierda van un píxel desplazados */
+	fox = (float)(ge.cmd[GE_OFFSETX] & 0xFFFF) / 16.0f;
+	foy = (float)(ge.cmd[GE_OFFSETY] & 0xFFFF) / 16.0f;
+	left = fox + (float)((rx1 > sx1 ? rx1 : sx1) - 1);
+	top = foy + (float)((ry1 > sy1 ? ry1 : sy1) - 1);
+	right = fox + (float)((rx2 < sx2 ? rx2 : sx2) + 1);
+	bottom = foy + (float)((ry2 < sy2 ? ry2 : sy2) + 1);
+	/* Si la caja sale del espacio de 4096, todo pasa */
+	if(right >= 4096.0f || bottom >= 4096.0f || left < 1.0f || top < 1.0f) return 1;
+
+	nt.through = 0;
+	memset(&src, 0, sizeof(src));
+	src.f = f;
+	src.iaddr = iaddr;
+	for(i = 0; i < count; i++){
+		DecVertex d;
+		float p[4], w, dx, dy;
+		u32 idx = f->idx ? index_at(&src, i) : (u32)i;
+		decode_vertex(&nt, mem_ptr(vaddr + idx * f->size, f->size), &d);
+		for(k = 0; k < 4; k++) p[k] = d.pos[0] * wvp[k] + d.pos[1] * wvp[4 + k] + d.pos[2] * wvp[8 + k] + wvp[12 + k];
+		if(p[2] >= -p[3]) inside[4]++;
+		if(p[2] <= p[3]) inside[5]++;
+		w = p[3];
+		dx = p[0] * xs + xc * w;
+		dy = p[1] * ys + yc * w;
+		if(dx >= left * w) inside[0]++;
+		if(dx <= right * w) inside[1]++;
+		if(dy >= top * w) inside[2]++;
+		if(dy <= bottom * w) inside[3]++;
+	}
+	check = (ge.cmd[GE_DEPTHCLAMPENABLE] & 1) ? 6 : 4;
+	for(i = 0; i < check; i++) if(inside[i] == 0) return 0;
+	return 1;
+}
+
 void ge_bounding_box(u32 count){
 	VFormat f;
-	u32 i, vaddr = ge.vaddr;
-	int out_left = 1, out_right = 1, out_top = 1, out_bottom = 1, out_near = 1, out_far = 1;
+	u32 vaddr = ge.vaddr, iaddr = ge.iaddr, bytes;
 	vformat_setup(&f, ge.cmd[GE_VERTEXTYPE]);
-	if(f.through || count == 0){ ge.bbox_visible = 1; return; }
-	for(i = 0; i < count; i++){
-		RawVertex raw;
-		float wpos[3], vpos[3], c[4];
-		decode_vertex(&f, vaddr + i * f.total, &raw);
-		mul43(ge.world, raw.pos, wpos);
-		mul43(ge.view, wpos, vpos);
-		mul44(ge.proj, vpos, c);
-		if(c[0] >= -c[3]) out_left = 0;
-		if(c[0] <= c[3]) out_right = 0;
-		if(c[1] >= -c[3]) out_bottom = 0;
-		if(c[1] <= c[3]) out_top = 0;
-		if(c[2] >= -c[3]) out_near = 0;
-		if(c[2] <= c[3]) out_far = 0;
+	load_morph_weights();
+	uv_prescale = 0;
+	bytes = (f.idx ? 1 : f.size) * count;
+	if(!mem_valid(vaddr, bytes) || (f.idx && !mem_valid(iaddr, count * idx_size[f.idx]))){
+		ge.bbox_visible = 1;
+		return;
 	}
-	ge.bbox_visible = !(out_left || out_right || out_top || out_bottom || out_near || out_far);
+	/* El GE solo mira un tramo de 0x100 */
+	if(count > 0x200) ge.bbox_visible = test_bounding_box(&f, vaddr + (count - 0x200) * f.size, iaddr, 0x100);
+	else if(count > 0x100) ge.bbox_visible = test_bounding_box(&f, vaddr, iaddr, (int)count - 0x100);
+	else ge.bbox_visible = test_bounding_box(&f, vaddr, iaddr, (int)count);
+
+	if(f.idx) ge.iaddr = iaddr + count * idx_size[f.idx];
+	else ge.vaddr = vaddr + bytes;
 }
 
 /* --- Vértices inmediatos (comandos 0xF0-0xF9) ------------------------------- */
 
+/* Como SoftGPU de PPSSPP: cada VAP se envía en el acto */
+static u32 imm_prim = 0xFFFFFFFFu, imm_flags;
+static int imm_first_sent;
+
 void ge_immediate_vertex(void){
-	static TVertex imm[3];
-	static int n;
-	u32 vap = ge.cmd[GE_VAP];
-	u32 prim = (vap >> 8) & 7;
-	TVertex *t = &imm[n < 3 ? n : 2];
-	u32 col = ge.cmd[GE_VCV];
+	static const int fl_cmd[6] = { GE_ANTIALIASENABLE, GE_SHADEMODE, GE_CULLFACEENABLE, GE_TEXTUREMAPENABLE,
+	                               GE_FOGENABLE, GE_DITHERENABLE };
+	static const u32 fl_bit[6] = { 0x800, 0x40000, 0x80000, 0x200000, 0x400000, 0x800000 };
+	u32 vap = ge.cmd[GE_VAP], prim = (vap >> 8) & 7, color0, save[6], save_cull = ge.cmd[GE_CULL];
+	int through = ge_through(), changed = 0, i;
+	float x, y, z;
+	GeClipVertex cv;
+	VFormat f;
+	VSource vr;
 
-	memset(t, 0, sizeof(*t));
-	t->v.x = (float)(s16)(ge.cmd[GE_VSCX] & 0xFFFF) / 16.0f - (float)(ge.cmd[GE_OFFSETX] & 0xFFFF) / 16.0f;
-	t->v.y = (float)(s16)(ge.cmd[GE_VSCY] & 0xFFFF) / 16.0f - (float)(ge.cmd[GE_OFFSETY] & 0xFFFF) / 16.0f;
-	t->v.z = (float)(ge.cmd[GE_VSCZ] & 0xFFFF);
-	t->v.w = 1.0f;
-	t->v.s = ge_f24(ge.cmd[GE_VTCS]);
-	t->v.t = ge_f24(ge.cmd[GE_VTCT]);
-	t->v.q = ge_f24(ge.cmd[GE_VTCQ]);
-	if(t->v.q == 0.0f) t->v.q = 1.0f;
-	t->v.r = (float)(col & 0xFF); t->v.g = (float)((col >> 8) & 0xFF); t->v.b = (float)((col >> 16) & 0xFF);
-	t->v.a = (float)(vap & 0xFF);
-	t->v.fog = 1.0f;
-	ge_raster_begin();
-
-	if(prim == GE_PRIM_POINTS){ ge_raster_point(&t->v); n = 0; return; }
-	n++;
-	if((prim == GE_PRIM_LINES || prim == GE_PRIM_RECTANGLES) && n == 2){
-		if(prim == GE_PRIM_RECTANGLES) ge_raster_rectangle(&imm[0].v, &imm[1].v);
-		else ge_raster_line(&imm[0].v, &imm[1].v);
-		n = 0;
-	} else if(prim >= GE_PRIM_TRIANGLES && prim <= GE_PRIM_TRIANGLE_FAN && n == 3){
-		emit_triangle(&imm[0], &imm[1], &imm[2], 1, 0);
-		n = 0;
+	if(through){
+		x = (float)((int)(ge.cmd[GE_VSCX] & 0xFFFF) - 0x8000) / 16.0f;
+		y = (float)((int)(ge.cmd[GE_VSCY] & 0xFFFF) - 0x8000) / 16.0f;
+	} else {
+		x = (float)((int)(ge.cmd[GE_VSCX] & 0xFFFF) - (int)(ge.cmd[GE_OFFSETX] & 0xFFFF)) / 16.0f;
+		y = (float)((int)(ge.cmd[GE_VSCY] & 0xFFFF) - (int)(ge.cmd[GE_OFFSETY] & 0xFFFF)) / 16.0f;
 	}
+	z = (float)(ge.cmd[GE_VSCZ] & 0xFFFF);
+	color0 = (ge.cmd[GE_VCV] & 0xFFFFFF) | ((vap & 0xFF) << 24);
+
+	if(prim != GE_PRIM_CONTINUE){
+		imm_prim = prim;
+		/* Las banderas solo cuentan desde la primera */
+		imm_flags = vap & 0x00FFF800;
+		imm_first_sent = 0;
+	} else if(imm_prim == 0xFFFFFFFFu) return;
+
+	/* Un punto en (0, 0, 0) negro sale de limpiar el estado: se ignora */
+	if(imm_prim == GE_PRIM_POINTS && x == 0.0f && y == 0.0f && z == 0.0f && color0 == 0) return;
+
+	/* Las banderas mandan durante el dibujo (el antialias solo si cambia
+	   alguna otra) */
+	for(i = 1; i < 6; i++) if(((imm_flags & fl_bit[i]) != 0) != (int)(ge.cmd[fl_cmd[i]] & 1)) changed = 1;
+	for(i = 0; i < 6; i++) save[i] = ge.cmd[fl_cmd[i]];
+	if(changed) for(i = 0; i < 6; i++) ge.cmd[fl_cmd[i]] = (imm_flags & fl_bit[i]) ? 1 : 0;
+	ge.cmd[GE_CULL] = (imm_flags & 0x100000) ? 1 : 0;
+
+	/* El vértice ya transformado, con el viewport a escala 1 */
+	memset(&cv, 0, sizeof(cv));
+	cv.clip[0] = x; cv.clip[1] = y; cv.clip[2] = z; cv.clip[3] = 1.0f;
+	cv.v.s = ge_f24(ge.cmd[GE_VTCS]);
+	cv.v.t = ge_f24(ge.cmd[GE_VTCT]);
+	cv.v.q = ge_f24(ge.cmd[GE_VTCQ]);
+	if(through){
+		cv.v.s *= (float)(1 << (ge.cmd[GE_TEXSIZE0] & 0xF));
+		cv.v.t *= (float)(1 << ((ge.cmd[GE_TEXSIZE0] >> 8) & 0xF));
+	} else cv.clip[2] *= 1.0f / 65535.0f;
+	cv.v.clipw = 1.0f;
+	cv.v.color0 = color0;
+	cv.v.color1 = (ge.cmd[GE_LIGHTMODE] & 1) && !through ? (ge.cmd[GE_VSCV] & 0xFFFFFF) : 0;
+	cv.v.fogdepth = (float)(ge.cmd[GE_VFC] & 0xFF) / 255.0f;
+	cv.v.x = ge_f2i(x * 16.0f);
+	cv.v.y = ge_f2i(y * 16.0f);
+	cv.v.z = (u16)(u32)z;
+
+	vformat_setup(&f, ge.cmd[GE_VERTEXTYPE] | (3u << 7));
+	memset(&vr, 0, sizeof(vr));
+	vr.f = &f;
+	/* Antes del primero, una llamada vacía reinicia la primitiva */
+	if(!imm_first_sent) submit_primitive(&vr, imm_prim, 0);
+
+	switch(prev_prim_){
+	case GE_PRIM_LINE_STRIP:     data_[(data_index_++) & 1] = cv; break;
+	case GE_PRIM_TRIANGLE_STRIP: data_[(data_index_++) % 3] = cv; break;
+	case GE_PRIM_TRIANGLE_FAN:
+		if(data_index_ == 0) data_[data_index_++] = cv;
+		else data_[2 - ((data_index_++) % 2)] = cv;
+		break;
+	default:
+		if(data_index_ < 4) data_[data_index_++] = cv;
+		break;
+	}
+	is_imm_draw = 1;
+	cull_xy = 0;
+	submit_primitive(&vr, GE_PRIM_CONTINUE, 0);
+	cull_xy = 1;
+	is_imm_draw = 0;
+	imm_first_sent = 1;
+
+	ge.cmd[GE_CULL] = save_cull;
+	for(i = 0; i < 6; i++) ge.cmd[fl_cmd[i]] = save[i];
 }
 
 /* --- Parches bezier y spline -------------------------------------------------- */
@@ -749,113 +1600,129 @@ static void bernstein(float t, float *b){
 	b[3] = t * t * t;
 }
 
-/* Combina 16 puntos de control con pesos bu[4] x bv[4] */
-static void blend_patch(const RawVertex *cp[16], const float *bu, const float *bv, RawVertex *out){
-	int i, j, k;
+#define MAX_PATCH_DIV 64
+#define MAX_CONTROL   64
+
+static DecVertex ctrl[MAX_CONTROL * MAX_CONTROL];
+static DecVertex grid[(MAX_PATCH_DIV + 1) * (MAX_PATCH_DIV + 1)];
+
+static void weighted_sum(const DecVertex *const *cp, const float *w, int n, DecVertex *out){
+	float col[4] = { 0, 0, 0, 0 };
+	int i, k;
 	memset(out, 0, sizeof(*out));
-	for(j = 0; j < 4; j++)
-		for(i = 0; i < 4; i++){
-			float w = bu[i] * bv[j];
-			const RawVertex *p = cp[j * 4 + i];
-			for(k = 0; k < 3; k++){ out->pos[k] += p->pos[k] * w; out->nrm[k] += p->nrm[k] * w; }
-			for(k = 0; k < 4; k++) out->col[k] += p->col[k] * w;
-			for(k = 0; k < 2; k++) out->uv[k] += p->uv[k] * w;
-		}
+	for(i = 0; i < n; i++){
+		const DecVertex *p = cp[i];
+		for(k = 0; k < 3; k++){ out->pos[k] += p->pos[k] * w[i]; out->nrm[k] += p->nrm[k] * w[i]; }
+		for(k = 0; k < 4; k++) col[k] += (float)((p->color0 >> (8 * k)) & 0xFF) * w[i];
+		for(k = 0; k < 2; k++) out->uv[k] += p->uv[k] * w[i];
+	}
+	for(k = 0; k < 4; k++){
+		int c = (int)(col[k] + 0.5f);
+		out->color0 |= (u32)(c < 0 ? 0 : c > 255 ? 255 : c) << (8 * k);
+	}
 }
 
 /* Dibuja una rejilla de (nu+1) x (nv+1) vértices ya evaluados */
-static void draw_grid(const VFormat *f, RawVertex *grid, int nu, int nv, int gen_uv){
+static void draw_grid(const VFormat *f, int nu, int nv){
 	u32 prim_type = ge.cmd[GE_PATCHPRIMITIVE] & 3;
 	int facing = ge.cmd[GE_PATCHFACING] & 1;
-	int u, v;
+	int cull_on = (ge.cmd[GE_CULLFACEENABLE] & 1) && !(ge.cmd[GE_CLEARMODE] & 1);
+	int cull = cull_on ? ((ge.cmd[GE_CULL] & 1) ? CULL_CCW : CULL_CW) : CULL_OFF;
+	int u, v, k;
+	VSource vr;
+	GeClipVertex q[4], t[3];
+
+	memset(&vr, 0, sizeof(vr));
+	vr.f = f;
+	vr.list = grid;
 	ge_raster_begin();
-	for(v = 0; v <= nv; v++)
-		for(u = 0; u <= nu; u++){
-			RawVertex *r = &grid[v * (nu + 1) + u];
-			if(gen_uv){ r->uv[0] = (float)u / (float)nu; r->uv[1] = (float)v / (float)nv; }
-		}
 	for(v = 0; v < nv; v++)
 		for(u = 0; u < nu; u++){
-			TVertex q[4];
-			const RawVertex *r[4] = {
-				&grid[v * (nu + 1) + u], &grid[v * (nu + 1) + u + 1],
-				&grid[(v + 1) * (nu + 1) + u], &grid[(v + 1) * (nu + 1) + u + 1]
-			};
-			int k;
-			for(k = 0; k < 4; k++){
-				if(f->through){ memset(q[k].clip, 0, sizeof(q[k].clip)); through_vertex(r[k], &q[k].v); }
-				else transform(f, r[k], &q[k]);
-			}
+			u32 idx[4];
+			idx[0] = (u32)(v * (nu + 1) + u); idx[1] = idx[0] + 1;
+			idx[2] = idx[0] + (u32)(nu + 1); idx[3] = idx[2] + 1;
+			for(k = 0; k < 4; k++) read_raw(&vr, idx[k], &q[k]);
 			if(prim_type == 0){
-				if(facing){
-					emit_triangle(&q[0], &q[1], &q[2], f->through, 0);
-					emit_triangle(&q[1], &q[3], &q[2], f->through, 0);
-				} else {
-					emit_triangle(&q[0], &q[2], &q[1], f->through, 0);
-					emit_triangle(&q[1], &q[2], &q[3], f->through, 0);
-				}
+				if(facing){ t[0] = q[0]; t[1] = q[1]; t[2] = q[2]; }
+				else { t[0] = q[0]; t[1] = q[2]; t[2] = q[1]; }
+				send_triangle(cull, t, 2, 0);
+				if(facing){ t[0] = q[1]; t[1] = q[3]; t[2] = q[2]; }
+				else { t[0] = q[1]; t[1] = q[2]; t[2] = q[3]; }
+				send_triangle(cull, t, 2, 0);
 			} else if(prim_type == 1){
-				emit_two(&q[0], &q[1], f->through, 0);
-				emit_two(&q[0], &q[2], f->through, 0);
+				process_line(&q[0], &q[1]);
+				process_line(&q[0], &q[2]);
 			} else {
-				emit_point(&q[0], f->through);
+				process_point(&q[0]);
 			}
 		}
 }
 
-#define MAX_PATCH_DIV 64
-#define MAX_CONTROL   64
+/* Carga los puntos de control; devuelve el formato con que se leerán los
+   vértices generados (siempre con color y uv) */
+static int curve_setup(VFormat *f, int ucount, int vcount, int *udiv, int *vdiv, int *has_tc){
+	int i, j;
+	VSource s;
+	vformat_setup(f, ge.cmd[GE_VERTEXTYPE]);
+	if(ucount < 4 || vcount < 4 || ucount > MAX_CONTROL || vcount > MAX_CONTROL) return 0;
+	load_morph_weights();
+	setup_uv_prescale(f);
+	compute_transform_state(f);
+	*udiv = (int)(ge.cmd[GE_PATCHDIVISION] & 0x7F);
+	*vdiv = (int)((ge.cmd[GE_PATCHDIVISION] >> 8) & 0x7F);
+	if(*udiv < 1) *udiv = 1;
+	if(*vdiv < 1) *vdiv = 1;
+	if(*udiv > MAX_PATCH_DIV) *udiv = MAX_PATCH_DIV;
+	if(*vdiv > MAX_PATCH_DIV) *vdiv = MAX_PATCH_DIV;
+
+	memset(&s, 0, sizeof(s));
+	s.f = f;
+	s.iaddr = ge.iaddr;
+	for(j = 0; j < vcount; j++)
+		for(i = 0; i < ucount; i++){
+			u32 idx = (u32)(j * ucount + i), index = f->idx ? index_at(&s, (int)idx) : idx;
+			decode_vertex(f, mem_ptr(ge.vaddr + index * f->size, f->size), &ctrl[idx]);
+			if(!f->col) ctrl[idx].color0 = material_ambient_rgba();
+		}
+
+	*has_tc = f->tc != 0;
+	f->col = 7;
+	if(!*has_tc) f->tc = 3;
+	ge_stats.primitives++;
+	return 1;
+}
 
 void ge_draw_bezier(u32 arg){
 	VFormat f;
 	int ucount = (int)(arg & 0xFF), vcount = (int)((arg >> 8) & 0xFF);
-	int udiv = (int)(ge.cmd[GE_PATCHDIVISION] & 0xFF), vdiv = (int)((ge.cmd[GE_PATCHDIVISION] >> 8) & 0xFF);
-	int pu, pv, i, j;
-	static RawVertex ctrl[MAX_CONTROL * MAX_CONTROL];
-	static RawVertex grid[(MAX_PATCH_DIV + 1) * (MAX_PATCH_DIV + 1)];
+	int udiv, vdiv, pu, pv, i, j, has_tc;
+	if(!curve_setup(&f, ucount, vcount, &udiv, &vdiv, &has_tc)) return;
 
-	vformat_setup(&f, ge.cmd[GE_VERTEXTYPE]);
-	if(ucount < 4 || vcount < 4 || ucount > MAX_CONTROL || vcount > MAX_CONTROL) return;
-	if(!f.through) update_combined();
-	if(udiv < 1) udiv = 1;
-	if(vdiv < 1) vdiv = 1;
-	if(udiv > MAX_PATCH_DIV) udiv = MAX_PATCH_DIV;
-	if(vdiv > MAX_PATCH_DIV) vdiv = MAX_PATCH_DIV;
-	ge_stats.primitives++;
-
-	for(j = 0; j < vcount; j++)
-		for(i = 0; i < ucount; i++){
-			u32 idx = (u32)(j * ucount + i), index = idx;
-			if(f.idx == 1) index = mem_read8(ge.iaddr + idx);
-			else if(f.idx == 2) index = mem_read16(ge.iaddr + idx * 2);
-			else if(f.idx == 3) index = mem_read32(ge.iaddr + idx * 4) & 0xFFFF;
-			decode_vertex(&f, ge.vaddr + index * f.total, &ctrl[idx]);
-		}
-
-	/* Parches de 4x4 que comparten bordes (ucount = 3n + 1) */
 	for(pv = 0; pv + 3 < vcount; pv += 3)
 		for(pu = 0; pu + 3 < ucount; pu += 3){
-			const RawVertex *cp[16];
+			const DecVertex *cp[16];
 			int u, v;
 			for(j = 0; j < 4; j++)
 				for(i = 0; i < 4; i++) cp[j * 4 + i] = &ctrl[(pv + j) * ucount + pu + i];
 			for(v = 0; v <= vdiv; v++)
 				for(u = 0; u <= udiv; u++){
-					float bu[4], bv[4];
+					float bu[4], bv[4], w[16];
+					DecVertex *g = &grid[v * (udiv + 1) + u];
 					bernstein((float)u / (float)udiv, bu);
 					bernstein((float)v / (float)vdiv, bv);
-					blend_patch(cp, bu, bv, &grid[v * (udiv + 1) + u]);
-					if(!f.tc){
+					for(j = 0; j < 4; j++) for(i = 0; i < 4; i++) w[j * 4 + i] = bu[i] * bv[j];
+					weighted_sum(cp, w, 16, g);
+					if(!has_tc){
 						int npu = (ucount - 1) / 3, npv = (vcount - 1) / 3;
-						grid[v * (udiv + 1) + u].uv[0] = ((float)(pu / 3) + (float)u / (float)udiv) / (float)npu;
-						grid[v * (udiv + 1) + u].uv[1] = ((float)(pv / 3) + (float)v / (float)vdiv) / (float)npv;
+						g->uv[0] = ((float)(pu / 3) + (float)u / (float)udiv) / (float)npu;
+						g->uv[1] = ((float)(pv / 3) + (float)v / (float)vdiv) / (float)npv;
 					}
 				}
-			draw_grid(&f, grid, udiv, vdiv, 0);
+			draw_grid(&f, udiv, vdiv);
 		}
 }
 
-/* B-spline cúbica uniforme; los bordes "abiertos" repiten los extremos */
+/* B-spline cúbica uniforme */
 static float bspline_basis(int i, float t){
 	float it = 1.0f - t;
 	switch(i){
@@ -869,51 +1736,26 @@ static float bspline_basis(int i, float t){
 void ge_draw_spline(u32 arg){
 	VFormat f;
 	int ucount = (int)(arg & 0xFF), vcount = (int)((arg >> 8) & 0xFF);
-	int udiv = (int)(ge.cmd[GE_PATCHDIVISION] & 0xFF), vdiv = (int)((ge.cmd[GE_PATCHDIVISION] >> 8) & 0xFF);
-	int i, j, su, sv;
-	static RawVertex ctrl[MAX_CONTROL * MAX_CONTROL];
-	static RawVertex grid[(MAX_PATCH_DIV + 1) * (MAX_PATCH_DIV + 1)];
+	int udiv, vdiv, i, j, su, sv, has_tc;
+	if(!curve_setup(&f, ucount, vcount, &udiv, &vdiv, &has_tc)) return;
 
-	vformat_setup(&f, ge.cmd[GE_VERTEXTYPE]);
-	if(ucount < 4 || vcount < 4 || ucount > MAX_CONTROL || vcount > MAX_CONTROL) return;
-	if(!f.through) update_combined();
-	if(udiv < 1) udiv = 1;
-	if(vdiv < 1) vdiv = 1;
-	if(udiv > MAX_PATCH_DIV) udiv = MAX_PATCH_DIV;
-	if(vdiv > MAX_PATCH_DIV) vdiv = MAX_PATCH_DIV;
-	ge_stats.primitives++;
-
-	for(j = 0; j < vcount; j++)
-		for(i = 0; i < ucount; i++){
-			u32 idx = (u32)(j * ucount + i), index = idx;
-			if(f.idx == 1) index = mem_read8(ge.iaddr + idx);
-			else if(f.idx == 2) index = mem_read16(ge.iaddr + idx * 2);
-			else if(f.idx == 3) index = mem_read32(ge.iaddr + idx * 4) & 0xFFFF;
-			decode_vertex(&f, ge.vaddr + index * f.total, &ctrl[idx]);
-		}
-
-	/* Un segmento por cada ventana de 4 puntos de control */
 	for(sv = 0; sv + 3 < vcount; sv++)
 		for(su = 0; su + 3 < ucount; su++){
-			int u, v, k;
+			const DecVertex *cp[16];
+			int u, v;
+			for(j = 0; j < 4; j++)
+				for(i = 0; i < 4; i++) cp[j * 4 + i] = &ctrl[(sv + j) * ucount + su + i];
 			for(v = 0; v <= vdiv; v++)
 				for(u = 0; u <= udiv; u++){
-					RawVertex *out = &grid[v * (udiv + 1) + u];
-					float tu = (float)u / (float)udiv, tv = (float)v / (float)vdiv;
-					memset(out, 0, sizeof(*out));
-					for(j = 0; j < 4; j++)
-						for(i = 0; i < 4; i++){
-							float w = bspline_basis(i, tu) * bspline_basis(j, tv);
-							const RawVertex *p = &ctrl[(sv + j) * ucount + su + i];
-							for(k = 0; k < 3; k++){ out->pos[k] += p->pos[k] * w; out->nrm[k] += p->nrm[k] * w; }
-							for(k = 0; k < 4; k++) out->col[k] += p->col[k] * w;
-							for(k = 0; k < 2; k++) out->uv[k] += p->uv[k] * w;
-						}
-					if(!f.tc){
+					float tu = (float)u / (float)udiv, tv = (float)v / (float)vdiv, w[16];
+					DecVertex *out = &grid[v * (udiv + 1) + u];
+					for(j = 0; j < 4; j++) for(i = 0; i < 4; i++) w[j * 4 + i] = bspline_basis(i, tu) * bspline_basis(j, tv);
+					weighted_sum(cp, w, 16, out);
+					if(!has_tc){
 						out->uv[0] = ((float)su + tu) / (float)(ucount - 3);
 						out->uv[1] = ((float)sv + tv) / (float)(vcount - 3);
 					}
 				}
-			draw_grid(&f, grid, udiv, vdiv, 0);
+			draw_grid(&f, udiv, vdiv);
 		}
 }

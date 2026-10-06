@@ -11,6 +11,12 @@
  *   0x40000000 = sin caché, 0x80000000 = segmento de kernel.
  * Por eso toda dirección se enmascara con PSP_ADDR_MASK antes de traducirla.
  *
+ * La VRAM se ve cuatro veces. Los espejos 1 (0x04200000) y 3 (0x04600000)
+ * reordenan los bytes ("swizzle"): el GE guarda la profundidad en ese orden
+ * y el espejo 3 la muestra lineal. El orden depende de la traducción de
+ * EDRAM (sceGeEdramSetAddrTranslation); fórmulas medidas en una PSP real
+ * (pspautotests gpu/ge/edramswizzle).
+ *
  * Los búferes los aporta la plataforma (en el Wii, la RAM vive en MEM2).
  *
  * SPDX-License-Identifier: GPL-2.0-or-later
@@ -38,9 +44,26 @@ typedef struct {
 	u32 ram_size;
 	u8 *vram;
 	u8 *scratch;
+	u32 vram_translation;  /* 0 o 0x200-0x1000 (potencia de 2); 0x400 al arrancar */
 } PspMemory;
 
 extern PspMemory psp_mem;
+
+/* Offset lineal de la VRAM que se ve en el offset `off` (< 2 MB) del
+   espejo 1 (mirror3 = 0) o del espejo 3 (mirror3 = 1) */
+static inline u32 mem_vram_deswizzle(u32 off, int mirror3){
+	u32 t = psp_mem.vram_translation, k, x, m, h;
+	if(t == 0){
+		u32 b = off & 0x600;
+		return (!mirror3 || b == 0 || b == 0x600) ? off ^ 0x600 : off;
+	}
+	k = t >= 0x1000 ? 3 : t >= 0x800 ? 2 : t >= 0x400 ? 1 : 0;
+	x = 0x1000u << k;
+	if(!mirror3) return off ^ (x | 0x40);
+	m = (t - 1) & ~0x1Fu;
+	h = (t - 1) & ~0x7Fu;
+	return ((off ^ x) & ~m) | ((off & (h >> 1)) << 1) | ((~off & 0x20) << 1) | ((off >> (3 + k)) & 0x20);
+}
 
 /* Registra los búferes de la plataforma y los pone a cero.
    ram_size debe ser PSP_RAM_SIZE_32MB o PSP_RAM_SIZE_64MB. */
