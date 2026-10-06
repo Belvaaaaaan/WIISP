@@ -84,7 +84,11 @@ void hle_syscall(u32 code){
 		return;
 	}
 	if(resolved[code].func){
+		static int trace = -1;
+		if(trace < 0) trace = getenv("WIISP_TRACE_HLE") != NULL;
+		if(trace) hle_log("[HLE] %s(%08X, %08X, %08X) @%llu\n", resolved[code].name, cpu.r[R_A0], cpu.r[R_A1], cpu.r[R_A2], (unsigned long long)cpu_cycles);
 		resolved[code].func();
+		if(trace) hle_log("      -> %08X\n", cpu.r[R_V0]);
 		return;
 	}
 	if(!resolved[code].warned){

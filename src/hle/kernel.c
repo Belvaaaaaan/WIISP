@@ -167,6 +167,9 @@ static void schedule(void){
 			/* expulsado por uno de más prioridad: conserva su turno */
 		}
 	}
+	/* Cambiar de hilo cuesta unos 5 us en la PSP (1200 ciclos desde o hacia
+	   ocioso; medido por PPSSPP con threads/scheduling/handoff) */
+	if(cur >= 0 || best >= 0) cpu_cycles += (cur < 0 || best < 0) ? 1200 : 1150;
 	cur = best;
 	if(cur >= 0){
 		threads[cur].status = TH_RUNNING;
@@ -497,6 +500,13 @@ static void sceKernelCpuResumeIntr(void){
 }
 
 static void sceKernelIsCpuIntrEnable(void){ RETURN(intr_enabled); }
+
+int hle_get_intr_enabled(void){ return intr_enabled; }
+void hle_set_intr_enabled(int enabled){
+	intr_enabled = enabled;
+	/* Las interrupciones pendientes se atienden al volver al bucle */
+	if(enabled && pending_len) cpu_stop_requested = 1;
+}
 static void sceKernelIsCpuIntrSuspended(void){ RETURN(ARG(0) == 0 ? 1 : 0); }
 
 static void sceKernelSuspendDispatchThread(void){
@@ -517,7 +527,10 @@ static void sceKernelResumeDispatchThread(void){
 /* Algunas funciones del sistema tardan: el tiempo pasa sin ejecutar nada */
 void kernel_eat_cycles(u32 n){
 	cpu_cycles += n;
+	cpu_stop_requested = 1; /* pueden haber vencido eventos */
 }
+
+void kernel_reschedule(void){ request_resched(); }
 
 /* ------------------------------------------------------------------ */
 /* Bucle principal                                                    */
@@ -536,6 +549,8 @@ void kernel_run_until(u64 target){
 		}
 		limit = next_timeout();
 		ev = next_event();
+		/* El cambio de hilo gasta tiempo: puede haber vencido algo */
+		if(ev <= cpu_cycles || limit <= cpu_cycles) continue;
 		if(ev < limit) limit = ev;
 		if(limit > target) limit = target;
 		if(cur < 0){
@@ -862,6 +877,7 @@ static void sceKernelStartThread(void){
 	if(i < 0 || ARG(0) == 0){ RETURN(SCE_KERNEL_ERROR_UNKNOWN_THID); return; }
 	if(threads[i].status != TH_DORMANT){ RETURN(SCE_KERNEL_ERROR_NOT_DORMANT); return; }
 	RETURN(0);
+	kernel_eat_cycles(3400);
 	start_thread(i, ARG(1), ARG(2));
 }
 
@@ -985,6 +1001,7 @@ static void sceKernelRotateThreadReadyQueue(void){
 
 static void sceKernelGetThreadExitStatus(void){
 	int i = find_thread(ARG(0));
+	kernel_eat_cycles(330);
 	if(i < 0){ RETURN(SCE_KERNEL_ERROR_UNKNOWN_THID); return; }
 	if(threads[i].status != TH_DORMANT){ RETURN(SCE_KERNEL_ERROR_NOT_DORMANT); return; }
 	RETURN(threads[i].exit_status);
@@ -1050,14 +1067,20 @@ static void sceKernelCancelWakeupThread(void){
 	threads[i].wakeup_count = 0;
 }
 
+/* Un retardo nunca despierta justo a tiempo: como mínimo 210 us y, si no,
+   10 us de más (medido por PPSSPP en hardware) */
 static void delay_us(u64 us){
 	Thread *t = current();
 	if(!t) return;
+	us = us < 200 ? 210 : us + 10;
 	wait_current(W_DELAY, 0, 0);
 	t->wait_until = cpu_cycles + us * CYCLES_PER_US;
 }
 
-static void sceKernelDelayThread(void){ delay_us(ARG(0)); }
+static void sceKernelDelayThread(void){
+	kernel_eat_cycles(2000);
+	delay_us(ARG(0));
+}
 
 static void sceKernelDelaySysClockThread(void){
 	u32 p = ARG(0);
@@ -1078,8 +1101,10 @@ static void sceKernelWaitThreadEnd(void){
 /* Tiempo                                                             */
 /* ------------------------------------------------------------------ */
 
-static void sceKernelGetSystemTimeLow(void){ RETURN((u32)hle_now_us()); }
-static void sceKernelGetSystemTimeWide(void){ RETURN64(hle_now_us()); }
+/* Los costes en ciclos de estas llamadas son los medidos por PPSSPP en
+   hardware (sceKernelTime.cpp): deciden en qué momento cae una interrupción */
+static void sceKernelGetSystemTimeLow(void){ RETURN((u32)hle_now_us()); kernel_eat_cycles(165); }
+static void sceKernelGetSystemTimeWide(void){ RETURN64(hle_now_us()); kernel_eat_cycles(250); }
 
 static void sceKernelGetSystemTime(void){
 	u32 p = ARG(0);
@@ -1088,15 +1113,17 @@ static void sceKernelGetSystemTime(void){
 	mem_write32(p, (u32)now);
 	mem_write32(p + 4, (u32)(now >> 32));
 	RETURN(0);
+	kernel_eat_cycles(265);
 }
 
 static void sceKernelUSec2SysClock(void){
 	u32 p = ARG(1);
 	if(mem_valid(p, 8)){ mem_write32(p, ARG(0)); mem_write32(p + 4, 0); }
 	RETURN(0);
+	kernel_eat_cycles(165);
 }
 
-static void sceKernelUSec2SysClockWide(void){ RETURN64(ARG(0)); }
+static void sceKernelUSec2SysClockWide(void){ RETURN64(ARG(0)); kernel_eat_cycles(150); }
 
 static void sceKernelSysClock2USec(void){
 	u32 p = ARG(0), sec = ARG(1), usec = ARG(2);
@@ -1104,6 +1131,7 @@ static void sceKernelSysClock2USec(void){
 	if(sec) mem_write32(sec, (u32)(v / 1000000));
 	if(usec) mem_write32(usec, (u32)(v % 1000000));
 	RETURN(0);
+	kernel_eat_cycles(415);
 }
 
 static void sceKernelSysClock2USecWide(void){
@@ -1112,6 +1140,7 @@ static void sceKernelSysClock2USecWide(void){
 	if(sec) mem_write32(sec, (u32)(v / 1000000));
 	if(usec) mem_write32(usec, (u32)(v % 1000000));
 	RETURN(0);
+	kernel_eat_cycles(385);
 }
 
 
@@ -1119,9 +1148,10 @@ static void sceKernelLibcTime(void){
 	u32 t = HLE_EPOCH_BASE + (u32)(hle_now_us() / 1000000);
 	if(ARG(0)) mem_write32(ARG(0), t);
 	RETURN(t);
+	kernel_eat_cycles(3385);
 }
 
-static void sceKernelLibcClock(void){ RETURN((u32)hle_now_us()); }
+static void sceKernelLibcClock(void){ RETURN((u32)hle_now_us()); kernel_eat_cycles(330); }
 
 static void sceKernelLibcGettimeofday(void){
 	u64 now = hle_now_us();
@@ -1131,6 +1161,7 @@ static void sceKernelLibcGettimeofday(void){
 		mem_write32(tv + 4, (u32)(now % 1000000));
 	}
 	RETURN(0);
+	kernel_eat_cycles(1885);
 }
 
 /* ------------------------------------------------------------------ */

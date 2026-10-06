@@ -24,10 +24,12 @@ gpu/clut/shifts
 gpu/commands/basic
 gpu/commands/blend
 gpu/commands/blend565
+gpu/commands/blocktransfer
 gpu/commands/material
 gpu/complex/complex
 gpu/depth/precision
 gpu/depth/transformprecision
+gpu/displaylist/alignment
 gpu/dither/dither
 gpu/filtering/linear
 gpu/filtering/nearest
@@ -35,6 +37,14 @@ gpu/filtering/precisionlinear2d
 gpu/filtering/precisionlinear3d
 gpu/filtering/precisionnearest2d
 gpu/filtering/precisionnearest3d
+gpu/ge/break
+gpu/ge/breakwait
+gpu/ge/callbackstate
+gpu/ge/context
+gpu/ge/edram
+gpu/ge/enqueueparam
+gpu/ge/intrsuspend
+gpu/ge/queue
 gpu/primitives/continue
 gpu/primitives/indices
 gpu/primitives/indices32
@@ -69,6 +79,7 @@ gpu/vertices/colors
 gpu/vertices/texcoords
 hle/check_not_used_uids
 intr/intr
+intr/mfic
 intr/registersub
 intr/releasesub
 intr/suspended

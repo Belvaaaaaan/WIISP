@@ -63,6 +63,9 @@ u32 cpu_run(u32 max_cycles);
 /* Lo implementa el HLE: se llama al ejecutar `syscall code`, con cpu.pc ya
    apuntando a la instrucción siguiente. */
 void hle_syscall(u32 code);
+/* mfic / mtic: permiso de interrupciones de la CPU (lo lleva el kernel) */
+int  hle_get_intr_enabled(void);
+void hle_set_intr_enabled(int enabled);
 
 /* Llamado ante una instrucción inválida o un fallo grave */
 void cpu_fault(const char *what, u32 addr, u32 instr);

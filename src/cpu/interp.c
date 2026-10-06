@@ -323,7 +323,8 @@ static inline void step(void){
 	case 0x16: branch_likely((s32)R(RS) <= 0, pc, instr); break;      /* blezl */
 	case 0x17: branch_likely((s32)R(RS) > 0, pc, instr); break;       /* bgtzl */
 	case 0x1C:                                         /* special2: halt, mfic, mtic */
-		if(FUNC == 0x24) R(RT) = 0;
+		if(FUNC == 0x24) R(RT) = (u32)hle_get_intr_enabled();
+		else if(FUNC == 0x26) hle_set_intr_enabled(R(RT) & 1);
 		break;
 	case 0x1F: op_special3(instr, pc); break;
 	case 0x20: R(RT) = (u32)(s32)(s8)ld8(R(RS) + IMM, instr); break;   /* lb */

@@ -78,14 +78,14 @@ enum {
 };
 
 typedef struct {
-	u32 cmd[256];              /* último argumento (24 bits) de cada comando */
+	u32 cmd[256];              /* último argumento (24 bits) de cada comando;
+	                              los NUMBER de matrices llevan el contador */
 
 	float world[12], view[12], proj[16], tgen[12];
 	float bone[8][12];
-	u32 world_n, view_n, proj_n, tgen_n, bone_n;
 
-	u32 base;                  /* BASE: bits altos de las direcciones */
 	u32 offset;                /* ORIGIN / OFFSETADDR para saltos */
+	u32 vaddr, iaddr;          /* direcciones de vértices e índices ya resueltas */
 
 	u8  clut[2048];            /* CLUT cargada (en orden de la PSP) */
 	u32 clut_bytes;
@@ -122,7 +122,7 @@ static inline int ge_enabled(int c){ return ge.cmd[c] & 1; }
 
 /* Dirección de 32 bits a partir de un argumento de 24 bits y BASE */
 static inline u32 ge_address(u32 arg){
-	return ((ge.base << 8) & 0x0F000000u) | (arg & 0x00FFFFFFu);
+	return ((ge.cmd[GE_BASE] << 8) & 0x0F000000u) | (arg & 0x00FFFFFFu);
 }
 
 /* Modo "through": coordenadas ya en pantalla, sin transformar */

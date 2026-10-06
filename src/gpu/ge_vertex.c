@@ -609,7 +609,7 @@ static int npend, strip_parity, fan_have;
 
 void ge_draw_prim(u32 prim, u32 count){
 	VFormat f;
-	u32 vaddr = ge.cmd[GE_VADDR], iaddr = ge.cmd[GE_IADDR], i;
+	u32 vaddr = ge.vaddr, iaddr = ge.iaddr, i;
 	int cont = 0;
 	TVertex cur;
 
@@ -620,8 +620,8 @@ void ge_draw_prim(u32 prim, u32 count){
 	if(!count) return;
 	/* Sin formato de posición el GE no dibuja nada (pero avanza la dirección) */
 	if(!f.pos){
-		if(f.idx) ge.cmd[GE_IADDR] = iaddr + count * comp_size[f.idx & 3];
-		else ge.cmd[GE_VADDR] = vaddr + count * f.total;
+		if(f.idx) ge.iaddr = iaddr + count * comp_size[f.idx & 3];
+		else ge.vaddr = vaddr + count * f.total;
 		return;
 	}
 	if(!f.through) update_combined();
@@ -673,15 +673,15 @@ void ge_draw_prim(u32 prim, u32 count){
 	}
 
 	/* El GE avanza las direcciones tras dibujar */
-	if(f.idx) ge.cmd[GE_IADDR] = iaddr + count * comp_size[f.idx & 3];
-	else ge.cmd[GE_VADDR] = vaddr + count * f.total;
+	if(f.idx) ge.iaddr = iaddr + count * comp_size[f.idx & 3];
+	else ge.vaddr = vaddr + count * f.total;
 }
 
 /* --- Bounding box (para BJUMP) --------------------------------------------- */
 
 void ge_bounding_box(u32 count){
 	VFormat f;
-	u32 i, vaddr = ge.cmd[GE_VADDR];
+	u32 i, vaddr = ge.vaddr;
 	int out_left = 1, out_right = 1, out_top = 1, out_bottom = 1, out_near = 1, out_far = 1;
 	vformat_setup(&f, ge.cmd[GE_VERTEXTYPE]);
 	if(f.through || count == 0){ ge.bbox_visible = 1; return; }
@@ -826,10 +826,10 @@ void ge_draw_bezier(u32 arg){
 	for(j = 0; j < vcount; j++)
 		for(i = 0; i < ucount; i++){
 			u32 idx = (u32)(j * ucount + i), index = idx;
-			if(f.idx == 1) index = mem_read8(ge.cmd[GE_IADDR] + idx);
-			else if(f.idx == 2) index = mem_read16(ge.cmd[GE_IADDR] + idx * 2);
-			else if(f.idx == 3) index = mem_read32(ge.cmd[GE_IADDR] + idx * 4) & 0xFFFF;
-			decode_vertex(&f, ge.cmd[GE_VADDR] + index * f.total, &ctrl[idx]);
+			if(f.idx == 1) index = mem_read8(ge.iaddr + idx);
+			else if(f.idx == 2) index = mem_read16(ge.iaddr + idx * 2);
+			else if(f.idx == 3) index = mem_read32(ge.iaddr + idx * 4) & 0xFFFF;
+			decode_vertex(&f, ge.vaddr + index * f.total, &ctrl[idx]);
 		}
 
 	/* Parches de 4x4 que comparten bordes (ucount = 3n + 1) */
@@ -886,10 +886,10 @@ void ge_draw_spline(u32 arg){
 	for(j = 0; j < vcount; j++)
 		for(i = 0; i < ucount; i++){
 			u32 idx = (u32)(j * ucount + i), index = idx;
-			if(f.idx == 1) index = mem_read8(ge.cmd[GE_IADDR] + idx);
-			else if(f.idx == 2) index = mem_read16(ge.cmd[GE_IADDR] + idx * 2);
-			else if(f.idx == 3) index = mem_read32(ge.cmd[GE_IADDR] + idx * 4) & 0xFFFF;
-			decode_vertex(&f, ge.cmd[GE_VADDR] + index * f.total, &ctrl[idx]);
+			if(f.idx == 1) index = mem_read8(ge.iaddr + idx);
+			else if(f.idx == 2) index = mem_read16(ge.iaddr + idx * 2);
+			else if(f.idx == 3) index = mem_read32(ge.iaddr + idx * 4) & 0xFFFF;
+			decode_vertex(&f, ge.vaddr + index * f.total, &ctrl[idx]);
 		}
 
 	/* Un segmento por cada ventana de 4 puntos de control */

@@ -176,6 +176,8 @@ void kernel_schedule_event(u64 when, KernelEventFunc fn, u64 userdata);
 s64  kernel_unschedule_event(KernelEventFunc fn, u64 userdata);
 /* El tiempo avanza sin ejecutar instrucciones (coste de una llamada) */
 void kernel_eat_cycles(u32 n);
+/* Pide revisar qué hilo debe correr al volver del syscall */
+void kernel_reschedule(void);
 
 /* Interrupciones (kernel.c) */
 #define PSP_GE_INTR      25
