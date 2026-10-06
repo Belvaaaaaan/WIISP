@@ -243,8 +243,15 @@ static void test_memory(void){
 	CHECK(!mem_valid(0x00014000, 1));
 	CHECK(!mem_valid(0x0000FFFF, 1));
 	mem_write32(0x04000010, 0xCAFEBABEu);
-	CHECK_EQ(mem_read32(0x04200010), 0xCAFEBABEu);
-	CHECK_EQ(mem_read32(0x44600010), 0xCAFEBABEu);
+	CHECK_EQ(mem_read32(0x04400010), 0xCAFEBABEu);   /* espejo 2: lineal */
+	CHECK_EQ(mem_read32(0x44400010), 0xCAFEBABEu);
+	/* Espejos 1 y 3: con el swizzle del hardware */
+	mem_write32(0x04200010, 0x12345678u);
+	CHECK_EQ(mem_read32(0x04200010), 0x12345678u);
+	CHECK_EQ(mem_read32(0x04000000u + mem_vram_deswizzle(0x10, 0)), 0x12345678u);
+	mem_write32(0x44600020, 0x9ABCDEF0u);
+	CHECK_EQ(mem_read32(0x04600020), 0x9ABCDEF0u);
+	CHECK_EQ(mem_read32(0x04000000u + mem_vram_deswizzle(0x20, 1)), 0x9ABCDEF0u);
 	CHECK(!mem_valid(0x04800000, 1));
 
 	/* Direcciones inválidas leen 0 y no escriben */

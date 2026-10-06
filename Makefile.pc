@@ -10,7 +10,7 @@
 CC       ?= cc
 OUT      ?= build-pc
 CFLAGS   ?= -O1 -g
-CFLAGS   += -std=gnu11 -Wall -Wextra -Wno-unused-parameter -Isrc
+CFLAGS   += -std=gnu11 -fwrapv -Wall -Wextra -Wno-unused-parameter -Isrc
 SANITIZE ?= -fsanitize=address,undefined -fno-omit-frame-pointer
 
 CORE_SRC := $(wildcard src/core/*.c) $(wildcard src/loader/*.c) $(wildcard src/cpu/*.c) $(wildcard src/hle/*.c) $(wildcard src/gpu/*.c)
@@ -40,14 +40,14 @@ eboot: $(OUT)/tests
 
 $(OUT)/tests-ppc: $(TEST_SRC) $(wildcard src/*/*.h tests/*.h)
 	@mkdir -p $(OUT)
-	$(PPC_CC) -O2 -std=gnu11 -Wall -Wextra -Wno-unused-parameter -Isrc -static -o $@ $(TEST_SRC) -lm
+	$(PPC_CC) -O2 -std=gnu11 -fwrapv -Wall -Wextra -Wno-unused-parameter -Isrc -static -o $@ $(TEST_SRC) -lm
 
 # CLI para PowerPC big-endian (se ejecuta con qemu-ppc)
 cli-ppc: $(OUT)/wiisp-cli-ppc
 
 $(OUT)/wiisp-cli-ppc: $(CLI_SRC) $(wildcard src/*/*.h)
 	@mkdir -p $(OUT)
-	$(PPC_CC) -O2 -std=gnu11 -Wall -Wextra -Wno-unused-parameter -Isrc -static -o $@ $(CLI_SRC) -lm
+	$(PPC_CC) -O2 -std=gnu11 -fwrapv -Wall -Wextra -Wno-unused-parameter -Isrc -static -o $@ $(CLI_SRC) -lm
 
 test-ppc: $(OUT)/tests-ppc
 	$(QEMU_PPC) ./$(OUT)/tests-ppc

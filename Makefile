@@ -19,7 +19,7 @@ SOURCES		:=	src/core src/loader src/cpu src/hle src/gpu src/frontend src/wii
 INCLUDES	:=	src
 
 #---------------------------------------------------------------------------------
-CFLAGS		=	-O2 -Wall -Wextra -Wno-unused-parameter -std=gnu11 $(MACHDEP) $(INCLUDE)
+CFLAGS		=	-O2 -fwrapv -Wall -Wextra -Wno-unused-parameter -std=gnu11 $(MACHDEP) $(INCLUDE)
 LDFLAGS		=	$(MACHDEP) -Wl,-Map,$(notdir $@).map
 
 LIBS		:=	-lfat -lwiiuse -lbte -logc -lm

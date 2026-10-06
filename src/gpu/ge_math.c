@@ -143,8 +143,10 @@ float ge_row_sum(const GeRowTerm *terms, int count){
 	for(i = 0; i < count; i++) if(terms[i].lsb_exp > lsb) lsb = terms[i].lsb_exp;
 	for(i = 0; i < count; i++){
 		s32 m = terms[i].mantissa;
-		int shift = lsb - terms[i].lsb_exp;
-		if(m != 0 && shift < 32) sum += m < 0 ? -((-m) >> shift) : (m >> shift);
+		int shift;
+		if(m == 0) continue;   /* los nulos llevan INT_MIN de exponente */
+		shift = lsb - terms[i].lsb_exp;
+		if(shift < 32) sum += m < 0 ? -((-m) >> shift) : (m >> shift);
 	}
 	if(sum == 0) return 0.0f;
 	return ge_trunc24(ldexpf((float)sum, lsb));

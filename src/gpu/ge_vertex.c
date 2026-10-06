@@ -725,8 +725,8 @@ static int round_to_screen(float sx, float sy, float sz, const float *clip, int 
 		else if(sz > 65535.0f) sz = 65535.0f;
 	} else if(sx > SCREEN_BOUND || sy >= SCREEN_BOUND || sx < 0 || sy < 0 || sz < 0.0f || sz >= 65536.0f)
 		outside = 1;
-	v->x = ge_f2i(floorf(sx * 16.0f)) - (int)(ge.cmd[GE_OFFSETX] & 0xFFFF);
-	v->y = ge_f2i(floorf(sy * 16.0f)) - (int)(ge.cmd[GE_OFFSETY] & 0xFFFF);
+	v->x = (int)((u32)ge_f2i(floorf(sx * 16.0f)) - (ge.cmd[GE_OFFSETX] & 0xFFFF));
+	v->y = (int)((u32)ge_f2i(floorf(sy * 16.0f)) - (ge.cmd[GE_OFFSETY] & 0xFFFF));
 	v->z = (u16)(u32)ge_f2i(sz);
 	return outside;
 }
@@ -1174,7 +1174,8 @@ typedef struct {
 	u32 vaddr, iaddr;
 	int use_indices, use_cache, zero;
 	u32 lower, upper;
-	const DecVertex *list;
+	const DecVertex *list;     /* vértices ya decodificados (curvas) */
+	const u16 *idx_list;       /* sus índices */
 	GeClipVertex *cache;
 } VSource;
 
@@ -1182,6 +1183,7 @@ static GeClipVertex *vcache;
 static int vcache_cap;
 
 static u32 index_at(const VSource *s, int i){
+	if(s->idx_list) return s->idx_list[i];
 	switch(s->f->idx){
 	case 1: return mem_read8(s->iaddr + (u32)i);
 	case 2: return mem_read16(s->iaddr + (u32)i * 2);
@@ -1589,173 +1591,362 @@ void ge_immediate_vertex(void){
 	for(i = 0; i < 6; i++) ge.cmd[fl_cmd[i]] = save[i];
 }
 
-/* --- Parches bezier y spline -------------------------------------------------- */
+/* --- Parches bezier y spline (SplineCommon.cpp) ------------------------------
+   Como los evalúa el GE (gpu/probe exp48-51, exp139-145): el parámetro es
+   k/256 redondeado hacia el centro del parche y se evalúan primero las
+   columnas (v) y luego las filas (u), por de Casteljau (bezier) o de Boor
+   (spline). Posiciones y uv: cada interpolación en punto fijo de 16 bits al
+   exponente del mayor operando, a + floor((b - a) k / 256). Colores: lo
+   mismo sobre (c << 7) | 0x7F. Normales: el producto cruzado (sumado como
+   lo hace la unidad de matrices) de dos tangentes. Los vértices generados
+   se dibujan como una lista indexada de triángulos, líneas o puntos. */
 
-/* Base de Bernstein cúbica */
-static void bernstein(float t, float *b){
-	float it = 1.0f - t;
-	b[0] = it * it * it;
-	b[1] = 3.0f * t * it * it;
-	b[2] = 3.0f * t * t * it;
-	b[3] = t * t * t;
+static int bezier_param256(int i, int n){
+	return 2 * i <= n ? (256 * i) / n : 256 - (256 * (n - i)) / n;
 }
 
-#define MAX_PATCH_DIV 64
-#define MAX_CONTROL   64
+static inline int to_fixed16(u32 bits, int ex, int e){
+	int m;
+	if(ex == 0 || e - ex >= 16) return 0;
+	m = (int)(((bits & 0x7FFFFF) | 0x800000) >> (e - ex + 8));
+	return (bits & 0x80000000u) ? -m : m;
+}
 
-static DecVertex ctrl[MAX_CONTROL * MAX_CONTROL];
-static DecVertex grid[(MAX_PATCH_DIV + 1) * (MAX_PATCH_DIV + 1)];
+static float ge_bezier_lerp(float a, float b, int k){
+	u32 ba, bb, scale_bits;
+	int ea, eb, e, fa, fb, r;
+	float scale;
+	if(k == 0) return a;
+	if(k == 256) return b;
+	memcpy(&ba, &a, 4);
+	memcpy(&bb, &b, 4);
+	ea = (int)((ba >> 23) & 0xFF);
+	eb = (int)((bb >> 23) & 0xFF);
+	e = ea > eb ? ea : eb;
+	if(e == 0) return 0.0f;
+	fa = to_fixed16(ba, ea, e);
+	fb = to_fixed16(bb, eb, e);
+	r = fa + (((fb - fa) * k) >> 8);
+	/* r * 2^(e - 127 - 15), exacto */
+	if(e <= 15) return ldexpf((float)r, e - 127 - 15);
+	scale_bits = (u32)(e - 15) << 23;
+	memcpy(&scale, &scale_bits, 4);
+	return (float)r * scale;
+}
 
-static void weighted_sum(const DecVertex *const *cp, const float *w, int n, DecVertex *out){
-	float col[4] = { 0, 0, 0, 0 };
-	int i, k;
+/* También devuelve los dos últimos puntos de de Casteljau (para la normal) */
+static float ge_bezier_eval(const float *p, int k, float *ab, float *bc){
+	float a = ge_bezier_lerp(p[0], p[1], k), b = ge_bezier_lerp(p[1], p[2], k), c = ge_bezier_lerp(p[2], p[3], k);
+	float l = ge_bezier_lerp(a, b, k), r = ge_bezier_lerp(b, c, k);
+	if(ab){ *ab = l; *bc = r; }
+	return ge_bezier_lerp(l, r, k);
+}
+
+static inline int lerp_color(int a, int b, int k){ return a + (((b - a) * k) >> 8); }
+
+static int ge_bezier_eval_color(const int *p, int k){
+	int a = lerp_color(p[0], p[1], k), b = lerp_color(p[1], p[2], k), c = lerp_color(p[2], p[3], k);
+	return lerp_color(lerp_color(a, b, k), lerp_color(b, c, k), k);
+}
+
+/* de Boor en t = k/256: cada factor (t - K[i]) / tramo sale del nudo más
+   cercano de los dos, en 1/256. Un extremo abierto repite su nudo cuatro
+   veces; uno cerrado conserva el espaciado unidad. */
+typedef struct { int seg, alpha[6], k; } SplineParam;
+
+static int spline_knot(int i, int npatches, int type){
+	if(i < 3 && (type & 1)) return 0;
+	if(i > npatches + 3 && (type & 2)) return npatches;
+	return i - 3;
+}
+
+static SplineParam spline_param_at(int index, int tess, int npatches, int type){
+	static const int rs[6] = { 1, 1, 1, 2, 2, 3 };
+	SplineParam p;
+	int l, n, is[6];
+	p.seg = index / tess;
+	p.k = bezier_param256(index % tess, tess);
+	if(p.seg == npatches){ p.seg = npatches - 1; p.k = 256; }
+	l = p.seg + 3;
+	is[0] = l - 2; is[1] = l - 1; is[2] = l; is[3] = l - 1; is[4] = l; is[5] = l;
+	for(n = 0; n < 6; n++){
+		int i = is[n];
+		int span = spline_knot(i + 4 - rs[n], npatches, type) - spline_knot(i, npatches, type);
+		int dl = 256 * (p.seg - spline_knot(i, npatches, type)) + p.k;
+		int dr = 256 * span - dl;
+		p.alpha[n] = span == 0 ? 0 : (dl <= dr ? dl / span : 256 - dr / span);
+	}
+	return p;
+}
+
+static float ge_spline_eval(const float *d, const int *a, float *ab, float *bc){
+	float l0 = ge_bezier_lerp(d[0], d[1], a[0]), l1 = ge_bezier_lerp(d[1], d[2], a[1]), l2 = ge_bezier_lerp(d[2], d[3], a[2]);
+	float m0 = ge_bezier_lerp(l0, l1, a[3]), m1 = ge_bezier_lerp(l1, l2, a[4]);
+	if(ab){ *ab = m0; *bc = m1; }
+	return ge_bezier_lerp(m0, m1, a[5]);
+}
+
+static int ge_spline_eval_color(const int *d, const int *a){
+	int l0 = lerp_color(d[0], d[1], a[0]), l1 = lerp_color(d[1], d[2], a[1]), l2 = lerp_color(d[2], d[3], a[2]);
+	return lerp_color(lerp_color(l0, l1, a[3]), lerp_color(l1, l2, a[4]), a[5]);
+}
+
+/* Una columna de puntos de control evaluada en un v */
+typedef struct {
+	float pos[3], ab[3], bc[3], tex[2];
+	int col[4];   /* 15 bits */
+} CurveColumn;
+
+typedef struct {
+	int sample_nrm, sample_col, sample_tex, facing;
+	const DecVertex *const *pts;    /* puntos de control por índice */
+	u32 defcolor;
+} CurveCtx;
+
+static void column_eval(const CurveCtx *cx, CurveColumn *col, const int *idx, int is_spline, int k, const int *alpha){
+	int j, r;
+	for(j = 0; j < 3; j++){
+		float p[4];
+		for(r = 0; r < 4; r++) p[r] = cx->pts[idx[r]]->pos[j];
+		col->pos[j] = is_spline ? ge_spline_eval(p, alpha, &col->ab[j], &col->bc[j]) : ge_bezier_eval(p, k, &col->ab[j], &col->bc[j]);
+	}
+	if(cx->sample_tex)
+		for(j = 0; j < 2; j++){
+			float p[4];
+			for(r = 0; r < 4; r++) p[r] = cx->pts[idx[r]]->uv[j];
+			col->tex[j] = is_spline ? ge_spline_eval(p, alpha, NULL, NULL) : ge_bezier_eval(p, k, NULL, NULL);
+		}
+	if(cx->sample_col)
+		for(j = 0; j < 4; j++){
+			int p[4];
+			for(r = 0; r < 4; r++) p[r] = (int)(((cx->pts[idx[r]]->color0 >> (8 * j)) & 0xFF) << 7) | 0x7F;
+			col->col[j] = is_spline ? ge_spline_eval_color(p, alpha) : ge_bezier_eval_color(p, k);
+		}
+}
+
+/* El vértice en (u, v) a partir de las cuatro columnas */
+static void row_eval(const CurveCtx *cx, const CurveColumn *cols, DecVertex *out, int is_spline, int k, const int *alpha, float gen_u, float gen_v){
+	float tu[3], tv[3];
+	int j;
 	memset(out, 0, sizeof(*out));
-	for(i = 0; i < n; i++){
-		const DecVertex *p = cp[i];
-		for(k = 0; k < 3; k++){ out->pos[k] += p->pos[k] * w[i]; out->nrm[k] += p->nrm[k] * w[i]; }
-		for(k = 0; k < 4; k++) col[k] += (float)((p->color0 >> (8 * k)) & 0xFF) * w[i];
-		for(k = 0; k < 2; k++) out->uv[k] += p->uv[k] * w[i];
+	for(j = 0; j < 3; j++){
+		float row[4] = { cols[0].pos[j], cols[1].pos[j], cols[2].pos[j], cols[3].pos[j] }, ab, bc;
+		out->pos[j] = is_spline ? ge_spline_eval(row, alpha, &ab, &bc) : ge_bezier_eval(row, k, &ab, &bc);
+		if(cx->sample_nrm){
+			float ab_row[4] = { cols[0].ab[j], cols[1].ab[j], cols[2].ab[j], cols[3].ab[j] };
+			float bc_row[4] = { cols[0].bc[j], cols[1].bc[j], cols[2].bc[j], cols[3].bc[j] };
+			tu[j] = ge_add(bc, -ab);
+			if(is_spline) tv[j] = ge_add(ge_spline_eval(bc_row, alpha, NULL, NULL), -ge_spline_eval(ab_row, alpha, NULL, NULL));
+			else tv[j] = ge_add(ge_bezier_eval(bc_row, k, NULL, NULL), -ge_bezier_eval(ab_row, k, NULL, NULL));
+		}
 	}
-	for(k = 0; k < 4; k++){
-		int c = (int)(col[k] + 0.5f);
-		out->color0 |= (u32)(c < 0 ? 0 : c > 255 ? 255 : c) << (8 * k);
+	if(cx->sample_col){
+		for(j = 0; j < 4; j++){
+			int row[4] = { cols[0].col[j], cols[1].col[j], cols[2].col[j], cols[3].col[j] };
+			int c = is_spline ? ge_spline_eval_color(row, alpha) : ge_bezier_eval_color(row, k);
+			out->color0 |= (u32)((c >> 7) & 0xFF) << (8 * j);
+		}
+	} else out->color0 = cx->defcolor;
+	if(cx->sample_tex){
+		for(j = 0; j < 2; j++){
+			float row[4] = { cols[0].tex[j], cols[1].tex[j], cols[2].tex[j], cols[3].tex[j] };
+			out->uv[j] = is_spline ? ge_spline_eval(row, alpha, NULL, NULL) : ge_bezier_eval(row, k, NULL, NULL);
+		}
+	} else {
+		/* Generadas: el propio parámetro (gpu/probe exp140) */
+		out->uv[0] = gen_u;
+		out->uv[1] = gen_v;
 	}
+	if(cx->sample_nrm){
+		/* Sin normalizar: las luces lo hacen (gpu/probe exp142) */
+		for(j = 0; j < 3; j++){
+			int j1 = (j + 1) % 3, j2 = (j + 2) % 3;
+			GeRowTerm t[2];
+			t[0] = ge_product(tu[j1], tv[j2]);
+			t[1] = ge_product(-tu[j2], tv[j1]);
+			out->nrm[j] = ge_row_sum(t, 2);
+			if(cx->facing) out->nrm[j] *= -1.0f;
+		}
+	} else out->nrm[2] = 1.0f;
 }
 
-/* Dibuja una rejilla de (nu+1) x (nv+1) vértices ya evaluados */
-static void draw_grid(const VFormat *f, int nu, int nv){
-	u32 prim_type = ge.cmd[GE_PATCHPRIMITIVE] & 3;
-	int facing = ge.cmd[GE_PATCHFACING] & 1;
-	int cull_on = (ge.cmd[GE_CULLFACEENABLE] & 1) && !(ge.cmd[GE_CLEARMODE] & 1);
-	int cull = cull_on ? ((ge.cmd[GE_CULL] & 1) ? CULL_CCW : CULL_CW) : CULL_OFF;
-	int u, v, k;
-	VSource vr;
-	GeClipVertex q[4], t[3];
+static DecVertex *curve_cp, *curve_out;
+static const DecVertex **curve_pts;
+static u16 *curve_idx;
+static CurveColumn *curve_cols;
+static size_t curve_cp_cap, curve_out_cap, curve_pts_cap, curve_idx_cap, curve_cols_cap;
 
-	memset(&vr, 0, sizeof(vr));
-	vr.f = f;
-	vr.list = grid;
-	ge_raster_begin();
+static void *grow(void *p, size_t *cap, size_t need, size_t elem){
+	if(need <= *cap) return p;
+	p = realloc(p, need * elem);
+	*cap = p ? need : 0;
+	return p;
+}
+
+/* Un cuadrilátero de la rejilla: líneas en zigzag (borde izquierdo abajo,
+   diagonal arriba, borde derecho abajo; gpu/probe exp175) o dos triángulos */
+static void quad_index(u16 **o, int prim_type, int i0, int i1, int i2, int i3){
+	u16 *p = *o;
+	if(prim_type == 1){ *p++ = (u16)i0; *p++ = (u16)i2; *p++ = (u16)i2; *p++ = (u16)i1; *p++ = (u16)i1; *p++ = (u16)i3; }
+	else { *p++ = (u16)i0; *p++ = (u16)i2; *p++ = (u16)i1; *p++ = (u16)i1; *p++ = (u16)i2; *p++ = (u16)i3; }
+	*o = p;
+}
+
+static void build_index(u16 **o, int nu, int nv, int prim_type, int total){
+	int u, v;
 	for(v = 0; v < nv; v++)
 		for(u = 0; u < nu; u++){
-			u32 idx[4];
-			idx[0] = (u32)(v * (nu + 1) + u); idx[1] = idx[0] + 1;
-			idx[2] = idx[0] + (u32)(nu + 1); idx[3] = idx[2] + 1;
-			for(k = 0; k < 4; k++) read_raw(&vr, idx[k], &q[k]);
-			if(prim_type == 0){
-				if(facing){ t[0] = q[0]; t[1] = q[1]; t[2] = q[2]; }
-				else { t[0] = q[0]; t[1] = q[2]; t[2] = q[1]; }
-				send_triangle(cull, t, 2, 0);
-				if(facing){ t[0] = q[1]; t[1] = q[3]; t[2] = q[2]; }
-				else { t[0] = q[1]; t[1] = q[2]; t[2] = q[3]; }
-				send_triangle(cull, t, 2, 0);
-			} else if(prim_type == 1){
-				process_line(&q[0], &q[1]);
-				process_line(&q[0], &q[2]);
-			} else {
-				process_point(&q[0]);
+			int i0 = v * (nu + 1) + u + total, i2 = (v + 1) * (nu + 1) + u + total;
+			quad_index(o, prim_type, i0, i0 + 1, i2, i2 + 1);
+		}
+}
+
+#define CURVE_MAX_VERTS 65536
+
+static void submit_curve(u32 arg, int is_spline){
+	VFormat f, gf;
+	VSource vr, s;
+	int nu = (int)(arg & 0xFF), nv = (int)((arg >> 8) & 0xFF), num_points = nu * nv;
+	int tess_u = (int)(ge.cmd[GE_PATCHDIVISION] & 0x7F), tess_v = (int)((ge.cmd[GE_PATCHDIVISION] >> 8) & 0x7F);
+	int type_u = (int)((arg >> 16) & 3), type_v = (int)((arg >> 18) & 3);
+	int prim_type = (int)(ge.cmd[GE_PATCHPRIMITIVE] & 3), npu, npv, nverts, nquads, i;
+	u32 vaddr = ge.vaddr, iaddr = ge.iaddr, lo = 0, hi;
+	u16 *op;
+	CurveCtx cx;
+	static const u32 prims[4] = { GE_PRIM_TRIANGLES, GE_PRIM_LINES, GE_PRIM_POINTS, GE_PRIM_POINTS };
+
+	vformat_setup(&f, ge.cmd[GE_VERTEXTYPE]);
+	if(!mem_valid(vaddr, 1)) return;
+	if(f.idx && !mem_valid(iaddr, 1)) return;
+
+	/* Con menos de 4 puntos en u o v el hardware no dibuja nada; los
+	   índices avanzan igual, los vértices no */
+	if(nu >= 4 && nv >= 4){
+		load_morph_weights();
+		uv_prescale = 0;
+		memset(&s, 0, sizeof(s));
+		s.f = &f;
+		s.iaddr = iaddr;
+		hi = (u32)num_points - 1;
+		if(f.idx){
+			lo = 0xFFFF; hi = 0;
+			for(i = 0; i < num_points; i++){
+				u32 v = index_at(&s, i);
+				if(v > hi) hi = v;
+				if(v < lo) lo = v;
 			}
 		}
-}
-
-/* Carga los puntos de control; devuelve el formato con que se leerán los
-   vértices generados (siempre con color y uv) */
-static int curve_setup(VFormat *f, int ucount, int vcount, int *udiv, int *vdiv, int *has_tc){
-	int i, j;
-	VSource s;
-	vformat_setup(f, ge.cmd[GE_VERTEXTYPE]);
-	if(ucount < 4 || vcount < 4 || ucount > MAX_CONTROL || vcount > MAX_CONTROL) return 0;
-	load_morph_weights();
-	setup_uv_prescale(f);
-	compute_transform_state(f);
-	*udiv = (int)(ge.cmd[GE_PATCHDIVISION] & 0x7F);
-	*vdiv = (int)((ge.cmd[GE_PATCHDIVISION] >> 8) & 0x7F);
-	if(*udiv < 1) *udiv = 1;
-	if(*vdiv < 1) *vdiv = 1;
-	if(*udiv > MAX_PATCH_DIV) *udiv = MAX_PATCH_DIV;
-	if(*vdiv > MAX_PATCH_DIV) *vdiv = MAX_PATCH_DIV;
-
-	memset(&s, 0, sizeof(s));
-	s.f = f;
-	s.iaddr = ge.iaddr;
-	for(j = 0; j < vcount; j++)
-		for(i = 0; i < ucount; i++){
-			u32 idx = (u32)(j * ucount + i), index = f->idx ? index_at(&s, (int)idx) : idx;
-			decode_vertex(f, mem_ptr(ge.vaddr + index * f->size, f->size), &ctrl[idx]);
-			if(!f->col) ctrl[idx].color0 = material_ambient_rgba();
+		curve_cp = grow(curve_cp, &curve_cp_cap, hi + 1, sizeof(DecVertex));
+		curve_pts = grow(curve_pts, &curve_pts_cap, (size_t)num_points, sizeof(*curve_pts));
+		if(!curve_cp || !curve_pts) goto advance;
+		for(i = (int)lo; i <= (int)hi; i++){
+			DecVertex *d = &curve_cp[i];
+			if(vaddr & (f.biggest - 1)) memset(d, 0, sizeof(*d));
+			else decode_vertex(&f, mem_ptr(vaddr + (u32)i * f.size, f.size), d);
+			if(!f.tc){ d->uv[0] = 0.0f; d->uv[1] = 0.0f; }
+			if(!f.col) d->color0 = material_ambient_rgba();
+			if(!f.nrm){ d->nrm[0] = 0.0f; d->nrm[1] = 0.0f; d->nrm[2] = 1.0f; }
 		}
+		for(i = 0; i < num_points; i++) curve_pts[i] = &curve_cp[f.idx ? index_at(&s, i) : (u32)i];
 
-	*has_tc = f->tc != 0;
-	f->col = 7;
-	if(!*has_tc) f->tc = 3;
-	ge_stats.primitives++;
-	return 1;
-}
+		if(tess_u < 1) tess_u = 1;
+		if(tess_v < 1) tess_v = 1;
+		if(is_spline){ npu = nu - 3; npv = nv - 3; }
+		else { npu = (nu - 1) / 3; npv = (nv - 1) / 3; }
+		/* Se reduce hasta que quepa (el factor mayor primero) */
+		for(;;){
+			long n = is_spline ? (long)(npu * tess_u + 1) * (npv * tess_v + 1) : (long)(tess_u + 1) * (tess_v + 1) * npu * npv;
+			if(n <= CURVE_MAX_VERTS || (tess_u <= 1 && tess_v <= 1)) break;
+			if(tess_u >= tess_v) tess_u--; else tess_v--;
+		}
+		nverts = is_spline ? (npu * tess_u + 1) * (npv * tess_v + 1) : (tess_u + 1) * (tess_v + 1) * npu * npv;
+		nquads = npu * tess_u * npv * tess_v;
+		curve_out = grow(curve_out, &curve_out_cap, (size_t)nverts, sizeof(DecVertex));
+		curve_idx = grow(curve_idx, &curve_idx_cap, (size_t)nquads * 6, sizeof(u16));
+		curve_cols = grow(curve_cols, &curve_cols_cap, is_spline ? (size_t)nu : (size_t)(tess_v + 1) * 4, sizeof(CurveColumn));
+		if(!curve_out || !curve_idx || !curve_cols) goto advance;
 
-void ge_draw_bezier(u32 arg){
-	VFormat f;
-	int ucount = (int)(arg & 0xFF), vcount = (int)((arg >> 8) & 0xFF);
-	int udiv, vdiv, pu, pv, i, j, has_tc;
-	if(!curve_setup(&f, ucount, vcount, &udiv, &vdiv, &has_tc)) return;
+		/* El sombreado de entorno usa la normal aun sin luces (gpu/probe exp143) */
+		cx.sample_nrm = f.nrm || (ge.cmd[GE_LIGHTINGENABLE] & 1) || (ge.cmd[GE_TEXMAPMODE] & 3) == 2;
+		cx.sample_col = f.col != 0;
+		cx.sample_tex = f.tc != 0;
+		cx.facing = ge.cmd[GE_PATCHFACING] & 1;
+		cx.pts = curve_pts;
+		cx.defcolor = curve_pts[0]->color0;
 
-	for(pv = 0; pv + 3 < vcount; pv += 3)
-		for(pu = 0; pu + 3 < ucount; pu += 3){
-			const DecVertex *cp[16];
-			int u, v;
-			for(j = 0; j < 4; j++)
-				for(i = 0; i < 4; i++) cp[j * 4 + i] = &ctrl[(pv + j) * ucount + pu + i];
-			for(v = 0; v <= vdiv; v++)
-				for(u = 0; u <= udiv; u++){
-					float bu[4], bv[4], w[16];
-					DecVertex *g = &grid[v * (udiv + 1) + u];
-					bernstein((float)u / (float)udiv, bu);
-					bernstein((float)v / (float)vdiv, bv);
-					for(j = 0; j < 4; j++) for(i = 0; i < 4; i++) w[j * 4 + i] = bu[i] * bv[j];
-					weighted_sum(cp, w, 16, g);
-					if(!has_tc){
-						int npu = (ucount - 1) / 3, npv = (vcount - 1) / 3;
-						g->uv[0] = ((float)(pu / 3) + (float)u / (float)udiv) / (float)npu;
-						g->uv[1] = ((float)(pv / 3) + (float)v / (float)vdiv) / (float)npv;
+		op = curve_idx;
+		if(is_spline){
+			int gnu = npu * tess_u + 1, gnv = npv * tess_v + 1, iu, iv, c, r;
+			for(iv = 0; iv < gnv; iv++){
+				SplineParam pv = spline_param_at(iv, tess_v, npv, type_v);
+				for(c = 0; c < nu; c++){
+					int idx[4];
+					for(r = 0; r < 4; r++) idx[r] = (pv.seg + r) * nu + c;
+					column_eval(&cx, &curve_cols[c], idx, 1, 0, pv.alpha);
+				}
+				for(iu = 0; iu < gnu; iu++){
+					SplineParam pu = spline_param_at(iu, tess_u, npu, type_u);
+					row_eval(&cx, &curve_cols[pu.seg], &curve_out[iv * gnu + iu], 1, 0, pu.alpha,
+					         (float)pu.seg + (float)pu.k * (1.0f / 256.0f), (float)pv.seg + (float)pv.k * (1.0f / 256.0f));
+				}
+			}
+			build_index(&op, npu * tess_u, npv * tess_v, prim_type, 0);
+		} else {
+			int pu, pv, tu, tv, c, r, nvpp = (tess_u + 1) * (tess_v + 1);
+			for(pu = 0; pu < npu; pu++)
+				for(pv = 0; pv < npv; pv++){
+					int base = pv * 3 * nu + pu * 3, patch = pv * npu + pu;
+					for(tv = 0; tv <= tess_v; tv++){
+						int kv = bezier_param256(tv, tess_v);
+						for(c = 0; c < 4; c++){
+							int idx[4];
+							for(r = 0; r < 4; r++) idx[r] = base + r * nu + c;
+							column_eval(&cx, &curve_cols[tv * 4 + c], idx, 0, kv, NULL);
+						}
+					}
+					for(tu = 0; tu <= tess_u; tu++){
+						int ku = bezier_param256(tu, tess_u);
+						for(tv = 0; tv <= tess_v; tv++)
+							row_eval(&cx, &curve_cols[tv * 4], &curve_out[tv * (tess_u + 1) + tu + nvpp * patch], 0, ku, NULL,
+							         (float)pu + (float)ku * (1.0f / 256.0f),
+							         (float)pv + (float)bezier_param256(tv, tess_v) * (1.0f / 256.0f));
 					}
 				}
-			draw_grid(&f, udiv, vdiv);
+			for(pu = 0; pu < npu; pu++)
+				for(pv = 0; pv < npv; pv++)
+					build_index(&op, tess_u, tess_v, prim_type, (pv * npu + pu) * nvpp);
 		}
-}
 
-/* B-spline cúbica uniforme */
-static float bspline_basis(int i, float t){
-	float it = 1.0f - t;
-	switch(i){
-	case 0: return it * it * it / 6.0f;
-	case 1: return (3.0f * t * t * t - 6.0f * t * t + 4.0f) / 6.0f;
-	case 2: return (-3.0f * t * t * t + 3.0f * t * t + 3.0f * t + 1.0f) / 6.0f;
-	default: return t * t * t / 6.0f;
+		/* Los vértices generados: uv, color, normal y posición float, con
+		   índices de 16 bits y el modo through del original */
+		vformat_setup(&gf, (3u << 0) | (7u << 2) | (3u << 5) | (3u << 7) | (2u << 11) | (ge.cmd[GE_VERTEXTYPE] & 0x800000u));
+		compute_transform_state(&gf);
+		memset(&vr, 0, sizeof(vr));
+		vr.f = &gf;
+		vr.list = curve_out;
+		vr.idx_list = curve_idx;
+		vr.use_indices = 1;
+		vr.upper = (u32)(nverts - 1);
+		/* Con índices repetidos se leen todos una vez en orden */
+		vr.use_cache = (int)(op - curve_idx) > nverts;
+		if(vr.use_cache){
+			if(nverts > vcache_cap){
+				GeClipVertex *nc = realloc(vcache, (size_t)nverts * sizeof(GeClipVertex));
+				if(nc){ vcache = nc; vcache_cap = nverts; }
+				else vr.use_cache = 0;
+			}
+			if(vr.use_cache){
+				vr.cache = vcache;
+				for(i = 0; i < nverts; i++) read_raw(&vr, (u32)i, &vr.cache[i]);
+			}
+		}
+		if(op > curve_idx) submit_primitive(&vr, prims[prim_type], (int)(op - curve_idx));
 	}
+
+advance:
+	if(f.idx) ge.iaddr = iaddr + (u32)num_points * idx_size[f.idx];
+	else if(nu >= 4 && nv >= 4) ge.vaddr = vaddr + (u32)num_points * f.size;
 }
 
-void ge_draw_spline(u32 arg){
-	VFormat f;
-	int ucount = (int)(arg & 0xFF), vcount = (int)((arg >> 8) & 0xFF);
-	int udiv, vdiv, i, j, su, sv, has_tc;
-	if(!curve_setup(&f, ucount, vcount, &udiv, &vdiv, &has_tc)) return;
-
-	for(sv = 0; sv + 3 < vcount; sv++)
-		for(su = 0; su + 3 < ucount; su++){
-			const DecVertex *cp[16];
-			int u, v;
-			for(j = 0; j < 4; j++)
-				for(i = 0; i < 4; i++) cp[j * 4 + i] = &ctrl[(sv + j) * ucount + su + i];
-			for(v = 0; v <= vdiv; v++)
-				for(u = 0; u <= udiv; u++){
-					float tu = (float)u / (float)udiv, tv = (float)v / (float)vdiv, w[16];
-					DecVertex *out = &grid[v * (udiv + 1) + u];
-					for(j = 0; j < 4; j++) for(i = 0; i < 4; i++) w[j * 4 + i] = bspline_basis(i, tu) * bspline_basis(j, tv);
-					weighted_sum(cp, w, 16, out);
-					if(!has_tc){
-						out->uv[0] = ((float)su + tu) / (float)(ucount - 3);
-						out->uv[1] = ((float)sv + tv) / (float)(vcount - 3);
-					}
-				}
-			draw_grid(&f, udiv, vdiv);
-		}
-}
+void ge_draw_bezier(u32 arg){ submit_curve(arg, 0); }
+void ge_draw_spline(u32 arg){ submit_curve(arg, 1); }

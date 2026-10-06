@@ -1135,10 +1135,17 @@ static int shared_shift(const double *v){
 	return e == INT_MIN ? 0 : 14 - e;
 }
 
+/* double -> s64 como en x86: fuera de rango o NaN da INT64_MIN (en
+   PowerPC la conversión satura, así que se hace a mano) */
+static inline s64 d2s64(double d){
+	if(!(d >= -9223372036854775808.0 && d < 9223372036854775808.0)) return INT64_MIN;
+	return (s64)d;
+}
+
 static Plane fixed_plane(const s64 *X, const s64 *Y, const double *v, int shift){
 	s64 V[3];
 	int i;
-	for(i = 0; i < 3; i++) V[i] = (s64)ldexp(v[i], shift);
+	for(i = 0; i < 3; i++) V[i] = d2s64(ldexp(v[i], shift));
 	return compute_plane(X, Y, V);
 }
 
@@ -1941,7 +1948,7 @@ static LineUV line_uv(const GeVertex *v0, const GeVertex *v1, int proj){
 }
 
 static float line_uv_component(const double *c, int shift, const GeVertex *v0, const GeVertex *v1, int px, int py){
-	s64 c0 = (s64)ldexp(c[0], shift), c1 = (s64)ldexp(c[1], shift);
+	s64 c0 = d2s64(ldexp(c[0], shift)), c1 = d2s64(ldexp(c[1], shift));
 	s64 v = line_fixed_at(c0, c1, v0->x, v0->y, v1->x, v1->y, px, py);
 	return ge_trunc24((float)ldexp((double)v, -shift));
 }

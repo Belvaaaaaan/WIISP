@@ -39,6 +39,7 @@ gpu/depth/transformprecision
 gpu/displaylist/alignment
 gpu/dither/dither
 gpu/exact/coverage
+gpu/exact/curves
 gpu/exact/lighting
 gpu/exact/lines
 gpu/exact/nearclip
@@ -64,6 +65,7 @@ gpu/ge/intrsuspend
 gpu/ge/queue
 gpu/lighting/shademap
 gpu/lighting/specular
+gpu/primitives/bezier
 gpu/primitives/continue
 gpu/primitives/immediate
 gpu/primitives/indices
@@ -73,6 +75,7 @@ gpu/primitives/lines
 gpu/primitives/linestrip
 gpu/primitives/points
 gpu/primitives/rectangles
+gpu/primitives/spline
 gpu/primitives/trianglefan
 gpu/primitives/triangles
 gpu/primitives/trianglestrip
