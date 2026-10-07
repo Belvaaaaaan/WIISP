@@ -32,8 +32,10 @@ comerciales van muy lentos.
 En el Wii, las partidas guardadas van a `SAVEDATA/` dentro de la carpeta de
 WIISP (`sd:/apps/wiisp/` o `sd:/wiisp/`), sin cifrar y con su `PARAM.SFO`
 como en una Memory Stick. Ahí mismo queda `wiisp.log`, el registro de la
-última sesión: funciones que faltan, fallos de CPU, mensajes del juego y
-partidas cargadas o guardadas. Es lo más útil para reportar un problema.
+última sesión: funciones que faltan, fallos de CPU, mensajes del juego,
+partidas cargadas o guardadas y, cada minuto de juego emulado, estadísticas
+de rendimiento (líneas `[STATS]`: cuánto se usa la VFPU y qué instrucciones,
+cambios de hilo). Es lo más útil para reportar un problema.
 
 Al cargar un juego escribe `imports.txt` junto al EBOOT: la lista de funciones
 del firmware que usa y cuáles ya implementa WIISP.

@@ -513,6 +513,7 @@ int main(int argc, char **argv){
 	test_filelist();
 	test_formats();
 	test_io();
+	test_vfpu();
 
 	printf("\n%d comprobaciones, %d fallos\n", checks, failures);
 	free(ram); free(vram); free(scratch);

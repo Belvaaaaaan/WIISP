@@ -177,24 +177,63 @@ Otras optimizaciones previstas:
 Es el gran cuello de botella de los juegos 3D.
 
 **Hecho: intérprete completo** (`src/cpu/vfpu.c`), port del de PPSSPP. Los
-128 registros van en `CpuState` como 8 matrices 4×4 con las columnas
-contiguas; cada instrucción aplica los prefijos S/T/D como el hardware
-(swizzle, constantes, abs, negado, saturación y máscara, incluidos los casos
-raros de `vdiv`, `vrot`, `vtfm`, `vmmul`…). `vrcp`, `vrsq`, `vsqrt`,
-`vexp2`, `vlog2`, `vsin`/`vcos` y `vasin` usan tablas de segmentos que imitan
-el interpolador de la PSP bit a bit (`tools/gen_vfpu_tables.py` las genera
-desde PPSSPP). Como en el hardware, las sumas y productos tratan los
-denormales como cero y dan el NaN canónico `0x7f800001`, así que x86 y
+128 registros van en su propio `VfpuState` como 8 matrices 4×4 con las
+columnas contiguas; cada instrucción aplica los prefijos S/T/D como el
+hardware (swizzle, constantes, abs, negado, saturación y máscara, incluidos
+los casos raros de `vdiv`, `vrot`, `vtfm`, `vmmul`…). `vrcp`, `vrsq`,
+`vsqrt`, `vexp2`, `vlog2`, `vsin`/`vcos` y `vasin` usan tablas de segmentos
+que imitan el interpolador de la PSP bit a bit (`tools/gen_vfpu_tables.py`
+las genera desde PPSSPP). Como en el hardware, las sumas y productos tratan
+los denormales como cero y dan el NaN canónico `0x7f800001`, así que x86 y
 PowerPC dan los mismos bits. Pasan 20 de los 26 tests de `cpu/vfpu` (PPSSPP
 pasa 16); los que faltan son latencias del pipeline, solapamientos que el
 ensamblador rechaza y la precisión interna de `vavg`/`vcrsp`.
 
-Pendiente, para el dynarec:
+**Optimizaciones del intérprete (exactas al bit):**
+
+- *Cambio de hilo perezoso*: los registros VFPU no se copian en cada cambio
+  de hilo; solo cuando un hilo usa la VFPU y los registros vivos son de
+  otro (`hle_vfpu_load`). Las llamadas del HLE al juego (interrupciones,
+  callbacks) solo guardan la VFPU si la llegan a usar.
+- *Tablas* con la posición en bytes de cada componente de cada registro
+  (vector y matriz), y acceso directo con desplazamientos fijos a las
+  matrices y vectores guardados seguidos (`M000`, `C000`…).
+- *Caminos rápidos sin prefijos* (casi siempre lo están) para `vmmul`,
+  `vtfm`, `vadd`/`vsub`/`vmul`/`vdiv`, `vdot`, `vscl`, `vmov`/`vabs`/`vneg`,
+  `vrcp`/`vrsq`/`vsin`/`vcos`/`vsqrt`, `vcmp` y `vmin`/`vmax`; el camino
+  general va en otra función para que el rápido no pague su prólogo.
+  `tests/test_vfpu.c` compara ambos con 200.000 instrucciones al azar.
+- `lv.q`/`sv.q` con un solo acceso a la memoria emulada, `vf2i` sin
+  `floor`/`ceil` (el Broadway no tiene instrucción de redondeo) y
+  comprobaciones de denormales y NaN con la FPU.
+
+Medido en Dolphin con `tools/gen_vfpu_bench.py` (ns por instrucción por
+encima de un `addu`, que cuesta ~114 ns):
+
+| Instrucción | Antes | Después |
+|---|---|---|
+| `vmmul.q` | 1187 | 496 |
+| `vtfm4.q` | 677 | 209 |
+| `vadd.q` | 344 | 237 |
+| `lv.q` | 171 | 118 |
+| `mfv` | 109 | 63 |
+| bucle de juego mixto | 3402 ms | 1814 ms (1,9×) |
+
+En `wiisp.log`, cada minuto de juego emulado y al terminar, queda el
+porcentaje de instrucciones VFPU, las más usadas, los cambios de hilo y
+cuántos de ellos movieron la VFPU: dice qué conviene acelerar en cada juego.
+
+**Lo que queda:** el coste base del intérprete (~114 ns por instrucción en
+Dolphin, unos 80 ciclos del Broadway, que paga igual un `addu` que un
+`lv.q`) ya pesa tanto como lo propio de la mayoría de las operaciones VFPU. Los *paired singles* no compensan en el
+intérprete (la aritmética es una parte pequeña del coste: leer, decodificar
+y despachar cada instrucción pesa más); rinden en el dynarec, donde los
+registros VFPU pueden quedarse en los FPR:
 
 - Las operaciones de vector y matriz más comunes (`vmmul`, `vtfm`, `vdot`,
-  `vadd`, `vscl`…) se emiten con *paired singles*, mapeando pares de
-  componentes a un registro FPR.
-- Las operaciones raras siguen en el intérprete.
+  `vadd`, `vscl`…) se emitirán con *paired singles* (`ps_mul` y `ps_add`
+  por separado, que redondean como las operaciones simples, sin fusionar).
+- Las operaciones raras seguirán en el intérprete.
 
 ## 6. HLE
 

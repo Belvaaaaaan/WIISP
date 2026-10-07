@@ -34,9 +34,38 @@ enum { C_NONE = -1, C_ZERO, C_ONE, C_TWO, C_HALF, C_THREE, C_THIRD, C_FOURTH, C_
 #define VD (op & 0x7F)
 #define VS ((op >> 8) & 0x7F)
 #define VT ((op >> 16) & 0x7F)
-#define CTRL cpu.vfpu_ctrl
+#define CTRL vfpu.ctrl
 
 typedef union { float f[4]; u32 u[4]; s32 i[4]; } FloatBits;
+
+VfpuState vfpu;
+int vfpu_live;
+u64 vfpu_stat[VS_COUNT];
+const char *const vfpu_stat_name[VS_COUNT] = {
+	"lv.s", "sv.s", "lv.q", "sv.q", "lvl/lvr/svl/svr", "mfv", "mtv", "mfvc/mtvc", "bvf/bvt",
+	"vadd", "vsub", "vmul", "vdiv", "vdot", "vscl", "vhdp", "vcrs", "vdet",
+	"vmov", "vabs/vneg", "vsat", "vrcp", "vrsq", "vsin/vcos", "vexp2/vlog2",
+	"vsqrt", "vasin", "vidt/vzero/vone", "vcmp", "vmin/vmax", "vscmp/vsge/vslt",
+	"vcmov", "vf2i", "vi2f", "vcst", "vpfx", "viim/vfim", "vmmul", "vtfm/vhtfm",
+	"vmscl", "vcrsp/vqmul", "vmmov", "vmidt/vmzero/vmone", "vrot", "vflush", "vrnd",
+	"conversiones", "vsrt/vbfy/vocp/vfad/vavg/vsgn", "vwbn", "vsbn/vsbz/vlgb",
+};
+#define VSTAT(x) (vfpu_stat_now[x]++)
+/* Contadores de 32 bits (un u64 son seis instrucciones en el Broadway); se
+   pasan a vfpu_stat en cada frame con vfpu_stats_fold() */
+static u32 vfpu_stat_now[VS_COUNT];
+u32 vfpu_stat_bv;
+#define NOINLINE __attribute__((noinline))
+
+void vfpu_stats_fold(void){
+	int i;
+	for(i = 0; i < VS_COUNT; i++){
+		vfpu_stat[i] += vfpu_stat_now[i];
+		vfpu_stat_now[i] = 0;
+	}
+	vfpu_stat[VS_BV] += vfpu_stat_bv;
+	vfpu_stat_bv = 0;
+}
 
 static inline u32 f2u(float f){ u32 u; memcpy(&u, &f, 4); return u; }
 static inline float u2f(u32 u){ float f; memcpy(&f, &u, 4); return f; }
@@ -44,19 +73,20 @@ static inline int is_nan(float f){ return (f2u(f) & 0x7FFFFFFFu) > 0x7F800000u; 
 static inline int is_inf(float f){ return (f2u(f) & 0x7FFFFFFFu) == 0x7F800000u; }
 static inline int is_nan_or_inf(float f){ return (f2u(f) & 0x7F800000u) == 0x7F800000u; }
 
-/* Los denormales cuentan como cero con signo */
+/* Los denormales cuentan como cero con signo. Se comprueba con la FPU: en
+   el Broadway, pasar un float a un registro entero obliga a guardarlo en
+   memoria y volver a leerlo. x * 0 conserva el signo. */
+#define VFPU_FLT_MIN 1.17549435e-38f
 static inline float flush(float f){
-	u32 u = f2u(f);
-	return (u & 0x7F800000u) == 0 ? u2f(u & 0x80000000u) : f;
+	return fabsf(f) < VFPU_FLT_MIN ? f * 0.0f : f;
 }
 
-/* Salida de las sumas de vbfy, vocp, vsocp, vfad y vavg: NaN canónico y
-   denormales a cero (pspautotests cpu/vfpu/specials). Además deja el mismo
-   NaN en x86 y en PowerPC. */
+/* Salida de las sumas y productos: NaN canónico y denormales a cero
+   (pspautotests cpu/vfpu/specials). Además deja el mismo NaN en x86 y en
+   PowerPC. */
 static inline float canon(float f){
-	u32 u = f2u(f);
-	if((u & 0x7FFFFFFFu) > 0x7F800000u) return u2f(0x7F800001u);
-	return (u & 0x7F800000u) == 0 ? u2f(u & 0x80000000u) : f;
+	if(__builtin_expect(f != f, 0)) return u2f(0x7F800001u);
+	return fabsf(f) < VFPU_FLT_MIN ? f * 0.0f : f;
 }
 
 static inline VectorSize vec_size(u32 op){ return (VectorSize)(((op >> 7) & 1) + ((op >> 14) & 2) + 1); }
@@ -83,73 +113,112 @@ static inline u32 rewrite_prefix(int ctrl, u32 remove, u32 add){ return (CTRL[ct
 static inline u32 write_mask(void){ return (CTRL[VFPU_CTRL_DPREFIX] >> 8) & 0xF; }
 static inline int write_masked(int i){ return (CTRL[VFPU_CTRL_DPREFIX] >> (8 + i)) & 1; }
 
+/* Sin prefijos activos (lo normal): S y T dejan pasar y D no hace nada.
+   Lo comprueban solo las instrucciones que tienen camino rápido. */
+int vfpu_fast_paths = 1;
+static inline int prefixes_neutral(void){
+	return ((CTRL[VFPU_CTRL_SPREFIX] ^ 0xE4) | (CTRL[VFPU_CTRL_TPREFIX] ^ 0xE4) | CTRL[VFPU_CTRL_DPREFIX]) == 0;
+}
+#define FAST_OK() (prefixes_neutral() & vfpu_fast_paths)
+
+/* NaN o infinito, con la FPU */
+static inline int nan_or_inf_f(float f){ return !(fabsf(f) <= 3.40282347e+38f); }
+
+
 /* --- Registros ------------------------------------------------------------------------ */
 
-static void read_vector(float *rd, VectorSize size, int reg){
-	int row, length, i;
-	const int mtx = (reg << 2) & 0x70, col = reg & 3, transpose = (reg >> 5) & 1;
-	switch(size){
-	case V_Single: rd[0] = cpu.v[VFPU_INDEX(reg)]; return;
-	case V_Pair: row = (reg >> 5) & 2; length = 2; break;
-	case V_Triple: row = (reg >> 6) & 1; length = 3; break;
-	case V_Quad: row = (reg >> 5) & 2; length = 4; break;
-	default: return;
-	}
-	if(transpose){
-		for(i = 0; i < length; i++) rd[i] = cpu.v[mtx + col + ((row + i) & 3) * 4];
-	} else {
-		for(i = 0; i < length; i++) rd[i] = cpu.v[mtx + col * 4 + ((row + i) & 3)];
+/* Posición en bytes dentro de vfpu.v de cada componente de cada registro,
+   precalculada: vidx[tamaño][reg][i] para vectores y
+   midx[tamaño][reg][columna * 4 + fila] para matrices. En bytes, cada
+   acceso es una carga indexada sin desplazamientos. */
+static u16 vidx[5][128][4];
+static u16 midx[5][128][16];
+/* Matrices 4x4 y vectores de 4 guardados seguidos (M000, C000...): byte de
+   inicio en vfpu.v, o -1 si no lo están */
+static s16 mcont4[128], vcont4[128];
+#define VF(off) (*(float *)((u8 *)vfpu.v + (off)))
+#define VI(off) (*(u32 *)((u8 *)vfpu.vi + (off)))
+
+static void build_tables(void){
+	int size, reg, i, j;
+	for(reg = 0; reg < 128; reg++){
+		const int mtx = (reg << 2) & 0x70, col = reg & 3, transpose = (reg >> 5) & 1;
+		for(size = 1; size <= 4; size++){
+			int row = size == 1 ? 0 : size == 3 ? (reg >> 6) & 1 : (reg >> 5) & 2;
+			int side, mrow, mtr;
+			if(size == 1) vidx[1][reg][0] = (u16)(VFPU_INDEX(reg) * 4);
+			else for(i = 0; i < size; i++)
+				vidx[size][reg][i] = (u16)(4 * (transpose ? mtx + col + ((row + i) & 3) * 4 : mtx + col * 4 + ((row + i) & 3)));
+			/* Matrices */
+			mtr = transpose;
+			switch(size){
+			case 1: mtr = 0; mrow = (reg >> 5) & 3; side = 1; break;
+			case 2: mrow = (reg >> 5) & 2; side = 2; break;
+			case 3: mrow = (reg >> 6) & 1; side = 3; break;
+			default: mrow = (reg >> 5) & 2; side = 4; break;
+			}
+			for(j = 0; j < side; j++)
+				for(i = 0; i < side; i++)
+					midx[size][reg][j * 4 + i] = (u16)(4 * (mtx + (mtr ? ((mrow + i) & 3) * 4 + ((col + j) & 3)
+					                                                     : ((col + j) & 3) * 4 + ((mrow + i) & 3))));
+		}
+		mcont4[reg] = vcont4[reg] = (s16)midx[4][reg][0];
+		for(i = 1; i < 16; i++) if(midx[4][reg][i] != midx[4][reg][0] + 4 * i) mcont4[reg] = -1;
+		for(i = 1; i < 4; i++) if(vidx[4][reg][i] != vidx[4][reg][0] + 4 * i) vcont4[reg] = -1;
 	}
 }
 
-static void write_vector(const float *rd, VectorSize size, int reg){
-	int row, length, i;
-	const int mtx = (reg << 2) & 0x70, col = reg & 3, transpose = (reg >> 5) & 1;
+static inline void read_vector(float *rd, VectorSize size, int reg){
+	const u16 *ix = vidx[size][reg];
 	switch(size){
-	case V_Single: if(!write_masked(0)) cpu.v[VFPU_INDEX(reg)] = rd[0]; return;
-	case V_Pair: row = (reg >> 5) & 2; length = 2; break;
-	case V_Triple: row = (reg >> 6) & 1; length = 3; break;
-	case V_Quad: row = (reg >> 5) & 2; length = 4; break;
-	default: return;
-	}
-	for(i = 0; i < length; i++){
-		if(write_masked(i)) continue;
-		if(transpose) cpu.v[mtx + col + ((row + i) & 3) * 4] = rd[i];
-		else cpu.v[mtx + col * 4 + ((row + i) & 3)] = rd[i];
+	case V_Quad: rd[3] = VF(ix[3]); /* fallthrough */
+	case V_Triple: rd[2] = VF(ix[2]); /* fallthrough */
+	case V_Pair: rd[1] = VF(ix[1]); /* fallthrough */
+	default: rd[0] = VF(ix[0]); break;
 	}
 }
 
-static void matrix_layout(MatrixSize size, int reg, int *row, int *side, int *transpose){
-	*transpose = (reg >> 5) & 1;
-	switch(size){
-	case M_1x1: *transpose = 0; *row = (reg >> 5) & 3; *side = 1; break;
-	case M_2x2: *row = (reg >> 5) & 2; *side = 2; break;
-	case M_3x3: *row = (reg >> 6) & 1; *side = 3; break;
-	default: *row = (reg >> 5) & 2; *side = 4; break;
+static inline void write_vector(const float *rd, VectorSize size, int reg){
+	const u16 *ix = vidx[size][reg];
+	const u32 mask = CTRL[VFPU_CTRL_DPREFIX] >> 8;
+	int i;
+	if(__builtin_expect(!(mask & 0xF), 1)){
+		switch(size){
+		case V_Quad: VF(ix[3]) = rd[3]; /* fallthrough */
+		case V_Triple: VF(ix[2]) = rd[2]; /* fallthrough */
+		case V_Pair: VF(ix[1]) = rd[1]; /* fallthrough */
+		default: VF(ix[0]) = rd[0]; break;
+		}
+		return;
 	}
+	for(i = 0; i < (int)size; i++)
+		if(!((mask >> i) & 1)) VF(ix[i]) = rd[i];
 }
 
 static void read_matrix(float *rd, MatrixSize size, int reg){
-	int row, side, transpose, i, j;
-	const int col = reg & 3;
-	const float *v = cpu.v + ((reg >> 2) & 7) * 16;
-	matrix_layout(size, reg, &row, &side, &transpose);
-	for(j = 0; j < side; j++)
-		for(i = 0; i < side; i++)
-			rd[j * 4 + i] = transpose ? v[((row + i) & 3) * 4 + ((col + j) & 3)] : v[((col + j) & 3) * 4 + ((row + i) & 3)];
+	const u16 *ix = midx[size][reg];
+	int i, j;
+	if(size == M_4x4){
+		for(i = 0; i < 16; i++) rd[i] = VF(ix[i]);
+		return;
+	}
+	for(j = 0; j < (int)size; j++)
+		for(i = 0; i < (int)size; i++) rd[j * 4 + i] = VF(ix[j * 4 + i]);
 }
 
 static void write_matrix(const float *rd, MatrixSize size, int reg){
-	int row, side, transpose, i, j;
-	const int col = reg & 3;
-	float *v = cpu.v + ((reg >> 2) & 7) * 16;
-	matrix_layout(size, reg, &row, &side, &transpose);
+	const u16 *ix = midx[size][reg];
+	const int side = (int)size;
+	int i, j;
+	if(size == M_4x4 && !write_mask()){
+		for(i = 0; i < 16; i++) VF(ix[i]) = rd[i];
+		return;
+	}
 	/* La máscara solo afecta a la última fila (o columna) */
 	for(j = 0; j < side; j++)
 		for(i = 0; i < side; i++){
 			if(j == side - 1 && write_masked(i)) continue;
-			if(transpose) v[((row + i) & 3) * 4 + ((col + j) & 3)] = rd[j * 4 + i];
-			else v[((col + j) & 3) * 4 + ((row + i) & 3)] = rd[j * 4 + i];
+			VF(ix[j * 4 + i]) = rd[j * 4 + i];
 		}
 }
 
@@ -221,6 +290,7 @@ static int last_lane_swizzle_invalid(int ctrl){
 static void retain_invalid_swizzle_st(float *d, VectorSize sz){
 	u32 sp = CTRL[VFPU_CTRL_SPREFIX], tp = CTRL[VFPU_CTRL_TPREFIX];
 	int n = nelem(sz), i;
+	if(sp == 0xE4 && tp == 0xE4) return;
 	for(i = 0; i < n; i++){
 		int ss = (sp >> (i + i)) & 3, st = (tp >> (i + i)) & 3;
 		int cs = (sp >> (12 + i)) & 1, ct = (tp >> (12 + i)) & 1;
@@ -537,24 +607,26 @@ static u32 ctrl_set_bits(int reg){
 	return reg >= VFPU_CTRL_RCX0 && reg <= VFPU_CTRL_RCX7 ? 0x3F800000u : 0;
 }
 
-void vfpu_reset(CpuState *c){
+void vfpu_reset(VfpuState *st){
+	static int tables_ready;
 	int i;
+	if(!tables_ready){ build_tables(); tables_ready = 1; }
 	/* Un hilo nuevo empieza con los registros a NaN */
-	for(i = 0; i < 128; i++) c->vi[i] = 0x7F800001u;
-	memset(c->vfpu_ctrl, 0, sizeof(c->vfpu_ctrl));
-	c->vfpu_ctrl[VFPU_CTRL_SPREFIX] = 0xE4;
-	c->vfpu_ctrl[VFPU_CTRL_TPREFIX] = 0xE4;
-	c->vfpu_ctrl[VFPU_CTRL_DPREFIX] = 0;
-	c->vfpu_ctrl[VFPU_CTRL_CC] = 0x3F;
-	c->vfpu_ctrl[VFPU_CTRL_REV] = 0x7772CEABu;
-	c->vfpu_ctrl[VFPU_CTRL_RCX0] = 0x3F800001u;
-	c->vfpu_ctrl[VFPU_CTRL_RCX1] = 0x3F800002u;
-	c->vfpu_ctrl[VFPU_CTRL_RCX2] = 0x3F800004u;
-	c->vfpu_ctrl[VFPU_CTRL_RCX3] = 0x3F800008u;
-	c->vfpu_ctrl[VFPU_CTRL_RCX4] = 0x3F800000u;
-	c->vfpu_ctrl[VFPU_CTRL_RCX5] = 0x3F800000u;
-	c->vfpu_ctrl[VFPU_CTRL_RCX6] = 0x3F800000u;
-	c->vfpu_ctrl[VFPU_CTRL_RCX7] = 0x3F800000u;
+	for(i = 0; i < 128; i++) st->vi[i] = 0x7F800001u;
+	memset(st->ctrl, 0, sizeof(st->ctrl));
+	st->ctrl[VFPU_CTRL_SPREFIX] = 0xE4;
+	st->ctrl[VFPU_CTRL_TPREFIX] = 0xE4;
+	st->ctrl[VFPU_CTRL_DPREFIX] = 0;
+	st->ctrl[VFPU_CTRL_CC] = 0x3F;
+	st->ctrl[VFPU_CTRL_REV] = 0x7772CEABu;
+	st->ctrl[VFPU_CTRL_RCX0] = 0x3F800001u;
+	st->ctrl[VFPU_CTRL_RCX1] = 0x3F800002u;
+	st->ctrl[VFPU_CTRL_RCX2] = 0x3F800004u;
+	st->ctrl[VFPU_CTRL_RCX3] = 0x3F800008u;
+	st->ctrl[VFPU_CTRL_RCX4] = 0x3F800000u;
+	st->ctrl[VFPU_CTRL_RCX5] = 0x3F800000u;
+	st->ctrl[VFPU_CTRL_RCX6] = 0x3F800000u;
+	st->ctrl[VFPU_CTRL_RCX7] = 0x3F800000u;
 }
 
 /* --- Memoria ---------------------------------------------------------------------------- */
@@ -568,21 +640,51 @@ static int valid4(u32 addr, u32 pc, u32 op){
 	return 1;
 }
 
-static void op_sv(u32 op, u32 pc){
-	s32 imm = (s16)(op & 0xFFFC);
-	int vt = ((op >> 16) & 0x1F) | ((op & 3) << 5);
-	u32 addr = cpu.r[(op >> 21) & 0x1F] + (u32)imm;
-	if(!valid4(addr, pc, op)) return;
-	if((op >> 26) == 0x32) cpu.vi[VFPU_INDEX(vt)] = mem_read32(addr);   /* lv.s */
-	else mem_write32(addr, cpu.vi[VFPU_INDEX(vt)]);                    /* sv.s */
+/* lv.s / sv.s (sin máscara de escritura, como en la PSP) */
+static NOINLINE void op_sv(u32 op, u32 pc){
+	const int vt = ((op >> 16) & 0x1F) | ((op & 3) << 5);
+	const u32 addr = cpu.r[(op >> 21) & 0x1F] + (u32)(s32)(s16)(op & 0xFFFC);
+	if((op >> 26) == 0x32){
+		const u8 *p = (addr & 3) ? NULL : mem_ptr_r(addr, 4);
+		if(!p){ valid4(addr, pc, op); return; }
+		vfpu.vi[VFPU_INDEX(vt)] = rd_le32(p);
+	} else {
+		u8 *p = (addr & 3) ? NULL : mem_ptr(addr, 4);
+		if(!p){ valid4(addr, pc, op); return; }
+		wr_le32(p, vfpu.vi[VFPU_INDEX(vt)]);
+	}
 }
 
-static void op_svq(u32 op, u32 pc){
-	s32 imm = (s16)(op & 0xFFFC);
-	int vt = ((op >> 16) & 0x1F) | ((op & 1) << 5), i;
-	u32 addr = cpu.r[(op >> 21) & 0x1F] + (u32)imm;
+static NOINLINE void op_svq(u32 op, u32 pc){
+	const int vt = ((op >> 16) & 0x1F) | ((op & 1) << 5);
+	const u32 addr = cpu.r[(op >> 21) & 0x1F] + (u32)(s32)(s16)(op & 0xFFFC);
 	FloatBits d;
+	int i;
 	switch(op >> 26){
+	case 0x36: {   /* lv.q: un solo acceso a la memoria emulada */
+		const u8 *p;
+		if(addr & 0xF){ cpu_fault("lv.q desalineado", addr, op); return; }
+		p = mem_ptr_r(addr, 16);
+		if(!p){ valid4(addr, pc, op); return; }
+		d.u[0] = rd_le32(p);
+		d.u[1] = rd_le32(p + 4);
+		d.u[2] = rd_le32(p + 8);
+		d.u[3] = rd_le32(p + 12);
+		write_vector(d.f, V_Quad, vt);
+		break;
+	}
+	case 0x3E: {   /* sv.q */
+		u8 *p;
+		if(addr & 0xF){ cpu_fault("sv.q desalineado", addr, op); return; }
+		p = mem_ptr(addr, 16);
+		if(!p){ valid4(addr, pc, op); return; }
+		read_vector(d.f, V_Quad, vt);
+		wr_le32(p, d.u[0]);
+		wr_le32(p + 4, d.u[1]);
+		wr_le32(p + 8, d.u[2]);
+		wr_le32(p + 12, d.u[3]);
+		break;
+	}
 	case 0x35: {   /* lvl.q / lvr.q */
 		int offset = (addr >> 2) & 3;
 		if(!valid4(addr, pc, op)) return;
@@ -592,15 +694,6 @@ static void op_svq(u32 op, u32 pc){
 		write_vector(d.f, V_Quad, vt);
 		break;
 	}
-	case 0x36:     /* lv.q */
-		if((addr & 0xF) || !valid4(addr, pc, op)){
-			if(!(addr & 0xF)) return;
-			cpu_fault("lv.q desalineado", addr, op);
-			return;
-		}
-		for(i = 0; i < 4; i++) d.u[i] = mem_read32(addr + 4 * (u32)i);
-		write_vector(d.f, V_Quad, vt);
-		break;
 	case 0x3D: {   /* svl.q / svr.q */
 		int offset = (addr >> 2) & 3;
 		if(!valid4(addr, pc, op)) return;
@@ -609,60 +702,51 @@ static void op_svq(u32 op, u32 pc){
 		else for(i = 0; i < (3 - offset) + 1; i++) mem_write32(addr + 4 * (u32)i, d.u[i]);
 		break;
 	}
-	case 0x3E:     /* sv.q */
-		if((addr & 0xF) || !valid4(addr, pc, op)){
-			if(!(addr & 0xF)) return;
-			cpu_fault("sv.q desalineado", addr, op);
-			return;
-		}
-		read_vector(d.f, V_Quad, vt);
-		for(i = 0; i < 4; i++) mem_write32(addr + 4 * (u32)i, d.u[i]);
-		break;
 	}
 }
 
 /* --- COP2: mfv/mtv ---------------------------------------------------------------------- */
 
-static void op_mftv(u32 op){
+static NOINLINE void op_mftv(u32 op){
 	int imm = op & 0xFF, rt = (op >> 16) & 0x1F;
 	u32 mask;
 	switch((op >> 21) & 0x1F){
 	case 3:   /* mfv / mfvc (rt = 0 sirve de barrera) */
 		if(rt){
-			if(imm < 128) cpu.r[rt] = cpu.vi[VFPU_INDEX(imm)];
+			if(imm < 128) cpu.r[rt] = vfpu.vi[VFPU_INDEX(imm)];
 			else if(imm < 128 + VFPU_CTRL_MAX) cpu.r[rt] = CTRL[imm - 128];
 		}
 		break;
 	case 7:   /* mtv / mtvc */
-		if(imm < 128) cpu.vi[VFPU_INDEX(imm)] = cpu.r[rt];
+		if(imm < 128) vfpu.vi[VFPU_INDEX(imm)] = cpu.r[rt];
 		else if(imm < 128 + VFPU_CTRL_MAX && ctrl_mask(imm - 128, &mask))
 			CTRL[imm - 128] = (cpu.r[rt] & mask) | ctrl_set_bits(imm - 128);
 		break;
 	}
 }
 
-static void op_vmfvc(u32 op){
+static NOINLINE void op_vmfvc(u32 op){
 	int imm = (op >> 8) & 0x7F;
-	cpu.vi[VFPU_INDEX(VD)] = imm < VFPU_CTRL_MAX ? CTRL[imm] : 0;
+	vfpu.vi[VFPU_INDEX(VD)] = imm < VFPU_CTRL_MAX ? CTRL[imm] : 0;
 }
 
-static void op_vmtvc(u32 op){
+static NOINLINE void op_vmtvc(u32 op){
 	int imm = op & 0x7F;
 	u32 mask;
 	if(imm < VFPU_CTRL_MAX && ctrl_mask(imm, &mask))
-		CTRL[imm] = (cpu.vi[VFPU_INDEX(VS)] & mask) | ctrl_set_bits(imm);
+		CTRL[imm] = (vfpu.vi[VFPU_INDEX(VS)] & mask) | ctrl_set_bits(imm);
 }
 
 /* --- Operaciones -------------------------------------------------------------------------- */
 
-static void op_vpfx(u32 op){
+static NOINLINE void op_vpfx(u32 op){
 	u32 data = op & 0x000FFFFF;
 	int regnum = (op >> 24) & 3;
 	if(regnum == VFPU_CTRL_DPREFIX) data &= 0x00000FFF;
 	CTRL[VFPU_CTRL_SPREFIX + regnum] = data;
 }
 
-static void op_vmatrix_init(u32 op){
+static NOINLINE void op_vmatrix_init(u32 op){
 	static const float idt[16] = { 1,0,0,0, 0,1,0,0, 0,0,1,0, 0,0,0,1 };
 	static const float zero[16] = { 0 };
 	static const float one[16] = { 1,1,1,1, 1,1,1,1, 1,1,1,1, 1,1,1,1 };
@@ -692,7 +776,7 @@ static void op_vmatrix_init(u32 op){
 	eat_prefixes();
 }
 
-static void op_vvector_init(u32 op){
+static NOINLINE void op_vvector_init(u32 op){
 	VectorSize sz = vec_size(op);
 	float d[4];
 	int c = ((op >> 16) & 0xF) == 7 ? C_ONE : C_ZERO;
@@ -702,7 +786,7 @@ static void op_vvector_init(u32 op){
 	eat_prefixes();
 }
 
-static void op_viim(u32 op){
+static NOINLINE void op_viim(u32 op){
 	float f[1];
 	int type = (op >> 23) & 7;
 	if(type == 6) f[0] = (float)(s16)(op & 0xFFFF);
@@ -712,7 +796,7 @@ static void op_viim(u32 op){
 	eat_prefixes();
 }
 
-static void op_vidt(u32 op){
+static NOINLINE void op_vidt(u32 op){
 	int vd = VD;
 	VectorSize sz = vec_size(op);
 	float f[4];
@@ -725,10 +809,53 @@ static void op_vidt(u32 op){
 	eat_prefixes();
 }
 
-static void op_vmmul(u32 op){
-	float s[16] = { 0 }, t[16] = { 0 }, d[16];
+/* d[a * 4 + b] = sum_c S[b * 4 + c] * T[a * 4 + c], con el mismo orden de
+   sumas que el camino general; S y T seguidos en memoria */
+static void vmmul4_cont(const float *S, const float *T, float *d){
+	int a, b;
+	for(b = 0; b < 4; b++){
+		const float s0 = S[b * 4], s1 = S[b * 4 + 1], s2 = S[b * 4 + 2], s3 = S[b * 4 + 3];
+		for(a = 0; a < 4; a++)
+			d[a * 4 + b] = (((0.0f + s0 * T[a * 4]) + s1 * T[a * 4 + 1]) + s2 * T[a * 4 + 2]) + s3 * T[a * 4 + 3];
+	}
+}
+
+static void vmmul4_fast(u32 op){
+	if(mcont4[VS] >= 0 && mcont4[VT] >= 0 && mcont4[VD] >= 0){
+		const int md = mcont4[VD];
+		if(md != mcont4[VS] && md != mcont4[VT]){
+			/* Sin solape (cada matriz son 64 bytes alineados): directo */
+			vmmul4_cont(&VF(mcont4[VS]), &VF(mcont4[VT]), &VF(md));
+		} else {
+			float d[16];
+			int k;
+			vmmul4_cont(&VF(mcont4[VS]), &VF(mcont4[VT]), d);
+			for(k = 0; k < 16; k++) VF(md + 4 * k) = d[k];
+		}
+		return;
+	}
+	/* Lo más común: 4x4 sin prefijos. Mismo orden de sumas para cada
+	   elemento; los cuatro de una columna van a la vez. */
+	const u16 *xs = midx[4][VS], *xt = midx[4][VT], *xd = midx[4][VD];
+	float s[16], d[16];
+	int a, k;
+	for(k = 0; k < 16; k++) s[k] = VF(xs[k]);
+	for(a = 0; a < 4; a++){
+		const float t0 = VF(xt[a * 4]), t1 = VF(xt[a * 4 + 1]);
+		const float t2 = VF(xt[a * 4 + 2]), t3 = VF(xt[a * 4 + 3]);
+		float d0 = 0.0f + s[0] * t0, d1 = 0.0f + s[4] * t0, d2 = 0.0f + s[8] * t0, d3 = 0.0f + s[12] * t0;
+		d0 += s[1] * t1; d1 += s[5] * t1; d2 += s[9] * t1; d3 += s[13] * t1;
+		d0 += s[2] * t2; d1 += s[6] * t2; d2 += s[10] * t2; d3 += s[14] * t2;
+		d0 += s[3] * t3; d1 += s[7] * t3; d2 += s[11] * t3; d3 += s[15] * t3;
+		d[a * 4] = d0; d[a * 4 + 1] = d1; d[a * 4 + 2] = d2; d[a * 4 + 3] = d3;
+	}
+	for(k = 0; k < 16; k++) VF(xd[k]) = d[k];
+}
+
+static NOINLINE void vmmul_general(u32 op){
 	MatrixSize sz = mtx_size(op);
 	int n = (int)sz, a, b, c;
+	float s[16] = { 0 }, t[16] = { 0 }, d[16];
 	read_matrix(s, sz, VS);
 	read_matrix(t, sz, VT);
 	for(a = 0; a < n; a++)
@@ -748,7 +875,12 @@ static void op_vmmul(u32 op){
 	eat_prefixes();
 }
 
-static void op_vmscl(u32 op){
+static NOINLINE void op_vmmul(u32 op){
+	if(mtx_size(op) == M_4x4 && FAST_OK()) vmmul4_fast(op);
+	else vmmul_general(op);
+}
+
+static NOINLINE void op_vmscl(u32 op){
 	float s[16] = { 0 }, t[4] = { 0 }, d[16];
 	MatrixSize sz = mtx_size(op);
 	int n = (int)sz, a, b, vt = VT, tlane = (vt >> 5) & 3;
@@ -765,7 +897,7 @@ static void op_vmscl(u32 op){
 	eat_prefixes();
 }
 
-static void op_vmmov(u32 op){
+static NOINLINE void op_vmmov(u32 op){
 	float s[16] = { 0 };
 	MatrixSize sz = mtx_size(op);
 	int off = (int)sz - 1;
@@ -776,12 +908,32 @@ static void op_vmmov(u32 op){
 	eat_prefixes();
 }
 
-static void op_vflush(u32 op){
+static NOINLINE void op_vflush(u32 op){
 	/* Todo 0xFC... es un nop, pero solo 0xFFFF0000 conserva los prefijos */
 	if((op & 0xFFFF0000u) != 0xFFFF0000u) eat_prefixes();
 }
 
-static void op_vv2op(u32 op){
+/* Sin prefijos, ninguno de los ajustes del camino general hace nada */
+static void vv2op_fast(u32 op, int optype){
+	const VectorSize sz = vec_size(op);
+	const int n = (int)sz;
+	float s[4], d[4];
+	int i;
+	read_vector(s, sz, VS);
+	switch(optype){
+	case 0: write_vector(s, sz, VD); return;
+	case 1: for(i = 0; i < n; i++) d[i] = fabsf(s[i]); break;
+	case 2: for(i = 0; i < n; i++) d[i] = -s[i]; break;
+	case 16: for(i = 0; i < n; i++) d[i] = vfpu_rcp(s[i]); break;
+	case 17: for(i = 0; i < n; i++) d[i] = vfpu_rsqrt(s[i]); break;
+	case 18: for(i = 0; i < n; i++) d[i] = vfpu_sin(s[i]); break;
+	case 19: for(i = 0; i < n; i++) d[i] = vfpu_cos(s[i]); break;
+	default: for(i = 0; i < n; i++) d[i] = vfpu_sqrt(s[i]); break;
+	}
+	write_vector(d, sz, VD);
+}
+
+static NOINLINE void vv2op_general(u32 op){
 	float s[4], d[4];
 	int optype = (op >> 16) & 0x1F, i;
 	VectorSize sz = vec_size(op);
@@ -833,7 +985,19 @@ static void op_vv2op(u32 op){
 	eat_prefixes();
 }
 
-static void op_vocp(u32 op){
+static NOINLINE void op_vv2op(u32 op){
+	const int optype = (op >> 16) & 0x1F;
+	if(FAST_OK()){
+		switch(optype){
+		case 0: case 1: case 2: case 16: case 17: case 18: case 19: case 22:
+			vv2op_fast(op, optype);
+			return;
+		}
+	}
+	vv2op_general(op);
+}
+
+static NOINLINE void op_vocp(u32 op){
 	float s[4], t[4], d[4];
 	VectorSize sz = vec_size(op);
 	int i;
@@ -852,7 +1016,7 @@ static float nanclamp01(float f){
 	return f >= 1.0f ? 1.0f : f;
 }
 
-static void op_vsocp(u32 op){
+static NOINLINE void op_vsocp(u32 op){
 	float s[4], t[4], d[4];
 	VectorSize sz = vec_size(op), out = sz == V_Single ? V_Pair : sz == V_Pair ? V_Quad : V_Quad;
 	read_vector(s, sz, VS);
@@ -869,7 +1033,7 @@ static void op_vsocp(u32 op){
 	eat_prefixes();
 }
 
-static void op_vsgn(u32 op){
+static NOINLINE void op_vsgn(u32 op){
 	float s[4], t[4], d[4];
 	VectorSize sz = vec_size(op);
 	int n = nelem(sz), i;
@@ -887,48 +1051,45 @@ static void op_vsgn(u32 op){
 	eat_prefixes();
 }
 
-static int is_even(float d){
-	float int_part;
-	modff(d / 2.0f, &int_part);
-	return 2.0f * int_part == d;
+/* s ya está en (-2^31, 2^31): sin floor/ceil, que en el Broadway son
+   llamadas lentas (no tiene instrucción de redondeo) */
+static inline s32 f2i_mode(double sv, int mode){
+	const s32 t = (s32)sv;   /* hacia cero */
+	s32 fl;
+	double fr;
+	switch(mode){
+	case 17: return t;                        /* vf2iz */
+	case 18: return t + ((double)t < sv);     /* vf2iu */
+	case 19: return t - ((double)t > sv);     /* vf2id */
+	default:                                  /* vf2in: al par más cercano */
+		fl = t - ((double)t > sv);
+		fr = sv - (double)fl;
+		if(fr < 0.5) return fl;
+		if(fr > 0.5) return fl + 1;
+		return fl + (fl & 1);
+	}
 }
 
-static double round_ieee_754(double d){
-	float i = (float)floor(d);
-	d -= i;
-	if(d < 0.5f) return i;
-	if(d > 0.5f) return i + 1.0f;
-	if(is_even(i)) return i;
-	return i + 1.0f;
-}
-
-static void op_vf2i(u32 op){
+static NOINLINE void op_vf2i(u32 op){
 	FloatBits s, d;
-	int imm = (op >> 16) & 0x1F, i;
+	int imm = (op >> 16) & 0x1F, i, mode = (op >> 21) & 0x1F;
 	float mult = (float)(1u << imm);
 	VectorSize sz = vec_size(op);
 	read_vector(s.f, sz, VS);
 	swizzle_s(s.f, sz, 0.0f);
 	for(i = 0; i < nelem(sz); i++){
 		double sv;
-		if(is_nan(s.f[i])){ d.i[i] = 0x7FFFFFFF; continue; }
+		if(s.f[i] != s.f[i]){ d.i[i] = 0x7FFFFFFF; continue; }
 		sv = (double)(s.f[i] * mult);
 		if(sv > (double)0x7FFFFFFF) d.i[i] = 0x7FFFFFFF;
 		else if(sv <= -2147483648.0) d.u[i] = 0x80000000u;
-		else switch((op >> 21) & 0x1F){
-		case 16: d.i[i] = (int)round_ieee_754(sv); break;
-		case 17: d.i[i] = s.f[i] >= 0 ? (int)floor(sv) : (int)ceil(sv); break;
-		case 18: d.i[i] = (int)ceil(sv); break;
-		case 19: d.i[i] = (int)floor(sv); break;
-		default: d.i[i] = 0x7FFFFFFF; break;
-		}
+		else d.i[i] = f2i_mode(sv, mode);
 	}
-	apply_prefix_d(d.f, sz, 1);
 	write_vector(d.f, sz, VD);
 	eat_prefixes();
 }
 
-static void op_vi2f(u32 op){
+static NOINLINE void op_vi2f(u32 op){
 	FloatBits s;
 	float d[4];
 	int imm = (op >> 16) & 0x1F, i;
@@ -942,7 +1103,7 @@ static void op_vi2f(u32 op){
 	eat_prefixes();
 }
 
-static void op_vh2f(u32 op){
+static NOINLINE void op_vh2f(u32 op){
 	FloatBits s, d;
 	VectorSize sz = vec_size(op), out;
 	read_vector(s.f, sz, VS);
@@ -963,7 +1124,7 @@ static void op_vh2f(u32 op){
 	eat_prefixes();
 }
 
-static void op_vf2h(u32 op){
+static NOINLINE void op_vf2h(u32 op){
 	FloatBits s, d;
 	VectorSize sz = vec_size(op), out;
 	memset(&s, 0, sizeof(s));
@@ -983,7 +1144,7 @@ static void op_vf2h(u32 op){
 	eat_prefixes();
 }
 
-static void op_vx2i(u32 op){
+static NOINLINE void op_vx2i(u32 op){
 	FloatBits s, d;
 	VectorSize sz = vec_size(op), oz = sz;
 	int i;
@@ -1025,7 +1186,7 @@ static void op_vx2i(u32 op){
 	eat_prefixes();
 }
 
-static void op_vi2x(u32 op){
+static NOINLINE void op_vi2x(u32 op){
 	FloatBits s, d;
 	const VectorSize sz = vec_size(op);
 	VectorSize oz = V_Single;
@@ -1065,7 +1226,7 @@ static void op_vi2x(u32 op){
 	eat_prefixes();
 }
 
-static void op_color_conv(u32 op){
+static NOINLINE void op_color_conv(u32 op){
 	FloatBits s, ov;
 	VectorSize isz = vec_size(op);
 	u16 colors[4];
@@ -1089,13 +1250,23 @@ static void op_color_conv(u32 op){
 	eat_prefixes();
 }
 
-static void op_vdot(u32 op){
+static NOINLINE void op_vdot(u32 op){
+	const int neutral = FAST_OK();
 	float s[4] = { 0 }, t[4] = { 0 }, d = 0.0f;
 	VectorSize sz = vec_size(op);
 	int i;
+	if(neutral){
+		/* Lo que falta hasta 4 suma 0 * 0 = +0, que convierte -0 en +0 */
+		const u16 *xs = vidx[sz][VS], *xt = vidx[sz][VT];
+		d = 0.0f + VF(xs[0]) * VF(xt[0]);
+		for(i = 1; i < (int)sz; i++) d += VF(xs[i]) * VF(xt[i]);
+		for(; i < 4; i++) d += 0.0f;
+		VF(vidx[1][VD][0]) = d;
+		return;
+	}
 	read_vector(s, sz, VS);
-	swizzle_s(s, V_Quad, 0.0f);
 	read_vector(t, sz, VT);
+	swizzle_s(s, V_Quad, 0.0f);
 	swizzle_t(t, V_Quad, 0.0f);
 	for(i = 0; i < 4; i++) d += s[i] * t[i];
 	apply_prefix_d(&d, V_Single, 0);
@@ -1103,7 +1274,7 @@ static void op_vdot(u32 op){
 	eat_prefixes();
 }
 
-static void op_vhdp(u32 op){
+static NOINLINE void op_vhdp(u32 op){
 	float s[4] = { 0 }, t[4] = { 0 }, d, sum = 0.0f;
 	VectorSize sz = vec_size(op);
 	u32 remove, add;
@@ -1126,7 +1297,7 @@ static void op_vhdp(u32 op){
 	eat_prefixes();
 }
 
-static void op_vbfy(u32 op){
+static NOINLINE void op_vbfy(u32 op){
 	float s[4] = { 0 }, t[4] = { 0 }, d[4];
 	VectorSize sz = vec_size(op);
 	read_vector(s, sz, VS);
@@ -1156,7 +1327,7 @@ static inline s32 order_key(float f){
 static inline float vmin_(float a, float b){ return order_key(a) < order_key(b) ? a : b; }
 static inline float vmax_(float a, float b){ return order_key(a) > order_key(b) ? a : b; }
 
-static void op_vsrt(u32 op, int which){
+static NOINLINE void op_vsrt(u32 op, int which){
 	float s[4], t[4], d[4];
 	VectorSize sz = vec_size(op);
 	u32 add = (which == 1 || which == 3) ? SWIZZLE(1, 0, 3, 2) : SWIZZLE(3, 2, 1, 0);
@@ -1176,7 +1347,7 @@ static void op_vsrt(u32 op, int which){
 	eat_prefixes();
 }
 
-static void op_vcrs(u32 op){
+static NOINLINE void op_vcrs(u32 op){
 	float s[4] = { 0 }, t[4] = { 0 }, d[4];
 	VectorSize sz = vec_size(op);
 	read_vector(s, sz, VS);
@@ -1192,7 +1363,7 @@ static void op_vcrs(u32 op){
 	eat_prefixes();
 }
 
-static void op_vdet(u32 op){
+static NOINLINE void op_vdet(u32 op){
 	float s[4] = { 0 }, t[4] = { 0 }, d[4];
 	VectorSize sz = vec_size(op);
 	read_vector(s, sz, VS);
@@ -1206,7 +1377,7 @@ static void op_vdet(u32 op){
 	eat_prefixes();
 }
 
-static void op_vfad_vavg(u32 op, int avg){
+static NOINLINE void op_vfad_vavg(u32 op, int avg){
 	float s[4] = { 0 }, t[4] = { 0 }, d = 0.0f;
 	VectorSize sz = vec_size(op);
 	u32 remove = ANY_SWIZZLE, add;
@@ -1227,13 +1398,21 @@ static void op_vfad_vavg(u32 op, int avg){
 	eat_prefixes();
 }
 
-static void op_vscl(u32 op){
+static NOINLINE void op_vscl(u32 op){
+	const int neutral = FAST_OK();
 	float s[4], t[4], d[4];
 	VectorSize sz = vec_size(op);
 	int vt = VT, tlane = (vt >> 5) & 3, n = nelem(sz), i;
+	if(neutral){
+		const u16 *xs = vidx[sz][VS];
+		const float k = vfpu.v[VFPU_INDEX(vt)];
+		for(i = 0; i < n; i++) d[i] = VF(xs[i]) * k;
+		write_vector(d, sz, VD);
+		return;
+	}
 	read_vector(s, sz, VS);
 	swizzle_s(s, sz, 0.0f);
-	t[tlane] = cpu.v[VFPU_INDEX(vt)];
+	t[tlane] = vfpu.v[VFPU_INDEX(vt)];
 	apply_prefix_st(t, rewrite_prefix(VFPU_CTRL_TPREFIX, ANY_SWIZZLE, SWIZZLE(tlane, tlane, tlane, tlane)), V_Quad, 0.0f);
 	for(i = 0; i < n; i++) d[i] = s[i] * t[i];
 	apply_prefix_d(d, sz, 0);
@@ -1241,15 +1420,15 @@ static void op_vscl(u32 op){
 	eat_prefixes();
 }
 
-static void op_vrnds(u32 op){
+static NOINLINE void op_vrnds(u32 op){
 	FloatBits seed;
-	seed.u[0] = cpu.vi[VFPU_INDEX(VD)];
+	seed.u[0] = vfpu.vi[VFPU_INDEX(VD)];
 	swizzle_s(seed.f, V_Single, 0.0f);
 	vrnd_init(seed.u[0], CTRL + VFPU_CTRL_RCX0);
 	eat_prefixes();
 }
 
-static void op_vrndx(u32 op){
+static NOINLINE void op_vrndx(u32 op){
 	FloatBits d;
 	VectorSize sz = vec_size(op);
 	int n = nelem(sz), i;
@@ -1267,20 +1446,20 @@ static void op_vrndx(u32 op){
 	eat_prefixes();
 }
 
-static void op_vrot(u32 op){
+static NOINLINE void op_vrot(u32 op){
 	float d[4] = { 0 }, sine, cosine;
 	int vd = VD, vs = VS, imm = (op >> 16) & 0x1F, i;
 	VectorSize sz = vec_size(op);
 	int neg_sin = (imm & 0x10) != 0, sine_lane = (imm >> 2) & 3, cosine_lane = imm & 3;
 	u32 dremove;
 	if(CTRL[VFPU_CTRL_SPREFIX] == 0x000E4){
-		vfpu_sincos(cpu.v[VFPU_INDEX(vs)], &sine, &cosine);
+		vfpu_sincos(vfpu.v[VFPU_INDEX(vs)], &sine, &cosine);
 		if(neg_sin) sine = -sine;
 	} else {
 		float s[4] = { 0 };
 		read_vector(s, V_Single, vs);
 		apply_prefix_st(s, rewrite_prefix(VFPU_CTRL_SPREFIX, NEGATE4(1, 0, 0, 0), NEGATE4(0, 0, 0, 0)), V_Single, 0.0f);
-		cosine = vfpu_cos(cpu.v[VFPU_INDEX(vs)]);
+		cosine = vfpu_cos(vfpu.v[VFPU_INDEX(vs)]);
 		sine = vfpu_sin(s[0]);
 		if(neg_sin) sine = -sine;
 		retain_invalid_swizzle_st(&sine, V_Single);
@@ -1302,10 +1481,54 @@ static void op_vrot(u32 op){
 	eat_prefixes();
 }
 
-static void op_vtfm(u32 op){
+static void vtfm_fast(u32 op, int ins, int n){
+	const int side = ins + 1, tn = n < side ? n : side;
+	if(ins == 3 && n == 4 && mcont4[VS] >= 0 && vcont4[VT] >= 0){
+		/* vtfm4.q con la matriz y el vector seguidos: lo más común */
+		const float *S = &VF(mcont4[VS]), *T = &VF(vcont4[VT]);
+		const float t0 = T[0], t1 = T[1], t2 = T[2], t3 = T[3];
+		float d[4];
+		int i;
+		for(i = 0; i < 4; i++){
+			float acc = S[i * 4] * t0;
+			acc += S[i * 4 + 1] * t1;
+			acc += S[i * 4 + 2] * t2;
+			acc += S[i * 4 + 3] * t3;
+			d[i] = acc;
+		}
+		write_vector(d, V_Quad, VD);
+		return;
+	}
+	const u16 *xs = midx[side][VS], *xt = vidx[side][VT], *xd = vidx[side][VD];
+	float t[4], d[4], acc;
+	int i, k;
+	for(k = 0; k < 4; k++) t[k] = k < side ? VF(xt[k]) : 0.0f;
+	for(i = 0; i < ins; i++){
+		const u16 *row = &xs[i * 4];
+		acc = VF(row[0]) * t[0];
+		for(k = 1; k < tn; k++) acc += VF(row[k]) * t[k];
+		if(ins >= n) acc += VF(row[ins]);   /* vhtfm */
+		d[i] = acc;
+	}
+	/* Última fila: lo que falta de T vale 0 (y 1 en vhtfm) */
+	for(k = n; k < 4; k++) t[k] = (ins >= n && k == ins) ? 1.0f : 0.0f;
+	{
+		const u16 *row = &xs[ins * 4];
+		float s1 = side > 1 ? VF(row[1]) : 0.0f, s2 = side > 2 ? VF(row[2]) : 0.0f;
+		float s3 = side > 3 ? VF(row[3]) : 0.0f;
+		acc = VF(row[0]) * t[0];
+		acc += s1 * t[1];
+		acc += s2 * t[2];
+		acc += s3 * t[3];
+		d[ins] = acc;
+	}
+	for(i = 0; i < side; i++) VF(xd[i]) = d[i];
+}
+
+static NOINLINE void vtfm_general(u32 op){
+	int ins = (op >> 23) & 3, n = nelem(vec_size(op)), tn, i, k;
 	float s[16] = { 0 }, t[4] = { 0 };
 	FloatBits d;
-	int ins = (op >> 23) & 3, n = nelem(vec_size(op)), tn, i, k;
 	VectorSize sz = (VectorSize)(ins + 1);
 	MatrixSize msz = (MatrixSize)(ins + 1);
 	int cx = C_NONE, cy = n < 2 ? C_ZERO : C_NONE, cz = n < 3 ? C_ZERO : C_NONE, cw = n < 4 ? C_ZERO : C_NONE;
@@ -1338,7 +1561,12 @@ static void op_vtfm(u32 op){
 	eat_prefixes();
 }
 
-static void op_vcst(u32 op){
+static NOINLINE void op_vtfm(u32 op){
+	if(FAST_OK()) vtfm_fast(op, (op >> 23) & 3, nelem(vec_size(op)));
+	else vtfm_general(op);
+}
+
+static NOINLINE void op_vcst(u32 op){
 	static float cst[32];
 	static int ready;
 	VectorSize sz = vec_size(op);
@@ -1375,15 +1603,39 @@ static void op_vcst(u32 op){
 
 enum { VC_FL, VC_EQ, VC_LT, VC_LE, VC_TR, VC_NE, VC_GE, VC_GT, VC_EZ, VC_EN, VC_EI, VC_ES, VC_NZ, VC_NN, VC_NI, VC_NS };
 
-static void op_vcmp(u32 op){
+static NOINLINE void vcmp_general(u32 op){
+	const int neutral = FAST_OK();
 	int cond = op & 0xF, i, cc = 0, or_val = 0, and_val = 1, affected = (1 << 4) | (1 << 5);
 	VectorSize sz = vec_size(op);
 	int n = nelem(sz);
 	float s[4], t[4];
-	read_vector(s, sz, VS);
-	swizzle_s(s, sz, 0.0f);
-	read_vector(t, sz, VT);
-	swizzle_t(t, sz, 0.0f);
+	if(neutral){
+		const u16 *xs = vidx[sz][VS], *xt = vidx[sz][VT];
+		for(i = 0; i < n; i++){ s[i] = VF(xs[i]); t[i] = VF(xt[i]); }
+	} else {
+		read_vector(s, sz, VS);
+		swizzle_s(s, sz, 0.0f);
+		read_vector(t, sz, VT);
+		swizzle_t(t, sz, 0.0f);
+	}
+	if(cond == VC_GT || cond == VC_LT || cond == VC_GE || cond == VC_LE || cond == VC_EQ || cond == VC_NE){
+		/* Las comparaciones normales: un bucle por condición */
+		for(i = 0; i < n; i++){ s[i] = flush(s[i]); t[i] = flush(t[i]); }
+		switch(cond){
+		case VC_EQ: for(i = 0; i < n; i++) cc |= (s[i] == t[i]) << i; break;
+		case VC_LT: for(i = 0; i < n; i++) cc |= (s[i] < t[i]) << i; break;
+		case VC_LE: for(i = 0; i < n; i++) cc |= (s[i] <= t[i]) << i; break;
+		case VC_NE: for(i = 0; i < n; i++) cc |= (s[i] != t[i]) << i; break;
+		case VC_GE: for(i = 0; i < n; i++) cc |= (s[i] >= t[i]) << i; break;
+		default: for(i = 0; i < n; i++) cc |= (s[i] > t[i]) << i; break;
+		}
+		affected |= (1 << n) - 1;
+		or_val = cc != 0;
+		and_val = cc == (1 << n) - 1;
+		CTRL[VFPU_CTRL_CC] = (CTRL[VFPU_CTRL_CC] & ~(u32)affected) | ((u32)(cc | (or_val << 4) | (and_val << 5)) & (u32)affected);
+		eat_prefixes();
+		return;
+	}
 	for(i = 0; i < n; i++){
 		int c;
 		s[i] = flush(s[i]);
@@ -1415,7 +1667,35 @@ static void op_vcmp(u32 op){
 	eat_prefixes();
 }
 
-static void op_vminmax(u32 op){
+/* Sin prefijos y con una comparación normal (lo habitual) */
+static void vcmp_fast(u32 op, int cond){
+	const VectorSize sz = vec_size(op);
+	const int n = (int)sz, all = (1 << n) - 1;
+	const u16 *xs = vidx[sz][VS], *xt = vidx[sz][VT];
+	float s[4], t[4];
+	int i, cc = 0;
+	const u32 affected = (u32)(all | 0x30);
+	for(i = 0; i < n; i++){ s[i] = flush(VF(xs[i])); t[i] = flush(VF(xt[i])); }
+	switch(cond){
+	case VC_EQ: for(i = 0; i < n; i++) cc |= (s[i] == t[i]) << i; break;
+	case VC_LT: for(i = 0; i < n; i++) cc |= (s[i] < t[i]) << i; break;
+	case VC_LE: for(i = 0; i < n; i++) cc |= (s[i] <= t[i]) << i; break;
+	case VC_NE: for(i = 0; i < n; i++) cc |= (s[i] != t[i]) << i; break;
+	case VC_GE: for(i = 0; i < n; i++) cc |= (s[i] >= t[i]) << i; break;
+	default: for(i = 0; i < n; i++) cc |= (s[i] > t[i]) << i; break;
+	}
+	cc |= ((cc != 0) << 4) | ((cc == all) << 5);
+	CTRL[VFPU_CTRL_CC] = (CTRL[VFPU_CTRL_CC] & ~affected) | ((u32)cc & affected);
+}
+
+static NOINLINE void op_vcmp(u32 op){
+	const int cond = op & 0xF;
+	if((cond == VC_EQ || cond == VC_LT || cond == VC_LE || cond == VC_NE || cond == VC_GE || cond == VC_GT) && FAST_OK())
+		vcmp_fast(op, cond);
+	else vcmp_general(op);
+}
+
+static NOINLINE void vminmax_general(u32 op){
 	FloatBits s, t, d;
 	VectorSize sz = vec_size(op);
 	int n = nelem(sz), i, is_max = ((op >> 23) & 3) == 3;
@@ -1424,7 +1704,7 @@ static void op_vminmax(u32 op){
 	read_vector(t.f, sz, VT);
 	swizzle_t(t.f, sz, 0.0f);
 	for(i = 0; i < n; i++){
-		if(is_nan_or_inf(s.f[i]) || is_nan_or_inf(t.f[i])){
+		if(nan_or_inf_f(s.f[i]) || nan_or_inf_f(t.f[i])){
 			/* -NaN < -inf < reales < inf < NaN (más mantisa, más lejos del 0) */
 			int both_neg = s.i[i] < 0 && t.i[i] < 0;
 			int take_max = is_max ? !both_neg : both_neg;
@@ -1443,7 +1723,36 @@ static void op_vminmax(u32 op){
 	eat_prefixes();
 }
 
-static void op_vscmp(u32 op){
+static void vminmax_fast(u32 op){
+	const VectorSize sz = vec_size(op);
+	const int n = (int)sz, is_max = ((op >> 23) & 3) == 3;
+	const u16 *xs = vidx[sz][VS], *xt = vidx[sz][VT];
+	FloatBits d;
+	int i;
+	for(i = 0; i < n; i++){
+		const float a = VF(xs[i]), b = VF(xt[i]);
+		if(nan_or_inf_f(a) || nan_or_inf_f(b)){
+			/* -NaN < -inf < reales < inf < NaN, con los bits */
+			const s32 sa = (s32)VI(xs[i]), sb = (s32)VI(xt[i]);
+			const int both_neg = sa < 0 && sb < 0, take_max = is_max ? !both_neg : both_neg;
+			if(take_max) d.i[i] = sb > sa ? sb : sa;
+			else d.i[i] = sb < sa ? sb : sa;
+		} else {
+			/* Los denormales comparan como cero y en empate gana t */
+			const float fa = flush(a), fb = flush(b);
+			if(is_max) d.f[i] = fb < fa ? a : b;
+			else d.f[i] = fa < fb ? a : b;
+		}
+	}
+	write_vector(d.f, sz, VD);
+}
+
+static NOINLINE void op_vminmax(u32 op){
+	if(FAST_OK()) vminmax_fast(op);
+	else vminmax_general(op);
+}
+
+static NOINLINE void op_vscmp(u32 op){
 	FloatBits s, t, d;
 	VectorSize sz = vec_size(op);
 	int n = nelem(sz), i;
@@ -1465,7 +1774,7 @@ static void op_vscmp(u32 op){
 	eat_prefixes();
 }
 
-static void op_vsge_vslt(u32 op, int lt){
+static NOINLINE void op_vsge_vslt(u32 op, int lt){
 	float s[4], t[4], d[4];
 	VectorSize sz = vec_size(op);
 	int n = nelem(sz), i;
@@ -1483,7 +1792,7 @@ static void op_vsge_vslt(u32 op, int lt){
 	eat_prefixes();
 }
 
-static void op_vcmov(u32 op){
+static NOINLINE void op_vcmov(u32 op){
 	int tf = (op >> 19) & 1, imm3 = (op >> 16) & 7, i;
 	VectorSize sz = vec_size(op);
 	int n = nelem(sz);
@@ -1505,7 +1814,25 @@ static void op_vcmov(u32 op){
 }
 
 /* vadd, vsub, vdiv (VFPU0) y vmul (VFPU1) */
-static void op_vecdo3(u32 op, int optype){
+/* Sin prefijos: directo de los registros; las comprobaciones de denormales
+   y NaN son comparaciones de la FPU que casi nunca saltan */
+static void vecdo3_fast(u32 op, int optype){
+	const VectorSize sz = vec_size(op);
+	const int n = (int)sz;
+	const u16 *xs = vidx[sz][VS], *xt = vidx[sz][VT];
+	float d[4];
+	int i;
+	switch(optype){
+	case 0: for(i = 0; i < n; i++) d[i] = canon(flush(VF(xs[i])) + flush(VF(xt[i]))); break;
+	case 1: for(i = 0; i < n; i++) d[i] = canon(flush(VF(xs[i])) - flush(VF(xt[i]))); break;
+	case 7: for(i = 0; i < n; i++) d[i] = canon(flush(VF(xs[i])) / flush(VF(xt[i]))); break;
+	default: for(i = 0; i < n; i++) d[i] = canon(flush(VF(xs[i])) * flush(VF(xt[i]))); break;
+	}
+	write_vector(d, sz, VD);
+}
+
+/* Los caminos generales van aparte para que el rápido no pague su prólogo */
+static NOINLINE void vecdo3_general(u32 op, int optype){
 	float s[4], t[4];
 	FloatBits d;
 	VectorSize sz = vec_size(op);
@@ -1542,7 +1869,12 @@ static void op_vecdo3(u32 op, int optype){
 	eat_prefixes();
 }
 
-static void op_crossquat(u32 op){
+static NOINLINE void op_vecdo3(u32 op, int optype){
+	if(FAST_OK()) vecdo3_fast(op, optype);
+	else vecdo3_general(op, optype);
+}
+
+static NOINLINE void op_crossquat(u32 op){
 	float s[4] = { 0 }, t[4] = { 0 }, d[4] = { 0 };
 	VectorSize sz = vec_size(op);
 	int n = nelem(sz);
@@ -1583,7 +1915,7 @@ static void op_crossquat(u32 op){
 	eat_prefixes();
 }
 
-static void op_vlgb(u32 op){
+static NOINLINE void op_vlgb(u32 op){
 	FloatBits d, s;
 	VectorSize sz = vec_size(op);
 	int exp, i;
@@ -1600,7 +1932,7 @@ static void op_vlgb(u32 op){
 	eat_prefixes();
 }
 
-static void op_vwbn(u32 op){
+static NOINLINE void op_vwbn(u32 op){
 	FloatBits d, s;
 	VectorSize sz = vec_size(op);
 	u8 exp = (u8)((op >> 16) & 0xFF);
@@ -1623,7 +1955,7 @@ static void op_vwbn(u32 op){
 	eat_prefixes();
 }
 
-static void op_vsbn(u32 op){
+static NOINLINE void op_vsbn(u32 op){
 	FloatBits d, s, t;
 	VectorSize sz = vec_size(op);
 	u8 exp;
@@ -1643,7 +1975,7 @@ static void op_vsbn(u32 op){
 	eat_prefixes();
 }
 
-static void op_vsbz(u32 op){
+static NOINLINE void op_vsbz(u32 op){
 	FloatBits d, s;
 	VectorSize sz = vec_size(op);
 	int i;
@@ -1661,84 +1993,96 @@ static void op_vsbz(u32 op){
 
 static void invalid(u32 op, u32 pc){ cpu_fault("instruccion VFPU desconocida", pc, op); }
 
-static void vfpu4(u32 op, u32 pc){
+static NOINLINE void vfpu4(u32 op, u32 pc){
 	switch((op >> 16) & 0x1F){
-	case 0: case 1: case 2: case 4: case 5:
-	case 16: case 17: case 18: case 19: case 20: case 21: case 22: case 23: case 24: case 26: case 28:
-		op_vv2op(op);
-		break;
-	case 3: op_vidt(op); break;
-	case 6: case 7: op_vvector_init(op); break;
+	case 0: VSTAT(VS_VMOV); op_vv2op(op); break;
+	case 1: case 2: VSTAT(VS_VABS_NEG); op_vv2op(op); break;
+	case 4: case 5: VSTAT(VS_VSAT); op_vv2op(op); break;
+	case 16: case 24: VSTAT(VS_VRCP); op_vv2op(op); break;
+	case 17: VSTAT(VS_VRSQ); op_vv2op(op); break;
+	case 18: case 19: case 26: VSTAT(VS_VSIN_COS); op_vv2op(op); break;
+	case 20: case 21: case 28: VSTAT(VS_VEXP_LOG); op_vv2op(op); break;
+	case 22: VSTAT(VS_VSQRT); op_vv2op(op); break;
+	case 23: VSTAT(VS_VASIN); op_vv2op(op); break;
+	case 3: VSTAT(VS_VIDT_ZERO_ONE); op_vidt(op); break;
+	case 6: case 7: VSTAT(VS_VIDT_ZERO_ONE); op_vvector_init(op); break;
 	default: invalid(op, pc); break;
 	}
 }
 
-static void vfpu7(u32 op, u32 pc){
+static NOINLINE void vfpu7(u32 op, u32 pc){
 	switch((op >> 16) & 0x1F){
-	case 0: op_vrnds(op); break;
-	case 1: case 2: case 3: op_vrndx(op); break;
-	case 18: op_vf2h(op); break;
-	case 19: op_vh2f(op); break;
-	case 22: op_vsbz(op); break;
-	case 23: op_vlgb(op); break;
-	case 24: case 25: case 26: case 27: op_vx2i(op); break;
-	case 28: case 29: case 30: case 31: op_vi2x(op); break;
+	case 0: VSTAT(VS_VRND); op_vrnds(op); break;
+	case 1: case 2: case 3: VSTAT(VS_VRND); op_vrndx(op); break;
+	case 18: VSTAT(VS_CONV); op_vf2h(op); break;
+	case 19: VSTAT(VS_CONV); op_vh2f(op); break;
+	case 22: VSTAT(VS_SBN_SBZ_LGB); op_vsbz(op); break;
+	case 23: VSTAT(VS_SBN_SBZ_LGB); op_vlgb(op); break;
+	case 24: case 25: case 26: case 27: VSTAT(VS_CONV); op_vx2i(op); break;
+	case 28: case 29: case 30: case 31: VSTAT(VS_CONV); op_vi2x(op); break;
 	default: invalid(op, pc); break;
 	}
 }
 
-static void vfpu9(u32 op, u32 pc){
+static NOINLINE void vfpu9(u32 op, u32 pc){
 	switch((op >> 16) & 0x1F){
-	case 0: op_vsrt(op, 1); break;
-	case 1: op_vsrt(op, 2); break;
-	case 2: case 3: op_vbfy(op); break;
-	case 4: op_vocp(op); break;
-	case 5: op_vsocp(op); break;
-	case 6: op_vfad_vavg(op, 0); break;
-	case 7: op_vfad_vavg(op, 1); break;
-	case 8: op_vsrt(op, 3); break;
-	case 9: op_vsrt(op, 4); break;
-	case 10: op_vsgn(op); break;
-	case 16: op_vmfvc(op); break;
-	case 17: op_vmtvc(op); break;
-	case 25: case 26: case 27: op_color_conv(op); break;
+	case 0: VSTAT(VS_VFPU9); op_vsrt(op, 1); break;
+	case 1: VSTAT(VS_VFPU9); op_vsrt(op, 2); break;
+	case 2: case 3: VSTAT(VS_VFPU9); op_vbfy(op); break;
+	case 4: VSTAT(VS_VFPU9); op_vocp(op); break;
+	case 5: VSTAT(VS_VFPU9); op_vsocp(op); break;
+	case 6: VSTAT(VS_VFPU9); op_vfad_vavg(op, 0); break;
+	case 7: VSTAT(VS_VFPU9); op_vfad_vavg(op, 1); break;
+	case 8: VSTAT(VS_VFPU9); op_vsrt(op, 3); break;
+	case 9: VSTAT(VS_VFPU9); op_vsrt(op, 4); break;
+	case 10: VSTAT(VS_VFPU9); op_vsgn(op); break;
+	case 16: VSTAT(VS_MFVC_MTVC); op_vmfvc(op); break;
+	case 17: VSTAT(VS_MFVC_MTVC); op_vmtvc(op); break;
+	case 25: case 26: case 27: VSTAT(VS_CONV); op_color_conv(op); break;
 	default: invalid(op, pc); break;
 	}
 }
 
 void vfpu_exec(u32 op, u32 pc){
+	vfpu_ensure();
 	switch(op >> 26){
+	case 0x36: case 0x3E: VSTAT((op >> 26) == 0x36 ? VS_LVQ : VS_SVQ); op_svq(op, pc); break;
+	case 0x32: case 0x3A: VSTAT((op >> 26) == 0x32 ? VS_LV : VS_SV); op_sv(op, pc); break;
+	case 0x35: case 0x3D: VSTAT(VS_LVSVLR); op_svq(op, pc); break;
 	case 0x12:   /* COP2 (las ramas bvf/bvt las lleva el intérprete) */
-		if(((op >> 21) & 0x1F) == 3 || ((op >> 21) & 0x1F) == 7) op_mftv(op);
-		else invalid(op, pc);
+		switch((op >> 21) & 0x1F){
+		case 3: VSTAT((op & 0x80) ? VS_MFVC_MTVC : VS_MFV); op_mftv(op); break;
+		case 7: VSTAT((op & 0x80) ? VS_MFVC_MTVC : VS_MTV); op_mftv(op); break;
+		default: invalid(op, pc); break;
+		}
 		break;
 	case 0x18:   /* VFPU0 */
 		switch((op >> 23) & 7){
-		case 0: op_vecdo3(op, 0); break;
-		case 1: op_vecdo3(op, 1); break;
-		case 2: op_vsbn(op); break;
-		case 7: op_vecdo3(op, 7); break;
+		case 0: VSTAT(VS_VADD); op_vecdo3(op, 0); break;
+		case 1: VSTAT(VS_VSUB); op_vecdo3(op, 1); break;
+		case 2: VSTAT(VS_SBN_SBZ_LGB); op_vsbn(op); break;
+		case 7: VSTAT(VS_VDIV); op_vecdo3(op, 7); break;
 		default: invalid(op, pc); break;
 		}
 		break;
 	case 0x19:   /* VFPU1 */
 		switch((op >> 23) & 7){
-		case 0: op_vecdo3(op, 8); break;
-		case 1: op_vdot(op); break;
-		case 2: op_vscl(op); break;
-		case 4: op_vhdp(op); break;
-		case 5: op_vcrs(op); break;
-		case 6: op_vdet(op); break;
+		case 0: VSTAT(VS_VMUL); op_vecdo3(op, 8); break;
+		case 1: VSTAT(VS_VDOT); op_vdot(op); break;
+		case 2: VSTAT(VS_VSCL); op_vscl(op); break;
+		case 4: VSTAT(VS_VHDP); op_vhdp(op); break;
+		case 5: VSTAT(VS_VCRS); op_vcrs(op); break;
+		case 6: VSTAT(VS_VDET); op_vdet(op); break;
 		default: invalid(op, pc); break;
 		}
 		break;
 	case 0x1B:   /* VFPU3 */
 		switch((op >> 23) & 7){
-		case 0: op_vcmp(op); break;
-		case 2: case 3: op_vminmax(op); break;
-		case 5: op_vscmp(op); break;
-		case 6: op_vsge_vslt(op, 0); break;
-		case 7: op_vsge_vslt(op, 1); break;
+		case 0: VSTAT(VS_VCMP); op_vcmp(op); break;
+		case 2: case 3: VSTAT(VS_VMIN_MAX); op_vminmax(op); break;
+		case 5: VSTAT(VS_VSCMP_SGE_SLT); op_vscmp(op); break;
+		case 6: VSTAT(VS_VSCMP_SGE_SLT); op_vsge_vslt(op, 0); break;
+		case 7: VSTAT(VS_VSCMP_SGE_SLT); op_vsge_vslt(op, 1); break;
 		default: invalid(op, pc); break;
 		}
 		break;
@@ -1747,37 +2091,35 @@ void vfpu_exec(u32 op, u32 pc){
 		if(sub == 0) vfpu4(op, pc);
 		else if(sub == 1) vfpu7(op, pc);
 		else if(sub == 2) vfpu9(op, pc);
-		else if(sub == 3) op_vcst(op);
-		else if(sub >= 16 && sub <= 19) op_vf2i(op);
-		else if(sub == 20) op_vi2f(op);
-		else if(sub == 21) op_vcmov(op);
-		else if(sub >= 24) op_vwbn(op);
+		else if(sub == 3){ VSTAT(VS_VCST); op_vcst(op); }
+		else if(sub >= 16 && sub <= 19){ VSTAT(VS_VF2I); op_vf2i(op); }
+		else if(sub == 20){ VSTAT(VS_VI2F); op_vi2f(op); }
+		else if(sub == 21){ VSTAT(VS_VCMOV); op_vcmov(op); }
+		else if(sub >= 24){ VSTAT(VS_VWBN); op_vwbn(op); }
 		else invalid(op, pc);
 		break;
 	}
 	case 0x37:   /* VFPU5 */
-		if(((op >> 23) & 7) < 6) op_vpfx(op);
-		else op_viim(op);
+		if(((op >> 23) & 7) < 6){ VSTAT(VS_VPFX); op_vpfx(op); }
+		else { VSTAT(VS_VIIM); op_viim(op); }
 		break;
 	case 0x3C: {   /* VFPU6 */
 		u32 sub = (op >> 21) & 0x1F;
-		if(sub <= 3) op_vmmul(op);
-		else if(sub <= 15) op_vtfm(op);
-		else if(sub <= 19) op_vmscl(op);
-		else if(sub <= 23) op_crossquat(op);
+		if(sub <= 3){ VSTAT(VS_VMMUL); op_vmmul(op); }
+		else if(sub <= 15){ VSTAT(VS_VTFM); op_vtfm(op); }
+		else if(sub <= 19){ VSTAT(VS_VMSCL); op_vmscl(op); }
+		else if(sub <= 23){ VSTAT(VS_VCRSP_QMUL); op_crossquat(op); }
 		else if(sub == 28){
 			switch((op >> 16) & 0xF){
-			case 0: op_vmmov(op); break;
-			case 3: case 6: case 7: op_vmatrix_init(op); break;
+			case 0: VSTAT(VS_VMMOV); op_vmmov(op); break;
+			case 3: case 6: case 7: VSTAT(VS_VMINIT); op_vmatrix_init(op); break;
 			default: invalid(op, pc); break;
 			}
-		} else if(sub == 29) op_vrot(op);
+		} else if(sub == 29){ VSTAT(VS_VROT); op_vrot(op); }
 		else invalid(op, pc);
 		break;
 	}
-	case 0x3F: op_vflush(op); break;
-	case 0x32: case 0x3A: op_sv(op, pc); break;
-	case 0x35: case 0x36: case 0x3D: case 0x3E: op_svq(op, pc); break;
+	case 0x3F: VSTAT(VS_VFLUSH); op_vflush(op); break;
 	default: invalid(op, pc); break;
 	}
 }

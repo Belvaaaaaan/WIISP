@@ -67,6 +67,7 @@ typedef struct {
 	u32 attr, entry, init_prio, prio;
 	u32 stack, stack_size, gp;
 	CpuState ctx;
+	VfpuState vctx;     /* registros VFPU (al día solo si no es vfpu_owner) */
 	u64 ready_seq;      /* orden de llegada a la cola de listos */
 
 	int wait;           /* W_* */
@@ -90,6 +91,48 @@ static u64 seq;
 static u32 module_gp;
 
 static inline Thread *current(void){ return cur >= 0 ? &threads[cur] : NULL; }
+
+/* --- VFPU perezosa ---------------------------------------------------- */
+/* `vfpu` tiene los registros VFPU del hilo vfpu_owner (-1: de ninguno). Al
+   cambiar de hilo no se copian: si el nuevo hilo usa la VFPU, la primera
+   instrucción llama a hle_vfpu_load(), que guarda los del dueño y trae los
+   suyos. Los hilos que no usan la VFPU no pagan nada. */
+static int vfpu_owner = -1;
+u64 kernel_stat_switches, kernel_stat_vfpu_loads, kernel_stat_guest_calls;
+
+/* Una llamada al juego desde el HLE (interrupción, callback del GE...)
+   devuelve la VFPU como estaba, igual que PPSSPP; la copia se hace solo si
+   la función llega a usar la VFPU. */
+typedef struct GuestVfpu { VfpuState state; int owner, taken; struct GuestVfpu *prev; } GuestVfpu;
+static GuestVfpu *guest_vfpu;
+
+void hle_vfpu_load(void){
+	if(guest_vfpu && !guest_vfpu->taken){
+		guest_vfpu->state = vfpu;
+		guest_vfpu->owner = vfpu_owner;
+		guest_vfpu->taken = 1;
+	}
+	if(vfpu_owner != cur){
+		if(vfpu_owner >= 0) threads[vfpu_owner].vctx = vfpu;
+		if(cur >= 0) vfpu = threads[cur].vctx;
+		vfpu_owner = cur;
+		kernel_stat_vfpu_loads++;
+	}
+	vfpu_live = 1;
+}
+
+static void vfpu_update_live(void){
+	vfpu_live = (guest_vfpu && !guest_vfpu->taken) ? 0 : vfpu_owner == cur;
+}
+
+/* Los registros VFPU del hilo i dejan de valer (hilo borrado o reiniciado),
+   también en las copias de las llamadas al juego en curso */
+static void vfpu_forget(int i){
+	GuestVfpu *g;
+	if(vfpu_owner == i) vfpu_owner = -1;
+	for(g = guest_vfpu; g; g = g->prev) if(g->taken && g->owner == i) g->owner = -1;
+	vfpu_update_live();
+}
 static inline u32 thread_uid(int i){ return make_uid(UID_THREAD, i); }
 
 static int find_thread(u32 uid){
@@ -186,6 +229,8 @@ static void schedule(void){
 		cpu = threads[cur].ctx;
 		cpu.llbit = 0; /* un cambio de hilo implica una interrupción */
 	}
+	vfpu_update_live();
+	kernel_stat_switches++;
 }
 
 static void exit_thread(int i, u32 status, int del);
@@ -881,7 +926,8 @@ static void start_thread(int i, u32 arglen, u32 argp){
 	c->r[R_GP] = t->gp;
 	c->r[R_RA] = HLE_KERNEL_TRAMPOLINE;
 	c->fcr31 = FCR31_DEFAULT;
-	vfpu_reset(c);
+	vfpu_reset(&t->vctx);
+	vfpu_forget(i);   /* sus registros vivos ya no valen */
 	c->pc = t->entry;
 	c->npc = t->entry + 4;
 	t->exit_status = SCE_KERNEL_ERROR_NOT_DORMANT;
@@ -902,6 +948,7 @@ static void sceKernelStartThread(void){
 static void free_thread(int i){
 	kernel_free(threads[i].stack);
 	threads[i].used = 0;
+	vfpu_forget(i);
 }
 
 /* Termina el hilo i (pasa a DORMANT) y despierta a quien esperaba su fin */
@@ -947,9 +994,15 @@ u32 kernel_call_guest(u32 func, u32 a0, u32 a1, u32 a2){
 u32 kernel_call_guest_sp(u32 func, u32 sp, u32 a0, u32 a1, u32 a2){
 	CpuState saved = cpu;
 	int saved_done = callback_done, saved_stop = cpu_stop_requested;
+	GuestVfpu gv;
 	u32 ret;
 
 	if(!func || !mem_valid(func, 4)) return 0;
+	kernel_stat_guest_calls++;
+	gv.taken = 0;
+	gv.prev = guest_vfpu;
+	guest_vfpu = &gv;
+	vfpu_live = 0;
 	in_interrupt++;
 	cpu.r[R_A0] = a0;
 	cpu.r[R_A1] = a1;
@@ -967,6 +1020,12 @@ u32 kernel_call_guest_sp(u32 func, u32 sp, u32 a0, u32 a1, u32 a2){
 	}
 	ret = cpu.r[R_V0];
 	cpu = saved;
+	guest_vfpu = gv.prev;
+	if(gv.taken){
+		vfpu = gv.state;
+		vfpu_owner = gv.owner;
+	}
+	vfpu_update_live();
 	callback_done = saved_done;
 	(void)saved_stop;
 	cpu_stop_requested = 1; /* que el bucle principal revise eventos y cambios de hilo */
@@ -1862,6 +1921,11 @@ void kernel_init(const PspModule *mod, const char *exec_path){
 	   Se crea igual que lo haría el juego, con los mismos chequeos. */
 	cpu_cycles = 0;
 	memset(&cpu, 0, sizeof(cpu));
+	vfpu_reset(&vfpu);
+	vfpu_owner = -1;
+	vfpu_live = 0;
+	guest_vfpu = NULL;
+	kernel_stat_switches = kernel_stat_vfpu_loads = kernel_stat_guest_calls = 0;
 	memcpy(mem_ptr(HLE_KERNEL_TRAMPOLINE + 0x10, 5), "root", 5);
 	cpu.r[R_A0] = HLE_KERNEL_TRAMPOLINE + 0x10;  /* nombre */
 	cpu.r[R_A1] = mod->entry;

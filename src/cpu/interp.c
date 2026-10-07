@@ -370,7 +370,10 @@ static inline void step(void){
 	case 0x39: st32(R(RS) + IMM, FI(FT), instr); break;                /* swc1 */
 	case 0x12:                                                         /* cop2 */
 		if(RS == 8){                                   /* bvf, bvt, bvfl, bvtl */
-			int val = (cpu.vfpu_ctrl[3] >> ((instr >> 18) & 7)) & 1;
+			int val;
+			vfpu_ensure();
+			vfpu_stat_bv++;
+			val = (vfpu.ctrl[VFPU_CTRL_CC] >> ((instr >> 18) & 7)) & 1;
 			if(RT & 2) branch_likely(val == (int)(RT & 1), pc, instr);
 			else branch(val == (int)(RT & 1), pc, instr);
 		} else vfpu_exec(instr, pc);

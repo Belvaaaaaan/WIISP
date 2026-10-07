@@ -39,10 +39,14 @@ typedef struct {
 	/* bc1x justo tras c.cond ve la condición anterior */
 	u32 fcc_hazard_pc;
 	int fcc_old;
-	/* VFPU: 128 registros (índice VFPU_INDEX) y los de control */
-	union { float v[128]; u32 vi[128]; };
-	u32 vfpu_ctrl[16];
 } CpuState;
+
+/* Registros de la VFPU: van aparte porque los cambios de hilo los guardan
+   solo cuando hace falta (ver vfpu.h) */
+typedef struct {
+	union { float v[128]; u32 vi[128]; };   /* índice VFPU_INDEX */
+	u32 ctrl[16];
+} VfpuState;
 
 /* Estado de la CPU del hilo que corre ahora. Lo guardan y restauran los
    cambios de contexto del HLE. */

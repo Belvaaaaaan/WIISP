@@ -115,6 +115,14 @@ void hle_log(const char *fmt, ...) __attribute__((format(printf, 1, 2)));
 /* Además de stderr, el registro va a este archivo (NULL = ninguno). Se
    vacía en cada línea para que sobreviva a un cuelgue. */
 void hle_set_log_file(const char *path);
+/* Asegura que lo escrito llega a la SD (también lo hace solo cada segundo) */
+void hle_log_sync(void);
+
+/* Estadísticas de rendimiento (instrucciones, VFPU, cambios de hilo) al
+   registro: cada minuto de juego emulado y al terminar. En PC solo con la
+   variable de entorno WIISP_STATS. */
+void hle_log_stats(void);
+extern u64 kernel_stat_switches, kernel_stat_vfpu_loads, kernel_stat_guest_calls;
 
 /* Estado de salida */
 int  hle_has_exited(void);

@@ -234,6 +234,7 @@ static int autotest(const char *appdir){
 	snprintf(path, sizeof(path), "%s/autotest.done", base);
 	done = fopen(path, "w");
 	if(done){ fprintf(done, "%d\n", count); fclose(done); }
+	hle_set_log_file(NULL);
 	fatUnmount("sd:");
 	SYS_ResetSystem(SYS_POWEROFF, 0, 0);
 	return 1;
@@ -278,5 +279,9 @@ int main(int argc, char **argv){
 
 	while(menu_choose_file(path, sizeof(path)))
 		open_file(path);
+	hle_log_stats();
+	hle_set_log_file(NULL);   /* cierra wiisp.log antes de volver al Homebrew Channel */
+	fatUnmount("sd:");
+	fatUnmount("usb:");
 	return 0;
 }

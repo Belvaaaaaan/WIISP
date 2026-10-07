@@ -7,6 +7,7 @@
 
 #include <wiiuse/wpad.h>
 #include <fat.h>
+#include "hle/hle.h"
 #include "wii/wii.h"
 #include "frontend/app.h"
 
@@ -30,6 +31,8 @@ void input_init(void){
 
 void input_check_power(void){
 	if(!power_pressed) return;
+	hle_log_stats();
+	hle_set_log_file(NULL);   /* cierra wiisp.log antes de desmontar */
 	fatUnmount("sd:");
 	fatUnmount("usb:");
 	SYS_ResetSystem(SYS_POWEROFF, 0, 0);
