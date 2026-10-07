@@ -56,7 +56,7 @@ Estructura del repositorio:
 |---|---|
 | `src/core/` | Tipos, acceso little-endian y mapa de memoria de la PSP |
 | `src/loader/` | PBP, PARAM.SFO, ELF/PRX (relocalizaciones e imports) |
-| `src/cpu/` | Intérprete del Allegrex (enteros y FPU; la VFPU, pendiente) |
+| `src/cpu/` | Intérprete del Allegrex (enteros, FPU y VFPU) |
 | `src/hle/` | HLE: syscalls por NID, hilos, sincronización, memoria, E/S, display, mandos |
 | `tools/` | Generador de la tabla de NIDs a partir del PSPSDK |
 | `src/frontend/` | Lógica común a todas las plataformas (`app.c`) |
@@ -174,15 +174,27 @@ Otras optimizaciones previstas:
 
 ### 5.3 VFPU (fase 6)
 
-Es el gran cuello de botella de los juegos 3D. El plan:
+Es el gran cuello de botella de los juegos 3D.
 
-- Los 128 registros se guardan como 8 matrices 4×4 en memoria.
+**Hecho: intérprete completo** (`src/cpu/vfpu.c`), port del de PPSSPP. Los
+128 registros van en `CpuState` como 8 matrices 4×4 con las columnas
+contiguas; cada instrucción aplica los prefijos S/T/D como el hardware
+(swizzle, constantes, abs, negado, saturación y máscara, incluidos los casos
+raros de `vdiv`, `vrot`, `vtfm`, `vmmul`…). `vrcp`, `vrsq`, `vsqrt`,
+`vexp2`, `vlog2`, `vsin`/`vcos` y `vasin` usan tablas de segmentos que imitan
+el interpolador de la PSP bit a bit (`tools/gen_vfpu_tables.py` las genera
+desde PPSSPP). Como en el hardware, las sumas y productos tratan los
+denormales como cero y dan el NaN canónico `0x7f800001`, así que x86 y
+PowerPC dan los mismos bits. Pasan 20 de los 26 tests de `cpu/vfpu` (PPSSPP
+pasa 16); los que faltan son latencias del pipeline, solapamientos que el
+ensamblador rechaza y la precisión interna de `vavg`/`vcrsp`.
+
+Pendiente, para el dynarec:
+
 - Las operaciones de vector y matriz más comunes (`vmmul`, `vtfm`, `vdot`,
   `vadd`, `vscl`…) se emiten con *paired singles*, mapeando pares de
   componentes a un registro FPR.
-- Las funciones trascendentes (`vsin`, `vcos`, `vrsq`…) se aproximan con
-  tablas o con `frsqrte` + Newton. La exactitud bit a bit no es un objetivo.
-- Las operaciones raras se interpretan.
+- Las operaciones raras siguen en el intérprete.
 
 ## 6. HLE
 
@@ -303,7 +315,7 @@ píxel, el stencil y los modos de mezcla que GX no tiene.
 | 3 | Correr los *samples* del PSPSDK y homebrew sencillo; ampliar el HLE guiado por pspautotests e imports.txt. Hecho: menú SD/USB, medidor de FPS/MIPS, sceRtc, sceUtility, sceSuspend, directorios/stat, Mt19937, red simulada | ⏳ |
 | 4 | GE: listas, geometría, renderizador por software exacto y backend GX (primitivas, texturas con caché, framebuffers, render a textura) | ✅ |
 | 5 | Dynarec basado en Not64, validado contra el intérprete | |
-| 6 | VFPU con paired singles, skinning, audio (sceAudio ✅, SAS ✅ y lógica de Atrac3+ ✅; falta decodificar ATRAC3+ y sacar el sonido por el Wii) | ⏳ |
+| 6 | VFPU (intérprete exacto ✅; paired singles con el dynarec), skinning, audio (sceAudio ✅, SAS ✅ y lógica de Atrac3+ ✅; falta decodificar ATRAC3+ y sacar el sonido por el Wii) | ⏳ |
 | 7 | ISO/CSO/ZSO y descifrado ✅; carga de módulos ✅, sceMpeg (videos omitidos) ✅, sceUtility (partidas en la SD, diálogos) ✅, tiempos de E/S ✅; compatibilidad con juegos comerciales | ⏳ |
 
 El plan de optimización para juegos comerciales pesados (fastmem, caché
@@ -332,8 +344,9 @@ persistente de código, VFPU, audio en el DSP, E/S asíncrona) está en
 Estado de la fase 2 (comprobado con pspautotests): CPU entera y saltos,
 división, carga/almacenamiento, ll/sc, FPU básica (sin flags IEEE, modos de
 redondeo ni anulación de denormales), hilos, semáforos, event flags, malloc
-y string. Faltan: VFPU, callbacks, alarmas, mutex, mailboxes, message pipes,
-FPL/VPL, sceIoDopen y la mayoría de módulos de sistema.
+y string. De lo que faltaba entonces ya están la VFPU, los callbacks, los
+LwMutex, los FPL y sceIoDopen; siguen pendientes las alarmas, los mutex
+normales, los mailboxes, los message pipes y los VPL (GTA LCS no los usa).
 
 ## 10. Convenciones
 

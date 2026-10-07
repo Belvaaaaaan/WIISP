@@ -17,6 +17,7 @@
 #include <math.h>
 #include <stdio.h>
 #include "cpu/cpu.h"
+#include "cpu/vfpu.h"
 #include "core/memory.h"
 
 CpuState cpu;
@@ -367,8 +368,19 @@ static inline void step(void){
 		break;
 	case 0x31: FI(FT) = ld32(R(RS) + IMM, instr); break;               /* lwc1 */
 	case 0x39: st32(R(RS) + IMM, FI(FT), instr); break;                /* swc1 */
+	case 0x12:                                                         /* cop2 */
+		if(RS == 8){                                   /* bvf, bvt, bvfl, bvtl */
+			int val = (cpu.vfpu_ctrl[3] >> ((instr >> 18) & 7)) & 1;
+			if(RT & 2) branch_likely(val == (int)(RT & 1), pc, instr);
+			else branch(val == (int)(RT & 1), pc, instr);
+		} else vfpu_exec(instr, pc);
+		break;
+	case 0x18: case 0x19: case 0x1B: case 0x32: case 0x34: case 0x35: case 0x36:
+	case 0x37: case 0x3A: case 0x3C: case 0x3D: case 0x3E: case 0x3F:
+		vfpu_exec(instr, pc);
+		break;
 	default:
-		cpu_fault("instruccion desconocida (VFPU aun no implementada)", pc, instr);
+		cpu_fault("instruccion desconocida", pc, instr);
 	}
 	cpu.r[0] = 0;
 }

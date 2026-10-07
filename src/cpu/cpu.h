@@ -39,6 +39,9 @@ typedef struct {
 	/* bc1x justo tras c.cond ve la condición anterior */
 	u32 fcc_hazard_pc;
 	int fcc_old;
+	/* VFPU: 128 registros (índice VFPU_INDEX) y los de control */
+	union { float v[128]; u32 vi[128]; };
+	u32 vfpu_ctrl[16];
 } CpuState;
 
 /* Estado de la CPU del hilo que corre ahora. Lo guardan y restauran los

@@ -20,12 +20,14 @@ completo** con dos renderizadores:
 - **Software exacto**: port del renderizador de PPSSPP, idéntico al bit a
   una PSP en las pruebas, pero lento en el Wii.
 
-Pasan 192 de los 557 [pspautotests](https://github.com/hrydgard/pspautotests)
-(97 de 109 de gráficos). Para los juegos comerciales ya hay carga de módulos,
-sceAudio, el mezclador SAS, la lógica de Atrac3+ y sceMpeg (con sonido en
-silencio por ahora: los videos se saltan), partidas guardadas y diálogos del
-sistema. Todavía no hay VFPU (muchos juegos la usan) ni dynarec, así que los
-juegos comerciales aún no pasan de arrancar.
+Pasan 212 de los 557 [pspautotests](https://github.com/hrydgard/pspautotests)
+(97 de 109 de gráficos y 20 de 26 de la VFPU). Para los juegos comerciales ya
+hay carga de módulos, la VFPU completa (con las funciones trascendentes
+exactas al bit), sceAudio, el mezclador SAS, la lógica de Atrac3+ y sceMpeg
+(con sonido en silencio por ahora: los videos se saltan), partidas guardadas
+y diálogos del sistema. GTA: Liberty City Stories ya tiene todas sus
+funciones del firmware. Falta el dynarec: con el intérprete, los juegos
+comerciales van muy lentos.
 
 En el Wii, las partidas guardadas van a `SAVEDATA/` dentro de la carpeta de
 WIISP (`sd:/apps/wiisp/` o `sd:/wiisp/`), sin cifrar y con su `PARAM.SFO`

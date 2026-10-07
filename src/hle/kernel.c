@@ -26,6 +26,7 @@
 #include <stdlib.h>
 #include "hle/hle.h"
 #include "core/memory.h"
+#include "cpu/vfpu.h"
 
 /* ------------------------------------------------------------------ */
 /* UIDs                                                               */
@@ -880,6 +881,7 @@ static void start_thread(int i, u32 arglen, u32 argp){
 	c->r[R_GP] = t->gp;
 	c->r[R_RA] = HLE_KERNEL_TRAMPOLINE;
 	c->fcr31 = FCR31_DEFAULT;
+	vfpu_reset(c);
 	c->pc = t->entry;
 	c->npc = t->entry + 4;
 	t->exit_status = SCE_KERNEL_ERROR_NOT_DORMANT;
