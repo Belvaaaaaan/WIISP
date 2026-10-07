@@ -112,6 +112,9 @@ void hle_output(const char *text, u32 len);
 
 /* Mensajes del emulador (no del juego) */
 void hle_log(const char *fmt, ...) __attribute__((format(printf, 1, 2)));
+/* Además de stderr, el registro va a este archivo (NULL = ninguno). Se
+   vacía en cada línea para que sobreviva a un cuelgue. */
+void hle_set_log_file(const char *path);
 
 /* Estado de salida */
 int  hle_has_exited(void);
@@ -164,6 +167,9 @@ void atrac_init(void);
 void atrac_shutdown(void);
 /* sceUtilityLoadModule del módulo de Atrac: sus contextos viven en su BSS */
 void atrac_notify_load(u32 bss);
+extern const HleLibrary hle_utility_libs[];
+extern const u32 hle_utility_libs_count;
+void utility_init(void);
 extern const HleLibrary hle_mpeg_libs[];
 extern const u32 hle_mpeg_libs_count;
 void mpeg_init(void);
@@ -267,6 +273,11 @@ void io_shutdown(void);
 /* Un archivo entero por su ruta de la PSP, o el resto de un descriptor
    abierto desde su posición actual (malloc; NULL si falla) */
 u8  *io_load_path(const char *path, u32 *len);
+/* Ruta del anfitrión de una ruta de la PSP en ms0:/host0: (-1 si no) */
+int  io_host_path(const char *psp_path, char *out, u32 size);
+/* Carpeta para ms0:/PSP/SAVEDATA (NULL o "" = la de ms0:/). Se conserva
+   entre juegos. */
+void io_set_savedata_dir(const char *dir);
 u8  *io_load_fd(u32 fd, u32 *len);
 
 /* Escribe una ScePspDateTime (16 bytes) a partir de microsegundos Unix (misc.c) */

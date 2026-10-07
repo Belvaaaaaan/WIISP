@@ -81,3 +81,51 @@ int sfo_get_int(const SfoFile *sfo, const char *key, u32 *out){
 	*out = rd_le32(data);
 	return 0;
 }
+
+int sfo_get_data(const SfoFile *sfo, const char *key, u8 *dst, u32 cap){
+	const u8 *e = find_entry(sfo, key), *data;
+	u32 size;
+	if(!e || !(data = entry_data(sfo, e, &size))) return -1;
+	if(size > cap) size = cap;
+	memcpy(dst, data, size);
+	return (int)size;
+}
+
+u32 sfo_build(const SfoEntry *e, u32 n, u8 *out, u32 cap){
+	u32 i, keys = 0, data = 0, key_table, data_table, ko = 0, dof = 0;
+	for(i = 0; i < n; i++){
+		keys += (u32)strlen(e[i].key) + 1;
+		data += (e[i].max_len + 3) & ~3u;
+	}
+	key_table = SFO_HEADER_SIZE + n * SFO_ENTRY_SIZE;
+	data_table = (key_table + keys + 3) & ~3u;
+	if(data_table + data > cap) return 0;
+	memset(out, 0, data_table + data);
+	out[1] = 'P'; out[2] = 'S'; out[3] = 'F';
+	wr_le32(out + 4, 0x00000101);
+	wr_le32(out + 8, key_table);
+	wr_le32(out + 12, data_table);
+	wr_le32(out + 16, n);
+	for(i = 0; i < n; i++){
+		u8 *ent = out + SFO_HEADER_SIZE + i * SFO_ENTRY_SIZE, *d = out + data_table + dof;
+		u32 len, klen = (u32)strlen(e[i].key) + 1;
+		if(e[i].fmt == SFO_FMT_INT32){ wr_le32(d, e[i].value); len = 4; }
+		else if(e[i].fmt == SFO_FMT_UTF8){
+			len = (u32)strlen(e[i].str) + 1;
+			if(len > e[i].max_len) len = e[i].max_len;
+			memcpy(d, e[i].str, len - 1);
+		} else {
+			len = e[i].len > e[i].max_len ? e[i].max_len : e[i].len;
+			if(len) memcpy(d, e[i].str, len);
+		}
+		memcpy(out + key_table + ko, e[i].key, klen);
+		wr_le16(ent + 0, (u16)ko);
+		wr_le16(ent + 2, e[i].fmt);
+		wr_le32(ent + 4, len);
+		wr_le32(ent + 8, e[i].max_len);
+		wr_le32(ent + 12, dof);
+		ko += klen;
+		dof += (e[i].max_len + 3) & ~3u;
+	}
+	return data_table + data;
+}

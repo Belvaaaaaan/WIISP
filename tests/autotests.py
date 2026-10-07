@@ -13,7 +13,7 @@ de WIISP y compara la salida con los .expected (grabados en una PSP real).
 
 SPDX-License-Identifier: GPL-2.0-or-later
 """
-import difflib, os, pathlib, subprocess, sys, tempfile
+import difflib, os, pathlib, shutil, subprocess, sys, tempfile
 
 import os, shlex
 # WIISP_CLI permite usar otro binario, p. ej. "qemu-ppc build-pc/wiisp-cli-ppc"
@@ -29,9 +29,11 @@ def normalize(text):
 ROOT = None   # carpeta de pspautotests: hace de ms0:/, como el --root de PPSSPP
 
 def run(prx, bmp=None):
-    args = CLI + ['--run', '--quiet', '--frames', '1200']
+    args = CLI + ['--run', '--quiet', '--frames', '2400']
     if ROOT:
         args += ['--root', ROOT]
+        # Cada test empieza con la Memory Stick sin partidas, como al grabarlos
+        shutil.rmtree(os.path.join(ROOT, 'PSP', 'SAVEDATA'), ignore_errors=True)
     if bmp:
         args += ['--bmp', bmp]
     try:

@@ -119,6 +119,7 @@ int app_load(const char *path, int max_imports, const char *imports_out){
 	int err;
 
 	if(verbose) printf("Cargando %s\n", path);
+	hle_log("[WIISP] cargando %s\n", path);
 	hle_shutdown();
 	loader_free(&module);
 	disc_close();
@@ -142,6 +143,8 @@ int app_load(const char *path, int max_imports, const char *imports_out){
 		}
 	}
 	if(verbose) loader_print_info(&module, max_imports);
+	hle_log("[WIISP] %s%s%s%s, %u imports\n", module.title[0] ? module.title : module.name,
+	        module.disc_id[0] ? " (" : "", module.disc_id, module.disc_id[0] ? ")" : "", module.num_imports);
 
 	/* La carpeta del ejecutable (o de la imagen) hace de ms0:/ y host0:/ */
 	snprintf(host_dir, sizeof(host_dir), "%s", path);

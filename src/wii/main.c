@@ -36,6 +36,7 @@
 #include "wii/wii.h"
 #include "wii/gx_ge.h"
 #include "frontend/app.h"
+#include "hle/hle.h"
 #ifdef WIISP_PROF
 extern unsigned long long ge_prof[8];
 #endif
@@ -259,6 +260,15 @@ int main(int argc, char **argv){
 		snprintf(appdir, sizeof(appdir), "%.*s", (int)(slash - argv[0]), argv[0]);
 		snprintf(config, sizeof(config), "%s/wiisp.cfg", appdir);
 		menu_set_config_path(config);
+	}
+
+	/* Partidas y registro junto a WIISP (sd:/apps/wiisp/ o sd:/wiisp/) */
+	{
+		char dir[340];
+		snprintf(dir, sizeof(dir), "%s/SAVEDATA", appdir[0] ? appdir : "sd:/wiisp");
+		io_set_savedata_dir(dir);
+		snprintf(dir, sizeof(dir), "%s/wiisp.log", appdir[0] ? appdir : "sd:/wiisp");
+		hle_set_log_file(dir);
 	}
 
 	autotest(appdir[0] ? appdir : NULL);

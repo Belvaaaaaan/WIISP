@@ -234,6 +234,29 @@ porta entero: su consumo de memoria no cabe en el Wii.
 - `tools/make_test_vectors.py` cifra ELF y crea imágenes de prueba, para
   probar todo esto sin archivos de juegos.
 
+### 6.4 Juegos comerciales (lo que pide GTA LCS)
+
+- `hle/module.c`: `ModuleMgrForUser`. Los PRX del disco se cargan y enlazan
+  entre sí (tabla global de syscalls, exports parcheados como `j destino`);
+  los módulos del firmware se simulan con la lista de módulos HLE.
+- `hle/audio.c`: sceAudio con el modelo de PPSSPP (un búfer por canal, la
+  mezcla cada 64 muestras, las salidas bloqueantes esperan).
+- `hle/sas.c`: sceSasCore, port del mezclador de PPSSPP (VAG, PCM, ADSR).
+- `hle/atrac.c`: sceAtrac3plus con la lógica de búferes de `AtracCtx2` de
+  PPSSPP; el estado vive en el contexto de 256 bytes en la memoria de la
+  PSP. Decodifica silencio: falta el decodificador ATRAC3+.
+- `hle/mpeg.c`: sceMpeg sin decodificador: el ringbuffer y el callback del
+  juego funcionan, pero lo que entra se descarta y el video termina en cuanto
+  el juego acaba de leer el archivo.
+- `hle/utility.c`: sceUtility. Módulos de utilidad con su memoria, la
+  máquina de estados común de los diálogos, MsgDialog (acepta la opción por
+  defecto) y Savedata con todos sus modos sobre la SD
+  (`ms0:/PSP/SAVEDATA/<juego><partida>/`, sin cifrar, con `PARAM.SFO`).
+- Tiempos: E/S (abrir, leer, stat...), Media Engine, diálogos y módulos
+  hacen esperar al hilo lo mismo que en la PSP, como en PPSSPP.
+- `wiisp.log`: lo que registra el HLE (funciones que faltan, fallos, mensajes
+  del juego, partidas) se guarda también en la SD.
+
 ## 7. Gráficos: GE → GX
 
 El GE tiene dos renderizadores que comparten todo lo anterior a la
@@ -280,8 +303,8 @@ píxel, el stencil y los modos de mezcla que GX no tiene.
 | 3 | Correr los *samples* del PSPSDK y homebrew sencillo; ampliar el HLE guiado por pspautotests e imports.txt. Hecho: menú SD/USB, medidor de FPS/MIPS, sceRtc, sceUtility, sceSuspend, directorios/stat, Mt19937, red simulada | ⏳ |
 | 4 | GE: listas, geometría, renderizador por software exacto y backend GX (primitivas, texturas con caché, framebuffers, render a textura) | ✅ |
 | 5 | Dynarec basado en Not64, validado contra el intérprete | |
-| 6 | VFPU con paired singles, skinning, audio (sceAudio, Atrac3+) | |
-| 7 | ISO/CSO/ZSO y descifrado ✅; carga de módulos, compatibilidad con juegos comerciales | ⏳ |
+| 6 | VFPU con paired singles, skinning, audio (sceAudio ✅, SAS ✅ y lógica de Atrac3+ ✅; falta decodificar ATRAC3+ y sacar el sonido por el Wii) | ⏳ |
+| 7 | ISO/CSO/ZSO y descifrado ✅; carga de módulos ✅, sceMpeg (videos omitidos) ✅, sceUtility (partidas en la SD, diálogos) ✅, tiempos de E/S ✅; compatibilidad con juegos comerciales | ⏳ |
 
 El plan de optimización para juegos comerciales pesados (fastmem, caché
 persistente de código, VFPU, audio en el DSP, E/S asíncrona) está en

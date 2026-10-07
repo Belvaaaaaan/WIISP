@@ -20,10 +20,18 @@ completo** con dos renderizadores:
 - **Software exacto**: port del renderizador de PPSSPP, idéntico al bit a
   una PSP en las pruebas, pero lento en el Wii.
 
-Pasan 129 de los 557 [pspautotests](https://github.com/hrydgard/pspautotests)
-(97 de 109 de gráficos). Todavía no hay VFPU (muchos juegos y demos la usan),
-audio, dynarec ni carga de módulos adicionales (`sceKernelLoadModule`), así
-que los juegos comerciales aún no pasan de arrancar.
+Pasan 192 de los 557 [pspautotests](https://github.com/hrydgard/pspautotests)
+(97 de 109 de gráficos). Para los juegos comerciales ya hay carga de módulos,
+sceAudio, el mezclador SAS, la lógica de Atrac3+ y sceMpeg (con sonido en
+silencio por ahora: los videos se saltan), partidas guardadas y diálogos del
+sistema. Todavía no hay VFPU (muchos juegos la usan) ni dynarec, así que los
+juegos comerciales aún no pasan de arrancar.
+
+En el Wii, las partidas guardadas van a `SAVEDATA/` dentro de la carpeta de
+WIISP (`sd:/apps/wiisp/` o `sd:/wiisp/`), sin cifrar y con su `PARAM.SFO`
+como en una Memory Stick. Ahí mismo queda `wiisp.log`, el registro de la
+última sesión: funciones que faltan, fallos de CPU, mensajes del juego y
+partidas cargadas o guardadas. Es lo más útil para reportar un problema.
 
 Al cargar un juego escribe `imports.txt` junto al EBOOT: la lista de funciones
 del firmware que usa y cuáles ya implementa WIISP.

@@ -1,8 +1,7 @@
 /**
  * WIISP - misc.c
- * HLE de módulos pequeños: sceRtc (reloj), sceSuspendForUser, sceUtility
- * (parámetros del sistema y carga de módulos), sceDmac (copias DMA) y
- * sceNetInet (sin red).
+ * HLE de módulos pequeños: sceRtc (reloj), sceSuspendForUser, sceDmac
+ * (copias DMA) y sceNetInet (sin red). sceUtility está en utility.c.
  *
  * SPDX-License-Identifier: GPL-2.0-or-later
 **/
@@ -160,22 +159,6 @@ static void return_zero(void){ RETURN(0); }
 
 /* --- sceUtility ---------------------------------------------------------- */
 
-#define PSP_SYSTEMPARAM_ID_INT_LANGUAGE        8
-#define PSP_SYSTEMPARAM_ID_INT_UNKNOWN         9   /* botón de confirmar */
-#define SCE_UTILITY_ERROR_INVALID_ID           0x80110103u
-
-static void sceUtilityGetSystemParamInt(void){
-	u32 id = ARG(0), out = ARG(1), value;
-	switch(id){
-	case 2: case 3: case 4: case 5: case 6: case 7: value = 0; break;
-	case PSP_SYSTEMPARAM_ID_INT_LANGUAGE: value = 1; break; /* inglés */
-	case PSP_SYSTEMPARAM_ID_INT_UNKNOWN: value = 1; break;  /* X confirma */
-	default: RETURN(SCE_UTILITY_ERROR_INVALID_ID); return;
-	}
-	if(out) mem_write32(out, value);
-	RETURN(0);
-}
-
 /* --- sceDmac: copias por DMA ------------------------------------------- */
 /* Se copia al instante; el hilo espera lo que tardaría el DMA real
    (unos 236 bytes/us medidos por PPSSPP) y mientras tanto TryMemcpy
@@ -252,16 +235,6 @@ static const HleFunction suspend[] = {
 	{ "sceKernelPowerTick", return_zero },
 };
 
-static const HleFunction utility[] = {
-	{ "sceUtilityGetSystemParamInt", sceUtilityGetSystemParamInt },
-	{ "sceUtilityLoadModule", return_zero },
-	{ "sceUtilityUnloadModule", return_zero },
-	{ "sceUtilityLoadNetModule", return_zero },
-	{ "sceUtilityUnloadNetModule", return_zero },
-	{ "sceUtilityLoadAvModule", return_zero },
-	{ "sceUtilityUnloadAvModule", return_zero },
-};
-
 static const HleFunction dmac[] = {
 	{ "sceDmacMemcpy", sceDmacMemcpy },
 	{ "sceDmacTryMemcpy", sceDmacTryMemcpy },
@@ -288,7 +261,6 @@ static const HleFunction net_inet[] = {
 const HleLibrary hle_misc_libs[] = {
 	HLE_LIBRARY("sceRtc", rtc),
 	HLE_LIBRARY("sceSuspendForUser", suspend),
-	HLE_LIBRARY("sceUtility", utility),
 	HLE_LIBRARY("sceDmac", dmac),
 	HLE_LIBRARY("sceNetInet", net_inet),
 };

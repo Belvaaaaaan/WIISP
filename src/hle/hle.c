@@ -61,6 +61,7 @@ static const HleLibrary *find_library(const char *lib){
 		{ hle_sas_libs, &hle_sas_libs_count },
 		{ hle_atrac_libs, &hle_atrac_libs_count },
 		{ hle_mpeg_libs, &hle_mpeg_libs_count },
+		{ hle_utility_libs, &hle_utility_libs_count },
 	};
 	u32 g, i;
 	for(g = 0; g < sizeof(groups) / sizeof(groups[0]); g++)
@@ -139,11 +140,30 @@ void hle_output(const char *text, u32 len){
 	else fwrite(text, 1, len, stdout);
 }
 
+#define LOG_FILE_MAX (2u * 1024 * 1024)
+static FILE *log_file;
+static u32 log_written;
+
+void hle_set_log_file(const char *path){
+	if(log_file) fclose(log_file);
+	log_file = path ? fopen(path, "w") : NULL;
+	log_written = 0;
+}
+
 void hle_log(const char *fmt, ...){
 	va_list ap;
 	va_start(ap, fmt);
 	vfprintf(stderr, fmt, ap);
 	va_end(ap);
+	if(log_file && log_written < LOG_FILE_MAX){
+		int n;
+		va_start(ap, fmt);
+		n = vfprintf(log_file, fmt, ap);
+		va_end(ap);
+		if(n > 0) log_written += (u32)n;
+		if(log_written >= LOG_FILE_MAX) fputs("[registro recortado]\n", log_file);
+		fflush(log_file);
+	}
 }
 
 int hle_has_exited(void){ return exited; }
@@ -153,6 +173,7 @@ void hle_exit(const char *reason){
 	if(!exited){
 		exited = 1;
 		exit_reason = reason;
+		if(log_file) hle_log("[WIISP] fin: %s\n", reason);
 	}
 	cpu_stop_requested = 1;
 }
@@ -249,6 +270,7 @@ int hle_init(PspModule *mod, const char *host_dir, const char *exec_name){
 	sas_init();
 	atrac_init();
 	mpeg_init();
+	utility_init();
 	ge_init();
 	kernel_init(mod, exec_name);
 	return 0;

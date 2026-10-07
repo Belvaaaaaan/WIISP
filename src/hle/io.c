@@ -66,6 +66,7 @@ typedef struct {
 	u64 size, pos;    /* bytes, o sectores en F_DISC_SECTORS */
 	int async_pending;
 	s64 async_result;
+	int by_sector;    /* abierto por sectores (umd0:, sce_lbn): sin espera */
 } IoFile;
 
 typedef struct {
@@ -75,13 +76,16 @@ typedef struct {
 	DiscEntry disc;      /* o directorio del disco */
 	int disc_index;
 	int is_disc;
+	int entries_read;
 } IoDir;
 
 static IoFile files[MAX_FILES];
 static IoDir dirs[MAX_DIRS];
 static char host_dir[256];
 #define EXEC_DIR "PSP/GAME/WIISP"   /* como en app.c */
-static char cwd[256];        /* con dispositivo: "ms0:/PSP" o "disc0:/PSP_GAME/USRDIR" */
+#define SAVEDATA_DIR "PSP/SAVEDATA"
+static char cwd[256];
+static char savedata_dir[256];   /* "" = la de ms0:/ */        /* con dispositivo: "ms0:/PSP" o "disc0:/PSP_GAME/USRDIR" */
 static int umd_activated;
 
 void io_init(const char *dir, int boot_from_disc){
@@ -178,6 +182,13 @@ static int resolve_str(const char *in, Resolved *r){
 			return n < sizeof(r->path) ? 0 : -1;
 		}
 	} else if(!is_host_device(full, n)) return -1;
+	/* Las partidas pueden vivir en otra carpeta (en el Wii, junto a WIISP) */
+	if(savedata_dir[0] && !strncmp(p, SAVEDATA_DIR, sizeof(SAVEDATA_DIR) - 1) &&
+	   (p[sizeof(SAVEDATA_DIR) - 1] == '/' || !p[sizeof(SAVEDATA_DIR) - 1])){
+		p += sizeof(SAVEDATA_DIR) - 1;
+		n = (u32)snprintf(r->path, sizeof(r->path), "%s%s", savedata_dir, p);
+		return n < sizeof(r->path) ? 0 : -1;
+	}
 	/* La carpeta donde "vive" el ejecutable (argv[0]) es la del anfitrión */
 	if(!strncmp(p, EXEC_DIR, sizeof(EXEC_DIR) - 1) && (p[sizeof(EXEC_DIR) - 1] == '/' || !p[sizeof(EXEC_DIR) - 1])){
 		p += sizeof(EXEC_DIR) - 1;
@@ -185,6 +196,16 @@ static int resolve_str(const char *in, Resolved *r){
 	}
 	n = (u32)snprintf(r->path, sizeof(r->path), "%s/%s", host_dir, p);
 	return n < sizeof(r->path) ? 0 : -1;   /* nunca una ruta recortada */
+}
+
+void io_set_savedata_dir(const char *dir){
+	snprintf(savedata_dir, sizeof(savedata_dir), "%s", dir ? dir : "");
+}
+
+int io_host_path(const char *psp_path, char *out, u32 size){
+	Resolved r;
+	if(resolve_str(psp_path, &r) || r.disc) return -1;
+	return (u32)snprintf(out, size, "%s", r.path) < size ? 0 : -1;
 }
 
 static int resolve(u32 addr, Resolved *r){
@@ -280,10 +301,12 @@ static u32 open_at(int fd, u32 path_addr, u32 flags){
 			o->kind = F_DISC_SECTORS;
 			o->lba = 0;
 			o->size = disc_sectors();
+			o->by_sector = 1;
 		} else if(parse_lbn(r.path, &lba, &size)){
 			o->kind = F_DISC;
 			o->lba = lba;
 			o->size = size;
+			o->by_sector = 1;
 		} else {
 			if(disc_lookup(r.path, &e) || e.is_dir) return SCE_ERROR_FILE_NOT_FOUND;
 			o->kind = F_DISC;
@@ -306,13 +329,40 @@ static u32 open_at(int fd, u32 path_addr, u32 flags){
 	return 0;
 }
 
+/* Tiempos de la PSP (los de PPSSPP, Core/HLE/sceIo.cpp): el hilo espera
+   lo que tarda el UMD o la Memory Stick, y otros hilos corren mientras. */
+static int path_on_disc(u32 path_addr){
+	Resolved r;
+	return !resolve(path_addr, &r) && r.disc;
+}
+
+static u32 rw_delay_us(u32 size){
+	u32 us = size / 100;
+	return us < 100 ? 100 : us;
+}
+
+/* Un comodín ('?' o '*') en una ruta de la Memory Stick no es válido */
+static int has_wildcard(u32 path_addr){
+	char path[256];
+	return !mem_read_cstr(path_addr, path, sizeof(path)) && (strchr(path, '?') || strchr(path, '*'));
+}
+
 static void sceIoOpen(void){
-	int fd = alloc_fd();
+	int fd = alloc_fd(), disc = path_on_disc(ARG(0));
 	u32 err;
-	if(fd < 0){ RETURN(SCE_KERNEL_ERROR_MFILE); return; }
+	if(fd < 0){ RETURN(SCE_KERNEL_ERROR_MFILE); hle_delay_us(1000); return; }
+	if(!disc && has_wildcard(ARG(0))){ RETURN(SCE_ERRNO_INVALID_ARGUMENT); hle_delay_us(10000); return; }
 	err = open_at(fd, ARG(0), ARG(1));
-	if(err){ memset(&files[fd], 0, sizeof(files[fd])); RETURN(err); return; }
+	if(err){
+		memset(&files[fd], 0, sizeof(files[fd]));
+		RETURN(err);
+		hle_delay_us(err == SCE_ERROR_FILE_NOT_FOUND && disc ? 6000 : 10000);
+		return;
+	}
 	RETURN(fd);
+	/* Abrir por sectores (umd0:, sce_lbn) es inmediato */
+	if(files[fd].by_sector) return;
+	hle_delay_us(disc ? 4000 : 10000);
 }
 
 static u32 close_fd(u32 fd){
@@ -323,7 +373,10 @@ static u32 close_fd(u32 fd){
 	return 0;
 }
 
-static void sceIoClose(void){ RETURN(close_fd(ARG(0))); }
+static void sceIoClose(void){
+	RETURN(close_fd(ARG(0)));
+	hle_delay_us(100);
+}
 
 static s64 read_fd(u32 fd, u32 buf, u32 size){
 	IoFile *o = get_file(fd);
@@ -355,7 +408,11 @@ static s64 read_fd(u32 fd, u32 buf, u32 size){
 	return (s64)fread(p, 1, size, o->f);
 }
 
-static void sceIoRead(void){ RETURN((u32)read_fd(ARG(0), ARG(1), ARG(2))); }
+static void sceIoRead(void){
+	s64 r = read_fd(ARG(0), ARG(1), ARG(2));
+	RETURN((u32)r);
+	if(r >= 0 && ARG(0) != 0) hle_delay_us(rw_delay_us(ARG(2)));
+}
 
 static s64 write_fd(u32 fd, u32 buf, u32 size){
 	u8 *p = mem_ptr(buf, size);
@@ -371,7 +428,12 @@ static s64 write_fd(u32 fd, u32 buf, u32 size){
 	return (s64)fwrite(p, 1, size, o->f);
 }
 
-static void sceIoWrite(void){ RETURN((u32)write_fd(ARG(0), ARG(1), ARG(2))); }
+static void sceIoWrite(void){
+	s64 r = write_fd(ARG(0), ARG(1), ARG(2));
+	RETURN((u32)r);
+	/* stdout/stderr no ceden la CPU (threads/scheduling/dispatch) */
+	if(r >= 0 && ARG(0) > 2) hle_delay_us(rw_delay_us(ARG(2)));
+}
 
 static s64 do_seek(u32 fd, s64 offset, u32 whence){
 	IoFile *o = get_file(fd);
@@ -389,13 +451,23 @@ static s64 do_seek(u32 fd, s64 offset, u32 whence){
 }
 
 /* El offset de 64 bits va en el par de registros a2:a3 */
+static void seek_timing(s64 r){
+	if(r >= 0 || r == -1){
+		kernel_eat_cycles(1400);
+		kernel_reschedule();
+	}
+}
+
 static void sceIoLseek(void){
 	s64 r = do_seek(ARG(0), (s64)(((u64)ARG(3) << 32) | ARG(2)), ARG(4));
 	RETURN64(r);
+	seek_timing(r);
 }
 
 static void sceIoLseek32(void){
-	RETURN((u32)do_seek(ARG(0), (s32)ARG(1), ARG(2)));
+	s64 r = do_seek(ARG(0), (s32)ARG(1), ARG(2));
+	RETURN((u32)r);
+	seek_timing(r);
 }
 
 static void sceIoChdir(void){
@@ -438,7 +510,13 @@ static void write_disc_stat(u32 addr, const DiscEntry *e){
 	mem_write32(addr + 64, e->lba);
 }
 
+static void getstat(void);
 static void sceIoGetstat(void){
+	getstat();
+	hle_delay_us(1000);
+}
+
+static void getstat(void){
 	Resolved r;
 	if(resolve(ARG(0), &r)){ RETURN(SCE_ERROR_FILE_NOT_FOUND); return; }
 	if(!mem_valid(ARG(1), 88)){ RETURN(SCE_KERNEL_ERROR_ILLEGAL_ADDR); return; }
@@ -521,6 +599,8 @@ static void sceIoDread(void){
 	}
 	mem_write32(out + 344, d_private);
 	RETURN(1);
+	/* Solo la primera entrada tarda */
+	if(dirs[i].entries_read++ == 0) hle_delay_us(1000);
 }
 
 static void sceIoDclose(void){
@@ -533,9 +613,9 @@ static void sceIoDclose(void){
 
 static void sceIoRemove(void){
 	Resolved r;
-	if(resolve(ARG(0), &r) || r.disc){ RETURN(SCE_ERROR_FILE_NOT_FOUND); return; }
-	if(remove(r.path)){ RETURN(SCE_ERROR_FILE_NOT_FOUND); return; }
-	RETURN(0);
+	if(resolve(ARG(0), &r) || r.disc || remove(r.path)) RETURN(SCE_ERROR_FILE_NOT_FOUND);
+	else RETURN(0);
+	hle_delay_us(100);
 }
 
 static void sceIoRename(void){
@@ -547,14 +627,16 @@ static void sceIoRename(void){
 
 static void sceIoMkdir(void){
 	Resolved r;
-	if(resolve(ARG(0), &r) || r.disc || mkdir(r.path, 0777)){ RETURN(0x80010011u /* EEXIST */); return; }
-	RETURN(0);
+	if(resolve(ARG(0), &r) || r.disc || mkdir(r.path, 0777)) RETURN(0x80010011u /* EEXIST */);
+	else RETURN(0);
+	hle_delay_us(1000);
 }
 
 static void sceIoRmdir(void){
 	Resolved r;
-	if(resolve(ARG(0), &r) || r.disc || rmdir(r.path)){ RETURN(SCE_ERROR_FILE_NOT_FOUND); return; }
-	RETURN(0);
+	if(resolve(ARG(0), &r) || r.disc || rmdir(r.path)) RETURN(SCE_ERROR_FILE_NOT_FOUND);
+	else RETURN(0);
+	hle_delay_us(1000);
 }
 
 /* --- ioctl y devctl ------------------------------------------------------------ */
