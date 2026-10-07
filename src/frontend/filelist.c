@@ -14,8 +14,13 @@
 #include "frontend/filelist.h"
 
 int filelist_is_supported(const char *name){
+	static const char *const exts[] = { ".pbp", ".prx", ".elf", ".bin", ".iso", ".cso", ".zso" };
 	const char *dot = strrchr(name, '.');
-	return dot && (!strcasecmp(dot, ".pbp") || !strcasecmp(dot, ".prx") || !strcasecmp(dot, ".elf"));
+	size_t i;
+	if(!dot) return 0;
+	for(i = 0; i < sizeof(exts) / sizeof(exts[0]); i++)
+		if(!strcasecmp(dot, exts[i])) return 1;
+	return 0;
 }
 
 int filelist_is_root(const char *path){

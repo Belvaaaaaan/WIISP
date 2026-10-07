@@ -1,7 +1,7 @@
 /**
  * WIISP - menu.c
  * Selector de archivos en la consola de texto: SD o USB, carpetas y
- * ejecutables de PSP (.pbp, .prx, .elf).
+ * ejecutables de PSP (.pbp, .prx, .elf, .bin) e imagenes de UMD (.iso, .cso, .zso).
  *
  *   Arriba/abajo: moverse (izquierda/derecha: página)
  *   A: abrir carpeta / elegir archivo     B: carpeta anterior
@@ -101,7 +101,7 @@ static void draw(const FileList *fl, int sel, int top, int ok){
 	printf("\n %.70s\n\n", fl->path);
 
 	if(!ok) printf("   \x1b[31mNo se pudo abrir esta carpeta\x1b[37m\n");
-	else if(fl->count == 0) printf("   (no hay carpetas ni archivos .pbp/.prx/.elf)\n");
+	else if(fl->count == 0) printf("   (no hay carpetas ni juegos: .pbp .prx .elf .bin .iso .cso .zso)\n");
 	for(i = top; i < fl->count && i < top + VISIBLE_ROWS; i++){
 		const FileEntry *e = &fl->entries[i];
 		const char *color = i == sel ? "\x1b[33m" : (e->is_dir ? "\x1b[36m" : "\x1b[37m");

@@ -78,9 +78,14 @@ typedef struct {
    prx_base: dirección para PRX relocalizables (0 = LOADER_DEFAULT_PRX_BASE).
    Si devuelve error, mod queda liberado. */
 int  loader_load(const u8 *buf, u32 len, u32 prx_base, PspModule *mod);
+/* Igual, pero puede descifrar sobre buf (que queda modificado) */
+int  loader_load_inplace(u8 *buf, u32 len, u32 prx_base, PspModule *mod);
 int  loader_load_elf(const u8 *buf, u32 len, u32 prx_base, PspModule *mod);
 void loader_free(PspModule *mod);
 const char *loader_strerror(int err);
+/* Etiqueta de cifrado (offset 0xD0) del último "~PSP" visto, para avisar
+   de cuál falla */
+extern u32 loader_last_tag;
 
 /* Imprime un resumen del módulo con printf (sin acentos: la consola del
    Wii no muestra UTF-8). max_imports < 0 = todos. */

@@ -228,7 +228,7 @@ pesan los `lv`/`sv` en un juego real antes de plantearse B.
 
 | # | Qué | Por qué en este orden |
 |---|---|---|
-| 1 | ISO/CSO, KIRK, carga de módulos, sceUmd | Sin esto no arranca ningún juego objetivo |
+| 1 | ISO/CSO, KIRK, carga de módulos, sceUmd | Sin esto no arranca ningún juego objetivo (ISO/CSO/ZSO, descifrado y sceUmd ✅; falta cargar módulos) |
 | 2 | Reemplazo de funciones por hash + frameskip | Baratos y útiles ya con el intérprete |
 | 3 | Prueba aislada de fastmem en Broadway | Decide el diseño de memoria del dynarec |
 | 4 | Dynarec guardable | El gran salto de velocidad |

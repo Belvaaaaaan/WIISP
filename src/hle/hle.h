@@ -215,7 +215,8 @@ u32  kernel_alloc(u32 size, int from_high, const char *name);
 void kernel_free(u32 addr);
 
 /* E/S (io.c) */
-void io_init(const char *host_dir);
+/* boot_from_disc: el directorio actual empieza en disc0:/PSP_GAME/USRDIR */
+void io_init(const char *host_dir, int boot_from_disc);
 void io_shutdown(void);
 
 /* Escribe una ScePspDateTime (16 bytes) a partir de microsegundos Unix (misc.c) */

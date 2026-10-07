@@ -219,10 +219,20 @@ porta entero: su consumo de memoria no cabe en el Wii.
 
 ### 6.3 Discos
 
-- **Fase 1:** EBOOT.PBP de homebrew sin cifrar.
-- **Después:** ISO y CSO desde SD/USB. Los EBOOT.BIN de los juegos comerciales
-  suelen estar cifrados (`~PSP`) y habrá que descifrarlos con la
-  implementación de KIRK (también en PPSSPP); el cargador ya detecta ese caso.
+- `loader/disc.c`: imágenes ISO, CSO (deflate) y ZSO (LZ4) desde SD/USB, con
+  su sistema de archivos ISO 9660. Un único disco montado, como en la PSP.
+- `hle/io.c`: `disc0:/`, `umd0:` (modo sector), `sce_lbn0x..._size0x...`,
+  los ioctl/devctl de UMD, la E/S asíncrona (se completa en el acto) y
+  `sceUmdUser`. El directorio inicial de un juego es
+  `disc0:/PSP_GAME/USRDIR`.
+- `loader/prx_decrypt.c` + `loader/kirk.c`: los EBOOT.BIN y PRX cifrados
+  (`~PSP`) se descifran con el método de PPSSPP (PrxDecrypter, GPLv2+); el
+  AES, el SHA-1 y los comandos del KIRK están escritos para WIISP (la
+  librería KIRK habitual es GPLv3). Las claves se generan con
+  `tools/gen_prx_keys.py`. Los PRX comprimidos con gzip se descomprimen con
+  `loader/inflate.c`; los KL4E aún no.
+- `tools/make_test_vectors.py` cifra ELF y crea imágenes de prueba, para
+  probar todo esto sin archivos de juegos.
 
 ## 7. Gráficos: GE → GX
 
@@ -271,7 +281,7 @@ píxel, el stencil y los modos de mezcla que GX no tiene.
 | 4 | GE: listas, geometría, renderizador por software exacto y backend GX (primitivas, texturas con caché, framebuffers, render a textura) | ✅ |
 | 5 | Dynarec basado en Not64, validado contra el intérprete | |
 | 6 | VFPU con paired singles, skinning, audio (sceAudio, Atrac3+) | |
-| 7 | ISO/CSO, descifrado, compatibilidad con juegos comerciales, menú | |
+| 7 | ISO/CSO/ZSO y descifrado ✅; carga de módulos, compatibilidad con juegos comerciales | ⏳ |
 
 El plan de optimización para juegos comerciales pesados (fastmem, caché
 persistente de código, VFPU, audio en el DSP, E/S asíncrona) está en

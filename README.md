@@ -7,7 +7,9 @@ de los gráficos de la PSP a GX. Ver [ARQUITECTURA.md](ARQUITECTURA.md).
 
 ## Estado
 
-WIISP carga un `EBOOT.PBP` (o ELF/PRX) y lo ejecuta con un intérprete del
+WIISP carga un `EBOOT.PBP`, un ELF/PRX o una **imagen de UMD (ISO, CSO o
+ZSO)**, descifra los ejecutables de los juegos comerciales (`~PSP`) y los
+ejecuta con un intérprete del
 Allegrex y HLE del sistema operativo de la PSP (hilos, semáforos, memoria,
 archivos, pantalla, mandos). **El GE (los gráficos 2D/3D de la PSP) está
 completo** con dos renderizadores:
@@ -20,7 +22,8 @@ completo** con dos renderizadores:
 
 Pasan 129 de los 557 [pspautotests](https://github.com/hrydgard/pspautotests)
 (97 de 109 de gráficos). Todavía no hay VFPU (muchos juegos y demos la usan),
-audio ni dynarec.
+audio, dynarec ni carga de módulos adicionales (`sceKernelLoadModule`), así
+que los juegos comerciales aún no pasan de arrancar.
 
 Al cargar un juego escribe `imports.txt` junto al EBOOT: la lista de funciones
 del firmware que usa y cuáles ya implementa WIISP.
@@ -38,8 +41,8 @@ make dist
 
 Copia `dist/apps` a la raíz de la SD y abre WIISP desde el Homebrew Channel.
 Aparece un menú para elegir el programa en la **SD o en un USB**: pon tus
-`.pbp`, `.prx` o `.elf` donde quieras (por ejemplo en `sd:/wiisp/`), con su
-nombre original.
+`.pbp`, `.prx`, `.elf` o `.bin` donde quieras (por ejemplo en `sd:/wiisp/`),
+con su nombre original, y tus juegos como `.iso`, `.cso` o `.zso`.
 
 | Botón (Wiimote / GameCube) | En el menú | Durante la emulación |
 |---|---|---|

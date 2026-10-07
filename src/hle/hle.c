@@ -165,7 +165,7 @@ int hle_init(PspModule *mod, const char *host_dir, const char *exec_name){
 	mem_write32(HLE_CALLBACK_TRAMPOLINE, MIPS_SYSCALL(HLE_SYSCALL_CALLBACK_RETURN));
 	mem_write32(HLE_CALLBACK_TRAMPOLINE + 4, 0);
 
-	io_init(host_dir);
+	io_init(host_dir, exec_name && !strncmp(exec_name, "disc0:", 6));
 	display_init();
 	ge_init();
 	kernel_init(mod, exec_name);

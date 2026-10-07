@@ -30,6 +30,9 @@ void app_set_verbose(int verbose);
    0 = correcto. */
 int  app_load(const char *path, int max_imports, const char *imports_out);
 
+/* 1 si la ruta es una imagen de UMD (.iso, .cso, .zso) */
+int  app_is_disc_image(const char *path);
+
 /* Ruta recomendada para el informe de imports de path: "imports.txt" en su
    carpeta si es un EBOOT.PBP, si no "<nombre>.imports.txt" */
 void app_imports_path(const char *path, char *out, size_t out_size);

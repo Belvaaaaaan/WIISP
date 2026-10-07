@@ -17,19 +17,9 @@
 #include <sys/stat.h>
 #include <unistd.h>
 
-static int failures, checks;
+#include "test.h"
 
-#define CHECK(cond) do { \
-	checks++; \
-	if(!(cond)){ failures++; printf("  FALLO %s:%d: %s\n", __FILE__, __LINE__, #cond); } \
-} while(0)
-
-#define CHECK_EQ(a, b) do { \
-	unsigned long long va_ = (unsigned long long)(a), vb_ = (unsigned long long)(b); \
-	checks++; \
-	if(va_ != vb_){ failures++; \
-		printf("  FALLO %s:%d: %s == %s (0x%llX != 0x%llX)\n", __FILE__, __LINE__, #a, #b, va_, vb_); } \
-} while(0)
+int failures, checks;
 
 /* ------------------------------------------------------------------ */
 /* Constructor de ejecutables sintéticos                              */
@@ -437,6 +427,10 @@ static void test_filelist(void){
 	CHECK(filelist_is_supported("EBOOT.PBP"));
 	CHECK(filelist_is_supported("juego.prx"));
 	CHECK(filelist_is_supported("a.Elf"));
+	CHECK(filelist_is_supported("GTA.iso"));
+	CHECK(filelist_is_supported("juego.CSO"));
+	CHECK(filelist_is_supported("x.zso"));
+	CHECK(filelist_is_supported("EBOOT.BIN"));
 	CHECK(!filelist_is_supported("imports.txt"));
 	CHECK(!filelist_is_supported("pbp"));
 
@@ -517,6 +511,8 @@ int main(int argc, char **argv){
 	test_pbp();
 	test_robustness();
 	test_filelist();
+	test_formats();
+	test_io();
 
 	printf("\n%d comprobaciones, %d fallos\n", checks, failures);
 	free(ram); free(vram); free(scratch);

@@ -11,6 +11,8 @@
 #include "frontend/app.h"
 #include "core/memory.h"
 #include "loader/loader.h"
+#include "loader/disc.h"
+#include "loader/sfo.h"
 #include "hle/hle.h"
 #include "gpu/ge_internal.h"
 #include "gpu/ge_math.h"
@@ -56,6 +58,59 @@ static u8 *read_file(const char *path, u32 *len){
 	return buf;
 }
 
+int app_is_disc_image(const char *path){
+	const char *dot = strrchr(path, '.');
+	return dot && (!strcasecmp(dot, ".iso") || !strcasecmp(dot, ".cso") || !strcasecmp(dot, ".zso"));
+}
+
+/* Un UMD: el ejecutable es PSP_GAME/SYSDIR/EBOOT.BIN (normalmente cifrado);
+   si no se puede usar, BOOT.BIN, que algunos discos traen sin cifrar */
+static int load_disc(const char *path){
+	static const char *const execs[] = { "PSP_GAME/SYSDIR/EBOOT.BIN", "PSP_GAME/SYSDIR/BOOT.BIN" };
+	char title[sizeof(module.title)] = "", disc_id[sizeof(module.disc_id)] = "";
+	u32 len, i;
+	u8 *buf;
+	int err = LOADER_ERR_FORMAT;
+
+	if(disc_open(path)){
+		printf("Error: no es una imagen de UMD valida (ISO/CSO/ZSO)\n");
+		return -1;
+	}
+	if(verbose) printf("Imagen %s: %u sectores\n", disc_format(), disc_sectors());
+	buf = disc_read_file("PSP_GAME/PARAM.SFO", &len, 64 * 1024);
+	if(buf){
+		SfoFile sfo;
+		if(sfo_parse(buf, len, &sfo) == LOADER_OK){
+			sfo_get_string(&sfo, "TITLE", title, sizeof(title));
+			sfo_get_string(&sfo, "DISC_ID", disc_id, sizeof(disc_id));
+		}
+		free(buf);
+	}
+	for(i = 0; i < 2; i++){
+		u32 k;
+		buf = disc_read_file(execs[i], &len, MAX_EXEC_SIZE);
+		if(!buf) continue;
+		for(k = 0; k < len && !buf[k]; k++);
+		if(k == len){ free(buf); continue; }   /* BOOT.BIN vacío */
+		mem_reset();
+		err = loader_load_inplace(buf, len, 0, &module);
+		free(buf);
+		if(err == LOADER_OK){
+			if(verbose && i) printf("EBOOT.BIN no se pudo usar: se carga BOOT.BIN\n");
+			break;
+		}
+	}
+	if(err){
+		printf("Error: %s\n", loader_strerror(err));
+		if(err == LOADER_ERR_ENCRYPTED) printf("Etiqueta de cifrado: 0x%08X\n", loader_last_tag);
+		return -1;
+	}
+	memcpy(module.title, title, sizeof(title));
+	memcpy(module.disc_id, disc_id, sizeof(disc_id));
+	snprintf(exec_path, sizeof(exec_path), "disc0:/%s", execs[i]);
+	return 0;
+}
+
 int app_load(const char *path, int max_imports, const char *imports_out){
 	u32 len = 0;
 	u8 *buf;
@@ -63,29 +118,35 @@ int app_load(const char *path, int max_imports, const char *imports_out){
 	int err;
 
 	if(verbose) printf("Cargando %s\n", path);
-	buf = read_file(path, &len);
-	if(!buf){
-		printf("Error: no se pudo leer el archivo\n");
-		return -1;
-	}
-
 	hle_shutdown();
 	loader_free(&module);
-	mem_reset();
-	err = loader_load(buf, len, 0, &module);
-	free(buf);
-	if(err){
-		printf("Error: %s\n", loader_strerror(err));
-		return -1;
+	disc_close();
+
+	if(app_is_disc_image(path)){
+		if(load_disc(path)) return -1;
+	} else {
+		buf = read_file(path, &len);
+		if(!buf){
+			printf("Error: no se pudo leer el archivo\n");
+			return -1;
+		}
+		mem_reset();
+		err = loader_load_inplace(buf, len, 0, &module);
+		free(buf);
+		if(err){
+			printf("Error: %s\n", loader_strerror(err));
+			if(err == LOADER_ERR_ENCRYPTED) printf("Etiqueta de cifrado: 0x%08X\n", loader_last_tag);
+			return -1;
+		}
 	}
 	if(verbose) loader_print_info(&module, max_imports);
 
-	/* La carpeta del ejecutable hace de ms0:/ y host0:/ */
+	/* La carpeta del ejecutable (o de la imagen) hace de ms0:/ y host0:/ */
 	snprintf(host_dir, sizeof(host_dir), "%s", path);
 	slash = strrchr(host_dir, '/');
 	if(slash) host_dir[slash - host_dir] = 0;
 	else strcpy(host_dir, ".");
-	snprintf(exec_path, sizeof(exec_path), "ms0:/PSP/GAME/WIISP/%s", slash ? slash + 1 : path);
+	if(!disc_is_open()) snprintf(exec_path, sizeof(exec_path), "ms0:/PSP/GAME/WIISP/%s", slash ? slash + 1 : path);
 
 	if(imports_out){
 		if(hle_write_imports_report(&module, path, imports_out) == 0)
