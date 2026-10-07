@@ -34,5 +34,15 @@ void ge_get_stats(GeStats *out);
 
 /* Reloj del anfitrión para medir el GE (perfilado); NULL = sin medir */
 extern unsigned long long (*ge_host_clock)(void);
+#ifdef WIISP_PROF
+/* Perfilado (make PROF=1): ticks en vértices, backend, ge_draw_prim,
+   su preparación, luces y decodificación */
+extern unsigned long long ge_prof[8];
+#define GE_PROF_T0 unsigned long long prof_t0 = ge_host_clock ? ge_host_clock() : 0
+#define GE_PROF_ADD(n) do { if(ge_host_clock) ge_prof[n] += ge_host_clock() - prof_t0; } while(0)
+#else
+#define GE_PROF_T0 (void)0
+#define GE_PROF_ADD(n) (void)0
+#endif
 
 #endif

@@ -1464,14 +1464,13 @@ static void gx_triangle(const GeVertex *v0, const GeVertex *v1, const GeVertex *
 }
 
 /* Esquina de un sprite: x de vx, y de vy; s y t según la orientación */
-static void put_corner(const GeVertex *vx, const GeVertex *vy, const GeVertex *v1, int swap_st){
+static void put_corner(const GeVertex *vx, const GeVertex *vy, const GeVertex *v1, int swap_st, float iw){
 	float s = 0.0f, t = 0.0f, q = 1.0f;
 	if(tex_on){
 		s = finite_uv(swap_st ? vy->s : vx->s);
 		t = finite_uv(swap_st ? vx->t : vy->t);
 		if(through){ s *= inv_tw; t *= inv_th; }
 		else {
-			float iw = 1.0f / vx->clipw;
 			if(tex_proj) q = vx->q;
 			s *= iw * tex_su; t *= iw * tex_sv; q *= iw;
 		}
@@ -1484,11 +1483,13 @@ static void draw_sprite(const GeVertex *v0, const GeVertex *v1){
 	const GeVertex *l = v0->x < v1->x ? v0 : v1, *rr = v0->x < v1->x ? v1 : v0;
 	const GeVertex *tp = v0->y < v1->y ? v0 : v1, *bt = v0->y < v1->y ? v1 : v0;
 	int swap_st = (v0->x < v1->x) != (v0->y < v1->y);
+	float iwl = 1.0f, iwr = 1.0f;
+	if(tex_on && !through){ iwl = 1.0f / l->clipw; iwr = l == rr ? iwl : 1.0f / rr->clipw; }
 	GX_Begin(GX_QUADS, GX_VTXFMT0, 4);
-	put_corner(l, tp, v1, swap_st);
-	put_corner(rr, tp, v1, swap_st);
-	put_corner(rr, bt, v1, swap_st);
-	put_corner(l, bt, v1, swap_st);
+	put_corner(l, tp, v1, swap_st, iwl);
+	put_corner(rr, tp, v1, swap_st, iwr);
+	put_corner(rr, bt, v1, swap_st, iwr);
+	put_corner(l, bt, v1, swap_st, iwl);
 	GX_End();
 }
 

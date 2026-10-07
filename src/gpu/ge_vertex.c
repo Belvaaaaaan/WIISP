@@ -104,7 +104,7 @@ typedef struct {
 static inline float f32_from(u32 v){ float f; memcpy(&f, &v, 4); return f; }
 
 /* Componente con signo: s8/128, s16/32768 o float */
-static float raw_comp(const u8 *p, int fmt, int i){
+static inline __attribute__((always_inline)) float raw_comp(const u8 *p, int fmt, int i){
 	switch(fmt){
 	case 1: return (float)(s8)p[i] * (1.0f / 128.0f);
 	case 2: return (float)(s16)rd_le16(p + 2 * i) * (1.0f / 32768.0f);
@@ -114,7 +114,7 @@ static float raw_comp(const u8 *p, int fmt, int i){
 }
 
 /* Peso o uv: sin signo */
-static float raw_weight(const u8 *p, int fmt, int i){
+static inline __attribute__((always_inline)) float raw_weight(const u8 *p, int fmt, int i){
 	switch(fmt){
 	case 1: return (float)p[i] * (1.0f / 128.0f);
 	case 2: return (float)rd_le16(p + 2 * i) * (1.0f / 32768.0f);
@@ -126,7 +126,7 @@ static float raw_weight(const u8 *p, int fmt, int i){
 static inline u32 c5to8(u32 v){ return (v << 3) | (v >> 2); }
 static inline u32 c6to8(u32 v){ return (v << 2) | (v >> 4); }
 
-static u32 color_to_8888(int col, const u8 *p){
+static inline __attribute__((always_inline)) u32 color_to_8888(int col, const u8 *p){
 	u32 c;
 	switch(col){
 	case 4:
@@ -353,6 +353,7 @@ typedef struct {
 	float pos[3], att[3], spot_dir[3];
 	float spot_dir_rsqrt, spot_dir_rsqrt_f, spot_cutoff, spot_exp;
 	int ambient_cf[4], diffuse_cf[4], specular_cf[4];
+	float ambient_f[4], diffuse_f[4], specular_f[4];   /* los mismos / 1024 (ge_fast_math) */
 	int enabled, spot, directional, powered_diffuse, ambient, diffuse, specular;
 } LightSt;
 
@@ -360,6 +361,7 @@ typedef struct {
 	LightSt lights[4];
 	int mat_ambient_cf[4], mat_diffuse_cf[4], mat_specular_cf[4];
 	int base_ambient_cf[4];
+	float mat_ambient_f[4], mat_diffuse_f[4], mat_specular_f[4], base_ambient_f[4], emissive_f[4];
 	float specular_exp;
 	float view_dir[3];
 	int color_for_ambient, color_for_diffuse, color_for_specular;
@@ -485,6 +487,19 @@ static void lighting_compute_state(LightState *s, int has_color0){
 	}
 
 	light_color_factor((ge.cmd[GE_AMBIENTCOLOR] & 0xFFFFFF) | ((ge.cmd[GE_AMBIENTALPHA] & 0xFF) << 24), s->base_ambient_cf);
+	for(i = 0; i < 4; i++){
+		for(light = 0; light < 4; light++){
+			LightSt *l = &s->lights[light];
+			l->ambient_f[i] = (float)l->ambient_cf[i] * (1.0f / 1024.0f);
+			l->diffuse_f[i] = (float)l->diffuse_cf[i] * (1.0f / 1024.0f);
+			l->specular_f[i] = (float)l->specular_cf[i] * (1.0f / 1024.0f);
+		}
+		s->mat_ambient_f[i] = (float)s->mat_ambient_cf[i];
+		s->mat_diffuse_f[i] = (float)s->mat_diffuse_cf[i];
+		s->mat_specular_f[i] = (float)s->mat_specular_cf[i];
+		s->base_ambient_f[i] = (float)s->base_ambient_cf[i] * (1.0f / 1024.0f);
+		s->emissive_f[i] = (float)(((ge.cmd[GE_MATERIALEMISSIVE] & 0xFFFFFF) >> (8 * i)) & 0xFF);
+	}
 	s->set_color1 = (ge.cmd[GE_LIGHTMODE] & 1) && any_specular;
 	s->add_color1 = !(ge.cmd[GE_LIGHTMODE] & 1) && any_specular;
 	s->uses_world_pos = any_nondir;
@@ -501,10 +516,14 @@ static inline float vnormalize(float *v){
 	if(!ge_fast_math) return ge_normalize(v);
 	d2 = v[0] * v[0] + v[1] * v[1] + v[2] * v[2];
 	if(!(d2 > 0.0f) || !isfinite(d2)) return 0.0f;
-	d = sqrtf(d2);
-	r = 1.0f / d;
+	r = ge_fast_rsqrt(d2);
+	d = d2 * r;
 	v[0] *= r; v[1] *= r; v[2] *= r;
 	return d;
+}
+
+static inline float light_pow(float v, float e){
+	return ge_fast_math ? ge_fast_light_pow(v, e) : ge_light_pow(v, e);
 }
 
 /* v . N para la normal sin normalizar, escalado por su rsqrt */
@@ -535,6 +554,18 @@ static float ge_shade_map_coord(int l, const float *mpos, const float *wn, float
 	float L[3];
 	int i;
 	light_vec(GE_LX0, l, L);
+	if(ge_fast_math){
+		if(light_type(l) != 0){
+			const float *m = ge.world;
+			for(i = 0; i < 3; i++) L[i] -= mpos[0] * m[i] + mpos[1] * m[3 + i] + mpos[2] * m[6 + i] + m[9 + i];
+		}
+		vnormalize(L);
+		if(light_comp(l) == 1){
+			for(i = 0; i < 3; i++) L[i] += view_dir[i];
+			vnormalize(L);
+		}
+		return (ge_normal_dot(L, wn, n_rsqrt) + 1.0f) * 0.5f;
+	}
 	if(light_type(l) != 0) ge_light_vector(L, mpos, L);
 	ge_normalize(L);
 	if(light_comp(l) == 1){
@@ -557,6 +588,82 @@ static inline void light_color_scale(int *x, float f){
 	int s, i;
 	s = !(sf > 0.0f) ? 0 : sf >= 256.0f ? 256 : (int)sf;
 	for(i = 0; i < 4; i++) x[i] = ((x[i] * 2 + 1) * (2 * s + 1)) >> 10;
+}
+
+/* Las mismas luces en float, sin pasar por enteros en cada luz: los
+   factores de 8 bits del GE se aproximan con su producto en float */
+static void lighting_process_fast(GeVertex *v, const float *mpos, const float *wn, float n_rsqrt, const LightState *s){
+	float fc[4], spec[4] = { 0, 0, 0, 0 }, vc[4], wpos[3] = { 0, 0, 0 };
+	const float *mac = s->mat_ambient_f, *mdc = s->mat_diffuse_f, *msc = s->mat_specular_f;
+	int i, light, out[4];
+	if(s->uses_world_pos){
+		const float *m = ge.world;
+		for(i = 0; i < 3; i++) wpos[i] = mpos[0] * m[i] + mpos[1] * m[3 + i] + mpos[2] * m[6 + i] + m[9 + i];
+	}
+	if(s->color_for_ambient || s->color_for_diffuse || s->color_for_specular){
+		for(i = 0; i < 4; i++) vc[i] = (float)(int)(((v->color0 >> (8 * i)) & 0xFF) * 2 + 1);
+		if(s->color_for_ambient) mac = vc;
+		if(s->color_for_diffuse) mdc = vc;
+		if(s->color_for_specular) msc = vc;
+	}
+	for(i = 0; i < 4; i++) fc[i] = s->emissive_f[i] + mac[i] * s->base_ambient_f[i];
+
+	for(light = 0; light < 4; light++){
+		const LightSt *l = &s->lights[light];
+		float L[3], k = 1.0f, df = 0.0f;
+		if(!l->enabled) continue;
+		if(!l->directional){
+			float d2, d, den;
+			L[0] = l->pos[0] - wpos[0]; L[1] = l->pos[1] - wpos[1]; L[2] = l->pos[2] - wpos[2];
+			d2 = L[0] * L[0] + L[1] * L[1] + L[2] * L[2];
+			d = vnormalize(L);
+			if(d == 0.0f){ L[0] = 0.0f; L[1] = 0.0f; L[2] = 1.0f; }
+			den = l->att[0] + l->att[1] * d + l->att[2] * d2;
+			k = den > 0.0f ? 1.0f / den : 0.0f;
+			if(!(k > 0.0f)) k = 0.0f;
+		} else {
+			L[0] = l->pos[0]; L[1] = l->pos[1]; L[2] = l->pos[2];
+		}
+		if(l->spot){
+			float raw = (l->spot_dir[0] * L[0] + l->spot_dir[1] * L[1] + l->spot_dir[2] * L[2]) * l->spot_dir_rsqrt_f;
+			if(isnan(raw)) raw = signbit(raw) ? 0.0f : 1.0f;
+			if(raw < l->spot_cutoff && raw + 1e-6f >= l->spot_cutoff) raw = l->spot_cutoff;
+			if(raw >= l->spot_cutoff){
+				float sp = ge_fast_light_pow(raw, l->spot_exp);
+				k *= sp > 0.0f ? sp : 0.0f;   /* también NaN */
+			} else k = 0.0f;
+		}
+		if(k > 1.0f) k = 1.0f;
+		if(k == 0.0f) continue;
+
+		if(l->ambient) for(i = 0; i < 4; i++) fc[i] += l->ambient_f[i] * mac[i] * k;
+		if(l->diffuse || l->specular){
+			df = (L[0] * wn[0] + L[1] * wn[1] + L[2] * wn[2]) * n_rsqrt;
+			if(l->powered_diffuse) df = ge_fast_light_pow(df, s->specular_exp);
+		}
+		if(l->diffuse && df > 0.0f){
+			float kd = (df < 1.0f ? df : 1.0f) * k;
+			for(i = 0; i < 4; i++) fc[i] += l->diffuse_f[i] * mdc[i] * kd;
+		}
+		if(l->specular && df >= 0.0f){
+			float H[3], sf;
+			H[0] = L[0] + s->view_dir[0]; H[1] = L[1] + s->view_dir[1]; H[2] = L[2] + s->view_dir[2];
+			if(vnormalize(H) == 0.0f){ H[0] = 0.0f; H[1] = 0.0f; H[2] = 1.0f; }
+			sf = ge_fast_light_pow((H[0] * wn[0] + H[1] * wn[1] + H[2] * wn[2]) * n_rsqrt, s->specular_exp);
+			if(sf > 0.0f){
+				float ks = (sf < 1.0f ? sf : 1.0f) * k;
+				for(i = 0; i < 4; i++) spec[i] += l->specular_f[i] * msc[i] * ks;
+			}
+		}
+	}
+
+	if(s->add_color1) for(i = 0; i < 4; i++) fc[i] += spec[i];
+	for(i = 0; i < 4; i++) out[i] = fc[i] < 255.0f ? (int)fc[i] : 255;
+	v->color0 = ge_pack_rgba(out);
+	if(s->set_color1){
+		for(i = 0; i < 4; i++) out[i] = spec[i] < 255.0f ? (int)spec[i] : 255;
+		v->color1 = ge_pack_rgba(out) & 0x00FFFFFF;
+	}
 }
 
 static void lighting_process(GeVertex *v, const float *mpos, const float *wn, float n_rsqrt, const LightState *s){
@@ -595,7 +702,7 @@ static void lighting_process(GeVertex *v, const float *mpos, const float *wn, fl
 			if(d == 0.0f){ L[0] = 0.0f; L[1] = 0.0f; L[2] = 1.0f; }
 			k[0] = 1.0f; k[1] = d; k[2] = d2;
 			den = vdot(l->att, k);
-			att = den > 0.0f ? ge_recip(den) : 0.0f;
+			att = den > 0.0f ? (ge_fast_math ? 1.0f / den : ge_recip(den)) : 0.0f;
 			if(!(att > 0.0f)) att = 0.0f;
 			else if(att > 1.0f) att = 1.0f;
 		}
@@ -607,7 +714,7 @@ static void lighting_process(GeVertex *v, const float *mpos, const float *wn, fl
 			/* En float normal un foco alineado da 0,99999994 */
 			if(ge_fast_math && raw < l->spot_cutoff && raw + 1e-6f >= l->spot_cutoff) raw = l->spot_cutoff;
 			if(raw >= l->spot_cutoff){
-				spot = ge_light_pow(raw, l->spot_exp);
+				spot = light_pow(raw, l->spot_exp);
 				if(isnan(spot)) spot = 0.0f;
 			} else spot = 0.0f;
 		}
@@ -623,7 +730,7 @@ static void lighting_process(GeVertex *v, const float *mpos, const float *wn, fl
 
 		if(l->diffuse || l->specular){
 			diffuse_factor = ge_normal_dot(L, wn, n_rsqrt);
-			if(l->powered_diffuse) diffuse_factor = ge_light_pow(diffuse_factor, s->specular_exp);
+			if(l->powered_diffuse) diffuse_factor = light_pow(diffuse_factor, s->specular_exp);
 		}
 
 		if(l->diffuse && diffuse_factor > 0.0f){
@@ -636,9 +743,10 @@ static void lighting_process(GeVertex *v, const float *mpos, const float *wn, fl
 
 		if(l->specular && diffuse_factor >= 0.0f){
 			float H[3], sf;
-			for(i = 0; i < 3; i++) H[i] = ge_add24(L[i], s->view_dir[i]);
+			if(ge_fast_math) for(i = 0; i < 3; i++) H[i] = L[i] + s->view_dir[i];
+			else for(i = 0; i < 3; i++) H[i] = ge_add24(L[i], s->view_dir[i]);
 			if(vnormalize(H) == 0.0f){ H[0] = 0.0f; H[1] = 0.0f; H[2] = 1.0f; }
-			sf = ge_light_pow(ge_normal_dot(H, wn, n_rsqrt), s->specular_exp);
+			sf = light_pow(ge_normal_dot(H, wn, n_rsqrt), s->specular_exp);
 			if(sf > 0.0f){
 				int ls[4];
 				light_color_product(l->specular_cf, s->color_for_specular ? color_factor : s->mat_specular_cf, ls);
@@ -762,8 +870,8 @@ static int round_to_screen(float sx, float sy, float sz, const float *clip, int 
 		else if(sz > 65535.0f) sz = 65535.0f;
 	} else if(sx > SCREEN_BOUND || sy >= SCREEN_BOUND || sx < 0 || sy < 0 || sz < 0.0f || sz >= 65536.0f)
 		outside = 1;
-	v->x = (int)((u32)ge_f2i(floorf(sx * 16.0f)) - (ge.cmd[GE_OFFSETX] & 0xFFFF));
-	v->y = (int)((u32)ge_f2i(floorf(sy * 16.0f)) - (ge.cmd[GE_OFFSETY] & 0xFFFF));
+	v->x = (int)((u32)ge_f2i(ge_floorf(sx * 16.0f)) - (ge.cmd[GE_OFFSETX] & 0xFFFF));
+	v->y = (int)((u32)ge_f2i(ge_floorf(sy * 16.0f)) - (ge.cmd[GE_OFFSETY] & 0xFFFF));
 	v->z = (u16)(u32)ge_f2i(sz);
 	return outside;
 }
@@ -772,7 +880,7 @@ static int round_to_screen(float sx, float sy, float sz, const float *clip, int 
 static int clip_to_screen(const float *clip, GeVertex *v){
 	float x = ge_viewport(clip[0], clip[3], ge_f24(ge.cmd[GE_VIEWPORTXSCALE]), ge_f24(ge.cmd[GE_VIEWPORTXCENTER]));
 	float y = ge_viewport(clip[1], clip[3], ge_f24(ge.cmd[GE_VIEWPORTYSCALE]), ge_f24(ge.cmd[GE_VIEWPORTYCENTER]));
-	float z = floorf(ge_viewport(clip[2], clip[3], ge_f24(ge.cmd[GE_VIEWPORTZSCALE]), ge_f24(ge.cmd[GE_VIEWPORTZCENTER])));
+	float z = ge_floorf(ge_viewport(clip[2], clip[3], ge_f24(ge.cmd[GE_VIEWPORTZSCALE]), ge_f24(ge.cmd[GE_VIEWPORTZCENTER])));
 	return round_to_screen(x, y, z, clip, ge.cmd[GE_DEPTHCLAMPENABLE] & 1, 1, v);
 }
 
@@ -815,7 +923,9 @@ static void read_vertex(const VFormat *f, const DecVertex *d, GeClipVertex *out)
 	{
 		float tc[2];
 		tc[0] = last_uv[0]; tc[1] = last_uv[1];
-		if(ts.ge_uv_scale){
+		if(ts.ge_uv_scale && ge_fast_math){
+			for(i = 0; i < 2; i++) tc[i] = tc[i] * ts.uv_scale[i] + ts.uv_offset[i];
+		} else if(ts.ge_uv_scale){
 			/* El decodificador solo las normalizó (8 y 16 bits sin signo) */
 			for(i = 0; i < 2; i++){
 				float scaled = ge_product24((double)ge_trunc24(tc[i]) * ts.uv_scale[i]);
@@ -845,12 +955,12 @@ static void read_vertex(const VFormat *f, const DecVertex *d, GeClipVertex *out)
 			iw = 1.0f / out->clip[3];
 			sx = out->clip[0] * iw * ts.screen_scale[0] + ts.screen_add[0];
 			sy = out->clip[1] * iw * ts.screen_scale[1] + ts.screen_add[1];
-			sz = floorf(out->clip[2] * iw * ts.screen_scale[2] + ts.screen_add[2]);
+			sz = ge_floorf(out->clip[2] * iw * ts.screen_scale[2] + ts.screen_add[2]);
 		} else {
 			for(i = 0; i < 4; i++) out->clip[i] = ge_clip_component(pos, ts.matrix, i);
 			sx = ge_viewport(out->clip[0], out->clip[3], ts.screen_scale[0], ts.screen_add[0]);
 			sy = ge_viewport(out->clip[1], out->clip[3], ts.screen_scale[1], ts.screen_add[1]);
-			sz = floorf(ge_viewport(out->clip[2], out->clip[3], ts.screen_scale[2], ts.screen_add[2]));
+			sz = ge_floorf(ge_viewport(out->clip[2], out->clip[3], ts.screen_scale[2], ts.screen_add[2]));
 		}
 		v->clipw = out->clip[3];
 		v->fogdepth = 1.0f;
@@ -859,7 +969,7 @@ static void read_vertex(const VFormat *f, const DecVertex *d, GeClipVertex *out)
 			return;
 		}
 
-		if(ts.enable_fog && ts.fog_ge){
+		if(ts.enable_fog && ts.fog_ge && !ge_fast_math){
 			GeRowTerm t[4];
 			float vz, fz;
 			t[0] = ge_product(ge_trunc24(pos[0]), ts.view_z_col[0]);
@@ -886,7 +996,7 @@ static void read_vertex(const VFormat *f, const DecVertex *d, GeClipVertex *out)
 			worldnormal[1] = vdot(normal, c1);
 			worldnormal[2] = vdot(normal, c2);
 			len2 = vdot(worldnormal, worldnormal);
-			if(len2 > 0.0f && isfinite(len2)) n_rsqrt = ge_rsqrt(len2);
+			if(len2 > 0.0f && isfinite(len2)) n_rsqrt = ge_fast_math ? ge_fast_rsqrt(len2) : ge_rsqrt(len2);
 			else if(len2 != 0.0f){ worldnormal[0] = 0.0f; worldnormal[1] = 0.0f; worldnormal[2] = 1.0f; }
 			/* Una normal nula sigue nula: ni difusa ni especular (gpu/probe exp173) */
 		}
@@ -896,18 +1006,26 @@ static void read_vertex(const VFormat *f, const DecVertex *d, GeClipVertex *out)
 			switch((ge.cmd[GE_TEXMAPMODE] >> 8) & 3){
 			case 0: memcpy(src, pos, sizeof(src)); break;
 			case 1: src[0] = v->s; src[1] = v->t; src[2] = 0.0f; break;
-			case 2: memcpy(src, normal, sizeof(src)); ge_normalize(src); break;  /* sin (0, 0, 1) si es nula */
+			case 2: memcpy(src, normal, sizeof(src)); vnormalize(src); break;  /* sin (0, 0, 1) si es nula */
 			default: memcpy(src, normal, sizeof(src)); break;
 			}
 			/* Aquí no se usan la escala ni el desplazamiento de uv */
-			for(i = 0; i < 3; i++) r[i] = texgen_component(src, ge.tgen, i);
+			if(ge_fast_math){
+				const float *m = ge.tgen;
+				for(i = 0; i < 3; i++) r[i] = src[0] * m[i] + src[1] * m[3 + i] + src[2] * m[6 + i] + m[9 + i];
+			} else for(i = 0; i < 3; i++) r[i] = texgen_component(src, ge.tgen, i);
 			v->s = r[0]; v->t = r[1]; v->q = r[2];
 		} else if(ts.uv_gen_mode == 2){
 			v->s = ge_shade_map_coord((int)(ge.cmd[GE_TEXSHADELS] & 3), pos, worldnormal, n_rsqrt, ts.light.view_dir);
 			v->t = ge_shade_map_coord((int)((ge.cmd[GE_TEXSHADELS] >> 8) & 3), pos, worldnormal, n_rsqrt, ts.light.view_dir);
 		}
 
-		if(ts.enable_lighting) lighting_process(v, pos, worldnormal, n_rsqrt, &ts.light);
+		if(ts.enable_lighting){
+			GE_PROF_T0;
+			if(ge_fast_math) lighting_process_fast(v, pos, worldnormal, n_rsqrt, &ts.light);
+			else lighting_process(v, pos, worldnormal, n_rsqrt, &ts.light);
+			GE_PROF_ADD(4);
+		}
 	} else {
 		v->x = ge_f2i(pos[0] * 16.0f);
 		v->y = ge_f2i(pos[1] * 16.0f);
@@ -1243,11 +1361,14 @@ static u32 index_at(const VSource *s, int i){
 
 static void read_raw(const VSource *s, u32 index, GeClipVertex *out){
 	DecVertex d;
+	GE_PROF_T0;
 	if(s->list) d = s->list[index];
 	else if(s->zero) memset(&d, 0, sizeof(d));
 	else decode_vertex(s->f, mem_ptr_r(s->vaddr + index * s->f->size, s->f->size), &d);
+	GE_PROF_ADD(5);
 	read_vertex(s->f, &d, out);
 	ge_stats.vertices++;
+	GE_PROF_ADD(0);
 }
 
 static void vsource_read(const VSource *s, int vtx, GeClipVertex *out){
@@ -1452,11 +1573,14 @@ void ge_draw_prim(u32 prim, u32 count){
 
 	/* Sin formato de posición no se dibuja, pero se avanza */
 	if(f.pos){
+		GE_PROF_T0;
 		load_morph_weights();
 		setup_uv_prescale(&f);
 		compute_transform_state(&f);
 		vsource_init(&vr, &f, vaddr, iaddr, (int)count);
+		GE_PROF_ADD(3);
 		submit_primitive(&vr, prim, (int)count);
+		GE_PROF_ADD(2);
 	}
 
 	/* El GE avanza las direcciones tras dibujar */

@@ -2048,7 +2048,7 @@ void ge_raster_triangle(const GeVertex *v0, const GeVertex *v1, const GeVertex *
 	if(d01x * d02y - d01y * d02x <= 0) return;
 	if(!range_of(v, 3, &x1, &y1, &x2, &y2)) return;
 	ge_stats.primitives++;
-	if(ge_hw){ ge_hw->triangle(v0, v1, v2); return; }
+	if(ge_hw){ GE_PROF_T0; ge_hw->triangle(v0, v1, v2); GE_PROF_ADD(1); return; }
 	texture_snapshot();
 	draw_triangle(v0, v1, v2, x1, y1, x2, y2);
 }
@@ -2058,7 +2058,7 @@ void ge_raster_rect(const GeVertex *v0, const GeVertex *v1){
 	int x1, y1, x2, y2;
 	if(!range_of(v, 2, &x1, &y1, &x2, &y2)) return;
 	ge_stats.primitives++;
-	if(ge_hw){ ge_hw->rect(v0, v1); return; }
+	if(ge_hw){ GE_PROF_T0; ge_hw->rect(v0, v1); GE_PROF_ADD(1); return; }
 	texture_snapshot();
 	draw_rectangle(v0, v1, x1, y1, x2, y2);
 }

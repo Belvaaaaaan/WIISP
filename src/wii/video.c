@@ -88,11 +88,20 @@ static const struct { char c; u8 rows[7]; } font[] = {
 	{ 'E', { 0x1F,0x10,0x10,0x1E,0x10,0x10,0x1F } }, { 'L', { 0x10,0x10,0x10,0x10,0x10,0x10,0x1F } },
 };
 
-/* Cada píxel de la fuente ocupa 2x2 píxeles: una palabra YUY2 por 2 líneas */
+/* Cada píxel de la fuente ocupa 2x2 píxeles: una palabra YUY2 por 2 líneas.
+   Sobre un recuadro negro con margen, para leerse sobre fondos claros */
+#define TEXT_PAD_X 2   /* palabras */
+#define TEXT_PAD_Y 3   /* líneas */
+#define TEXT_LINES (14 + 2 * TEXT_PAD_Y)
+
 static void draw_text(u32 x_words, u32 y, const char *text){
-	u32 words_per_line = rmode->fbWidth / 2;
+	u32 words_per_line = rmode->fbWidth / 2, len = (u32)strlen(text), bx, by;
+	u32 x_end = x_words + len * 6 + TEXT_PAD_X - 1;
+	if(x_end > words_per_line) x_end = words_per_line;
 	/* La GPU pudo escribir esas líneas: fuera lo que haya en la caché */
-	DCInvalidateRange(game_xfb + y * words_per_line, 14 * words_per_line * 4);
+	DCInvalidateRange(game_xfb + (y - TEXT_PAD_Y) * words_per_line, TEXT_LINES * words_per_line * 4);
+	for(by = y - TEXT_PAD_Y; by < y + 14 + TEXT_PAD_Y; by++)
+		for(bx = x_words - TEXT_PAD_X; bx < x_end; bx++) game_xfb[by * words_per_line + bx] = YUY2_BLACK;
 	for(; *text; text++, x_words += 6){
 		unsigned i, row, col;
 		const u8 *rows = NULL;
@@ -138,8 +147,9 @@ void video_draw_psp_frame(const char *overlay){
 
 	if(gx_ge_present(game_xfb, rmode, CONF_GetAspectRatio() == CONF_ASPECT_16_9)){
 		if(overlay && overlay[0]){
-			draw_text(4, 8, overlay);
-			DCFlushRange(game_xfb + 8 * words_per_line, 14 * words_per_line * 4);
+			/* Dentro de la zona segura de la tele (sin overscan) */
+			draw_text(16, 24, overlay);
+			DCFlushRange(game_xfb + (24 - TEXT_PAD_Y) * words_per_line, TEXT_LINES * words_per_line * 4);
 		}
 		show_game_xfb();
 		return;
@@ -171,9 +181,9 @@ void video_draw_psp_frame(const char *overlay){
 		}
 	}
 	DCFlushRange(game_xfb, total_words * 4);
-	if(overlay && y0 >= 30){
-		draw_text(x0, 12, overlay);
-		DCFlushRange(game_xfb + 12 * words_per_line, 14 * words_per_line * 4);
+	if(overlay && y0 >= 24 + 14 + TEXT_PAD_Y){
+		draw_text(x0 + TEXT_PAD_X, 24, overlay);
+		DCFlushRange(game_xfb + (24 - TEXT_PAD_Y) * words_per_line, TEXT_LINES * words_per_line * 4);
 	}
 	show_game_xfb();
 }

@@ -26,6 +26,9 @@
 GeState ge;
 GeStats ge_stats;
 unsigned long long (*ge_host_clock)(void);
+#ifdef WIISP_PROF
+unsigned long long ge_prof[8];
+#endif
 
 /* --- Listas ------------------------------------------------------------ */
 

@@ -20,6 +20,9 @@ INCLUDES	:=	src
 
 #---------------------------------------------------------------------------------
 CFLAGS		=	-O2 -fwrapv -Wall -Wextra -Wno-unused-parameter -std=gnu11 $(MACHDEP) $(INCLUDE)
+ifdef PROF
+CFLAGS		+=	-DWIISP_PROF
+endif
 LDFLAGS		=	$(MACHDEP) -Wl,-Map,$(notdir $@).map
 
 LIBS		:=	-lfat -lwiiuse -lbte -logc -lm

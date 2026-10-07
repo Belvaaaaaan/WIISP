@@ -23,8 +23,8 @@ hacerlo (GX, DSP, Starlet) o que se pueda hacer una sola vez y guardarse.
 
 ## 2. Huecos y problemas, por impacto
 
-1. **CPU interpretada.** Hoy es el cuello de botella (el demo `sprite` va a
-   9 FPS por la CPU). Lo resuelve el dynarec (§4).
+1. **CPU interpretada.** Lo resuelve el dynarec (§4). Ojo: en las demos 3D
+   medidas en el Wii real (§11) pesa más la geometría del GE que la CPU.
 2. **Floats en little-endian.** La RAM de la PSP se guarda en LE y PowerPC
    no tiene cargas de float con inversión de bytes (`lfsbrx` no existe).
    Cada `lwc1`/`lv.s`/`lv.q` cuesta `lwbrx` + `stw` + `lfs` en vez de un
@@ -235,7 +235,7 @@ pesan los `lv`/`sv` en un juego real antes de plantearse B.
 | 5 | VFPU con paired singles | GTA y casi todo el 3D |
 | 6 | Audio: sceAudio, SAS en el DSP, Atrac3+ | |
 | 7 | Caché persistente + herramienta de PC (nivel 1) | |
-| 8 | JIT de vértices, T&L por hardware | |
+| 8 | JIT de vértices, T&L por hardware | Puede subir de prioridad: §11 |
 | 9 | Recompilación a C (nivel 2), transcodificación de audio | El último 20 % |
 
 ## 10. Cómo medir sin tener los juegos aquí
@@ -247,3 +247,47 @@ pesan los `lv`/`sv` en un juego real antes de plantearse B.
   aprende a reproducirlos, se puede probar el backend GX con frames reales
   de GTA o Silent Hill sin el juego. Son datos del juego: se usan en local,
   no se suben al repositorio.
+
+## 11. Mediciones en el Wii real
+
+Primera prueba en la consola (octubre de 2026), demos 3D del PSPSDK con el
+backend GX, 600 frames sin límite de velocidad:
+
+| Demo | FPS | Tiempo en el GE | Lo que más pesa |
+|---|---|---|---|
+| cube | 398 | 6 % | Presentar (~1,6 ms fijos por frame) |
+| reflection | 284 | 9 % | Presentar |
+| clut | 197 | 62 % | Decodificar la textura cada frame (la paleta cambia) |
+| blend | 53 | 40 % | Bajar y subir el framebuffer (texto de la CPU sobre el 3D) |
+| celshading | 81 | 84 % | Vértices |
+| envmap | 34 | 54 % | Vértices y el framebuffer |
+| lights | 32 | 91 % | Luces por vértice (4 puntuales con especular) |
+| sprite | 10 | 57 % | Vértices de 16 000 sprites por frame; el resto, la CPU |
+
+Las demos pesadas dan en Dolphin casi lo mismo que en la consola; las
+ligeras van más rápido en Dolphin porque no simula lo que tarda GX en
+copiar la imagen al XFB.
+
+Primera pasada sobre la geometría (medido en Dolphin, 300 frames):
+
+| Demo | Antes | Después |
+|---|---|---|
+| lights | 27,7 | 48,8 |
+| celshading | 73,6 | 88,0 |
+| envmap | 36,4 | 40,3 |
+| sprite | 9,2 | 10,3 |
+
+Lo que se cambió (solo con `ge_fast_math`, el camino exacto no se toca):
+`sqrtf`, `floorf` y `trunc` de newlib son rutinas de cientos de ciclos en
+Broadway, que no tiene instrucciones para eso; ahora `frsqrte` + Newton y
+un `floor` en línea. Las luces se calculan en float sin pasar a enteros en
+cada luz, y las escalas de uv, la niebla y la generación de coordenadas
+usan float normal.
+
+Perfil restante (`make PROF=1` escribe el desglose en los `.stats` del
+modo de pruebas): un vértice transformado cuesta del orden de 300-400
+ciclos aun sin luces, y la decodificación genérica otros ~250. Con miles
+de vértices por frame, el siguiente salto ya no es pulir C sino cambiar de
+estructura: T&L por hardware de GX y decodificadores de vértices
+especializados por formato (§6).
+

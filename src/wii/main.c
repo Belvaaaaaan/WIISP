@@ -15,12 +15,13 @@
  * Si el Homebrew Channel nos pasa una ruta como argumento, se abre directa.
  *
  * Pruebas automáticas (en Dolphin o en la consola): si existe
- * sd:/wiisp/autotest.txt, se ejecuta cada programa de la lista (rutas
- * relativas a sd:/wiisp/autotest/) sin mandos; su salida va a
+ * sd:/wiisp/autotest.txt (o autotest.txt junto al boot.dol), se ejecuta
+ * cada programa de la lista (rutas relativas a la carpeta autotest/ de al
+ * lado) sin mandos; su salida va a
  * <programa>.out y la captura que pida a <programa>.bmp. Las líneas "gx" y
  * "soft" eligen el renderizador y "frames N" el máximo de frames (1200).
  * Al final de cada programa se añaden a <programa>.stats los FPS y MIPS y
- * la última imagen va a <programa>.final.bmp. Al acabar escribe
+ * la última imagen va a <programa>.gx.bmp o .soft.bmp. Al acabar escribe
  * autotest.done y apaga.
  *
  * SPDX-License-Identifier: GPL-2.0-or-later
@@ -35,6 +36,9 @@
 #include "wii/wii.h"
 #include "wii/gx_ge.h"
 #include "frontend/app.h"
+#ifdef WIISP_PROF
+extern unsigned long long ge_prof[8];
+#endif
 
 /* La RAM de la PSP (32 MB) no cabe en MEM1 (24 MB), así que se recorta
    del principio de la arena de MEM2 antes de que malloc la use.
@@ -153,12 +157,21 @@ static void autotest_output(const char *text, unsigned len){
 	if(autotest_file) fwrite(text, 1, len, autotest_file);
 }
 
-static int autotest(void){
-	FILE *list = fopen("sd:/wiisp/autotest.txt", "r"), *done;
-	char line[256], path[320], out[340];
+/* Busca autotest.txt en sd:/wiisp/ y, si no, junto al boot.dol */
+static int autotest(const char *appdir){
+	FILE *list, *done;
+	char base[300], line[256], path[600], out[620];
 	int count = 0, max_frames = 1200;
+	snprintf(base, sizeof(base), "sd:/wiisp");
+	snprintf(path, sizeof(path), "%s/autotest.txt", base);
+	list = fopen(path, "r");
+	if(!list && appdir){
+		snprintf(base, sizeof(base), "%s", appdir);
+		snprintf(path, sizeof(path), "%s/autotest.txt", base);
+		list = fopen(path, "r");
+	}
 	if(!list) return 0;
-	printf("Pruebas automaticas (sd:/wiisp/autotest.txt)\n");
+	printf("Pruebas automaticas (%s)\n", path);
 	gx_ge_enable(1);
 	while(fgets(line, sizeof(line), list)){
 		int frames, exited = 0;
@@ -167,7 +180,7 @@ static int autotest(void){
 		if(!strcmp(line, "gx")){ gx_ge_enable(1); continue; }
 		if(!strcmp(line, "soft")){ gx_ge_enable(0); continue; }
 		if(!strncmp(line, "frames ", 7)){ max_frames = atoi(line + 7); continue; }
-		snprintf(path, sizeof(path), "sd:/wiisp/autotest/%s", line);
+		snprintf(path, sizeof(path), "%s/autotest/%s", base, line);
 		printf("%s\n", line);
 		snprintf(out, sizeof(out), "%s.bmp", path);
 		app_set_screenshot_path(out);
@@ -199,6 +212,13 @@ static int autotest(void){
 				            "   %u presentaciones desde la VRAM, %u bajadas, %u subidas, %u texturas decodificadas\n",
 				        (unsigned)ticks_to_millisecs(app_ge_host_ticks() - ge0), (unsigned)ticks_to_millisecs(ps),
 				        (unsigned)ticks_to_millisecs(pst), (unsigned)ticks_to_millisecs(pp), cnt[0], cnt[1], cnt[2], cnt[3]);
+#ifdef WIISP_PROF
+				fprintf(st, "   prof: vertices %u ms, backend %u ms, draw_prim %u ms (preparar %u ms), luces %u ms, decodificar %u ms\n",
+				        (unsigned)ticks_to_millisecs(ge_prof[0]), (unsigned)ticks_to_millisecs(ge_prof[1]),
+				        (unsigned)ticks_to_millisecs(ge_prof[2]), (unsigned)ticks_to_millisecs(ge_prof[3]),
+				        (unsigned)ticks_to_millisecs(ge_prof[4]), (unsigned)ticks_to_millisecs(ge_prof[5]));
+				memset(ge_prof, 0, sizeof(ge_prof));
+#endif
 				fclose(st);
 			}
 			snprintf(out, sizeof(out), "%s.%s.bmp", path, gx_ge_enabled() ? "gx" : "soft");
@@ -210,7 +230,8 @@ static int autotest(void){
 		count++;
 	}
 	fclose(list);
-	done = fopen("sd:/wiisp/autotest.done", "w");
+	snprintf(path, sizeof(path), "%s/autotest.done", base);
+	done = fopen(path, "w");
 	if(done){ fprintf(done, "%d\n", count); fclose(done); }
 	fatUnmount("sd:");
 	SYS_ResetSystem(SYS_POWEROFF, 0, 0);
@@ -218,7 +239,7 @@ static int autotest(void){
 }
 
 int main(int argc, char **argv){
-	char path[512], config[300];
+	char path[512], config[300], appdir[300] = "";
 	const char *slash;
 
 	video_init();
@@ -235,11 +256,12 @@ int main(int argc, char **argv){
 	/* La configuración vive junto al boot.dol (p. ej. sd:/apps/wiisp/) */
 	slash = (argc > 0 && argv[0]) ? strrchr(argv[0], '/') : NULL;
 	if(slash){
-		snprintf(config, sizeof(config), "%.*s/wiisp.cfg", (int)(slash - argv[0]), argv[0]);
+		snprintf(appdir, sizeof(appdir), "%.*s", (int)(slash - argv[0]), argv[0]);
+		snprintf(config, sizeof(config), "%s/wiisp.cfg", appdir);
 		menu_set_config_path(config);
 	}
 
-	autotest();
+	autotest(appdir[0] ? appdir : NULL);
 
 	if(argc > 1 && argv[1] && access(argv[1], F_OK) == 0)
 		open_file(argv[1]);

@@ -12,6 +12,7 @@
 #ifndef WIISP_GE_MATH_H
 #define WIISP_GE_MATH_H
 
+#include <math.h>
 #include "core/types.h"
 
 /* float24: float con los 8 bits bajos de la mantisa a cero */
@@ -79,6 +80,50 @@ float ge_normalize(float *v);
 /* Recíproco del montaje de triángulos: q / 2^(e+2) ~ 2^14 / abs_det */
 s64 ge_setup_recip(u64 abs_det, int *e);
 float ge_light_pow(float v, float e);
+
+/* --- Versiones rápidas para ge_fast_math ---------------------------------
+   Broadway no tiene instrucciones de raíz ni de redondeo: sqrtf y floorf
+   de newlib son rutinas de cientos de ciclos. */
+
+/* floorf sin libm; idéntico salvo que -0 da +0 */
+static inline float ge_floorf(float f){
+	if(f > -8388608.0f && f < 8388608.0f){
+		float t = (float)(int)f;
+		return t > f ? t - 1.0f : t;
+	}
+	return f;  /* ya entero, infinito o NaN */
+}
+
+/* 1/sqrt(x) para x finito y > 0 */
+static inline float ge_fast_rsqrt(float x){
+#ifdef GEKKO
+	double xd = x, y;
+	__asm__("frsqrte %0,%1" : "=f"(y) : "f"(xd));
+	y = y * (1.5 - 0.5 * xd * y * y);
+	y = y * (1.5 - 0.5 * xd * y * y);
+	return (float)y;
+#else
+	return 1.0f / sqrtf(x);
+#endif
+}
+
+/* ge_light_pow en float y enteros de 32 bits (sin trunc ni double) */
+static inline float ge_fast_light_pow(float v, float e){
+	if(e <= 0.0f) return 1.0f;
+	if(v > 0.0f){
+		s32 ix, iy;
+		float a, y;
+		memcpy(&ix, &v, 4);
+		a = e * (float)(ix - 0x3F800000) * (1.0f / 16.0f);
+		if(a < -66584576.0f) a = -66584576.0f;
+		else if(a > 67108863.0f) a = 67108863.0f;
+		iy = (s32)a * 16 + 0x3F800000;
+		memcpy(&y, &iy, 4);
+		return y;
+	}
+	return v;
+}
+
 int ge_line_coverage_alpha(s64 x0, s64 y0, s64 x1, s64 y1, int px, int py);
 
 /* Fila de la matriz combinada 4x4 (vector fila * matriz) para la componente c */
