@@ -68,6 +68,84 @@ static void sceRtcGetCurrentClockLocalTime(void){
 	RETURN(0);
 }
 
+/* Días desde 1970 de una fecha civil (H. Hinnant) */
+static s64 days_from_civil(s64 y, u32 m, u32 d){
+	s64 era;
+	u32 yoe, doy, doe;
+	y -= m <= 2;
+	era = (y >= 0 ? y : y - 399) / 400;
+	yoe = (u32)(y - era * 400);
+	doy = (153 * (m > 2 ? m - 3 : m + 9) + 2) / 5 + d - 1;
+	doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+	return era * 146097 + (s64)doe - 719468;
+}
+
+static u64 read_tick(u32 p){ return ((u64)mem_read32(p + 4) << 32) | mem_read32(p); }
+static void write_tick(u32 p, u64 t){ mem_write32(p, (u32)t); mem_write32(p + 4, (u32)(t >> 32)); }
+
+/* sceRtcGetTick(ScePspDateTime *, u64 *tick) */
+static void sceRtcGetTick(void){
+	u32 dt = ARG(0), out = ARG(1);
+	s64 days;
+	u64 us;
+	if(!mem_valid(dt, 16) || !mem_valid(out, 8)){ RETURN(SCE_KERNEL_ERROR_ILLEGAL_ADDR); return; }
+	days = days_from_civil(mem_read16(dt), mem_read16(dt + 2), mem_read16(dt + 4));
+	us = (u64)((days * 86400 + mem_read16(dt + 6) * 3600 + mem_read16(dt + 8) * 60 + mem_read16(dt + 10)) * 1000000ll)
+	     + mem_read32(dt + 12);
+	write_tick(out, RTC_UNIX_EPOCH_TICKS + us);
+	RETURN(0);
+}
+
+/* sceRtcSetTick(ScePspDateTime *, const u64 *tick) */
+static void sceRtcSetTick(void){
+	u32 dt = ARG(0), in = ARG(1);
+	if(!mem_valid(dt, 16) || !mem_valid(in, 8)){ RETURN(SCE_KERNEL_ERROR_ILLEGAL_ADDR); return; }
+	hle_write_datetime(dt, read_tick(in) - RTC_UNIX_EPOCH_TICKS);
+	RETURN(0);
+}
+
+static void sceRtcCompareTick(void){
+	u64 a, b;
+	if(!mem_valid(ARG(0), 8) || !mem_valid(ARG(1), 8)){ RETURN(SCE_KERNEL_ERROR_ILLEGAL_ADDR); return; }
+	a = read_tick(ARG(0)); b = read_tick(ARG(1));
+	RETURN(a > b ? 1 : a < b ? (u32)-1 : 0);
+}
+
+static void tick_add(u64 mult, int wide){
+	u32 dst = ARG(0), src = ARG(1);
+	s64 n = wide ? (s64)(((u64)ARG(3) << 32) | ARG(2)) : (s64)(s32)ARG(2);
+	if(!mem_valid(dst, 8) || !mem_valid(src, 8)){ RETURN(SCE_KERNEL_ERROR_ILLEGAL_ADDR); return; }
+	write_tick(dst, read_tick(src) + (u64)(n * (s64)mult));
+	RETURN(0);
+}
+
+static void sceRtcTickAddTicks(void){ tick_add(1, 1); }
+static void sceRtcTickAddMicroseconds(void){ tick_add(1, 1); }
+static void sceRtcTickAddSeconds(void){ tick_add(1000000ull, 1); }
+static void sceRtcTickAddMinutes(void){ tick_add(60000000ull, 1); }
+static void sceRtcTickAddHours(void){ tick_add(3600000000ull, 0); }
+static void sceRtcTickAddDays(void){ tick_add(86400000000ull, 0); }
+
+static int leap(u32 y){ return (y % 4 == 0 && y % 100 != 0) || y % 400 == 0; }
+static void sceRtcIsLeapYear(void){ RETURN(leap(ARG(0))); }
+static void sceRtcGetDaysInMonth(void){
+	static const u8 days[12] = { 31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31 };
+	u32 m = ARG(1);
+	if(m < 1 || m > 12){ RETURN(0x80000102u); return; }
+	RETURN(days[m - 1] + (m == 2 && leap(ARG(0))));
+}
+static void sceRtcGetDayOfWeek(void){
+	s64 d = days_from_civil(ARG(0), ARG(1), ARG(2));
+	RETURN((u32)(((d % 7) + 7 + 4) % 7));   /* 1970-01-01 fue jueves */
+}
+
+/* Hora local = UTC en WIISP */
+static void sceRtcConvertTick(void){
+	if(!mem_valid(ARG(0), 8) || !mem_valid(ARG(1), 8)){ RETURN(SCE_KERNEL_ERROR_ILLEGAL_ADDR); return; }
+	write_tick(ARG(1), read_tick(ARG(0)));
+	RETURN(0);
+}
+
 /* --- sceSuspendForUser ----------------------------------------------- */
 /* La "memoria volátil" son 4 MB en 0x08400000 que el sistema presta al
    juego cuando no los necesita. */
@@ -149,6 +227,20 @@ static const HleFunction rtc[] = {
 	{ "sceRtcGetCurrentTick", sceRtcGetCurrentTick },
 	{ "sceRtcGetCurrentClock", sceRtcGetCurrentClock },
 	{ "sceRtcGetCurrentClockLocalTime", sceRtcGetCurrentClockLocalTime },
+	{ "sceRtcGetTick", sceRtcGetTick },
+	{ "sceRtcSetTick", sceRtcSetTick },
+	{ "sceRtcCompareTick", sceRtcCompareTick },
+	{ "sceRtcTickAddTicks", sceRtcTickAddTicks },
+	{ "sceRtcTickAddMicroseconds", sceRtcTickAddMicroseconds },
+	{ "sceRtcTickAddSeconds", sceRtcTickAddSeconds },
+	{ "sceRtcTickAddMinutes", sceRtcTickAddMinutes },
+	{ "sceRtcTickAddHours", sceRtcTickAddHours },
+	{ "sceRtcTickAddDays", sceRtcTickAddDays },
+	{ "sceRtcIsLeapYear", sceRtcIsLeapYear },
+	{ "sceRtcGetDaysInMonth", sceRtcGetDaysInMonth },
+	{ "sceRtcGetDayOfWeek", sceRtcGetDayOfWeek },
+	{ "sceRtcConvertUtcToLocalTime", sceRtcConvertTick },
+	{ "sceRtcConvertLocalTimeToUTC", sceRtcConvertTick },
 };
 
 static const HleFunction suspend[] = {

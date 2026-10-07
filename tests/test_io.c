@@ -85,6 +85,15 @@ void test_io(void){
 	CHECK((s32)fd >= 3);
 	call("sceIoClose", fd, 0, 0, 0, 0, 0);
 	CHECK_EQ(call("sceIoOpen", str("NO.TXT"), 1, 0, 0, 0, 0), SCE_ERROR_FILE_NOT_FOUND);
+	/* "." y ".." se resuelven, pero no se sale de la raíz */
+	fd = call("sceIoOpen", str("../data/./a.txt"), 1, 0, 0, 0, 0);
+	CHECK((s32)fd >= 3);
+	call("sceIoClose", fd, 0, 0, 0, 0, 0);
+	fd = call("sceIoOpen", str("disc0:/PSP_GAME/../PSP_GAME/USRDIR/DATA/A.TXT"), 1, 0, 0, 0, 0);
+	CHECK((s32)fd >= 3);
+	call("sceIoClose", fd, 0, 0, 0, 0, 0);
+	CHECK_EQ(call("sceIoOpen", str("disc0:/../PSP_GAME/USRDIR/DATA/A.TXT"), 1, 0, 0, 0, 0), SCE_ERROR_FILE_NOT_FOUND);
+	CHECK_EQ(call("sceIoOpen", str("ms0:/../io.iso"), 1, 0, 0, 0, 0), SCE_ERROR_FILE_NOT_FOUND);
 
 	/* El disco entero por sectores: el descriptor de volumen en el 16 */
 	fd = call("sceIoOpen", str("umd0:"), 1, 0, 0, 0, 0);

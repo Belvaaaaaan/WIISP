@@ -26,8 +26,12 @@ def normalize(text):
         lines.pop()
     return [l.rstrip() for l in lines]
 
+ROOT = None   # carpeta de pspautotests: hace de ms0:/, como el --root de PPSSPP
+
 def run(prx, bmp=None):
     args = CLI + ['--run', '--quiet', '--frames', '1200']
+    if ROOT:
+        args += ['--root', ROOT]
     if bmp:
         args += ['--bmp', bmp]
     try:
@@ -60,7 +64,9 @@ def main():
     args = sys.argv[1:]
     verbose = '-v' in args
     args = [a for a in args if a != '-v']
-    root = pathlib.Path(args[0]) / 'tests'
+    global ROOT
+    ROOT = str(pathlib.Path(args[0]))
+    root = pathlib.Path(ROOT) / 'tests'
     required = None
     if len(args) >= 3 and args[1] == '--list':
         required = [l.strip() for l in open(args[2]) if l.strip() and not l.startswith('#')]

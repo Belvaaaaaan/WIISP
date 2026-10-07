@@ -239,7 +239,7 @@ static int add_import(PspModule *mod, const char *lib, u32 nid, u32 stub){
 	imp->stub_addr = stub;
 
 	mem_write32(stub, MIPS_JR_RA);
-	mem_write32(stub + 4, MIPS_SYSCALL(mod->num_imports));
+	mem_write32(stub + 4, MIPS_SYSCALL(mod->syscall_base + mod->num_imports));
 	mod->num_imports++;
 	return LOADER_OK;
 }
@@ -281,10 +281,27 @@ static int patch_imports(u32 start, u32 end, PspModule *mod){
 }
 
 /* Exportaciones: misma cabecera que las importaciones, pero la tabla de
-   NIDs va seguida de la de direcciones (funciones y luego variables).
-   Solo nos interesa la variable module_sdk_version de la biblioteca sin
-   nombre ("syslib"), que algunos comportamientos del firmware consultan. */
+   NIDs va seguida de la de direcciones (funciones y luego variables). Se
+   guardan las funciones (para enlazar módulos entre sí y encontrar
+   module_start) y, de la biblioteca sin nombre ("syslib"), la variable
+   module_sdk_version, que algunos comportamientos del firmware consultan. */
 #define NID_MODULE_SDK_VERSION 0x11B97506u
+
+static void add_export(PspModule *mod, const char *lib, u32 nid, u32 addr){
+	PspExport *x;
+	if(mod->num_exports >= 4096) return;
+	if((mod->num_exports & (mod->num_exports - 1)) == 0){
+		u32 cap = mod->num_exports ? mod->num_exports * 2 : 16;
+		PspExport *n = realloc(mod->exports, cap * sizeof(PspExport));
+		if(!n) return;
+		mod->exports = n;
+	}
+	x = &mod->exports[mod->num_exports++];
+	strncpy(x->lib, lib, LOADER_LIB_NAME_LEN - 1);
+	x->lib[LOADER_LIB_NAME_LEN - 1] = 0;
+	x->nid = nid;
+	x->addr = addr;
+}
 
 static void read_exports(u32 start, u32 end, PspModule *mod){
 	u32 addr = start;
@@ -297,6 +314,12 @@ static void read_exports(u32 start, u32 end, PspModule *mod){
 		u32 table = mem_read32(addr + 12);
 		u32 total = var_count + func_count, i;
 		if(size < 4) return;
+		if(total && mem_valid(table, total * 8)){
+			char lib[LOADER_LIB_NAME_LEN] = "";
+			if(name) mem_read_cstr(name, lib, sizeof(lib));
+			for(i = 0; i < func_count; i++)
+				add_export(mod, lib, mem_read32(table + i * 4), mem_read32(table + (total + i) * 4));
+		}
 		if(!name && total && mem_valid(table, total * 8)){
 			for(i = func_count; i < total; i++){
 				u32 var = mem_read32(table + (total + i) * 4);
@@ -328,11 +351,30 @@ static int read_modinfo(Elf *e, u32 base, PspModule *mod){
 	return patch_imports(mem_read32(addr + 44), mem_read32(addr + 48), mod);
 }
 
+u32 loader_syscall_base;
+
+u32 loader_elf_span(const u8 *buf, u32 len, int *relocatable){
+	Elf e;
+	u32 lo = 0xFFFFFFFFu, hi = 0;
+	int i;
+	if(parse_header(buf, len, &e)) return 0;
+	for(i = 0; i < e.phnum; i++){
+		const u8 *ph = phdr(&e, i);
+		u32 vaddr = rd_le32(ph + 8), memsz = rd_le32(ph + 20);
+		if(rd_le32(ph) != PT_LOAD || memsz == 0) continue;
+		if(vaddr < lo) lo = vaddr;
+		if(vaddr + memsz > hi) hi = vaddr + memsz;
+	}
+	if(relocatable) *relocatable = e.type == ET_PSP_PRX;
+	return hi > lo ? (e.type == ET_PSP_PRX ? hi : hi - lo) : 0;
+}
+
 int loader_load_elf(const u8 *buf, u32 len, u32 prx_base, PspModule *mod){
 	Elf e;
 	int err;
 
 	memset(mod, 0, sizeof(*mod));
+	mod->syscall_base = loader_syscall_base;
 	err = parse_header(buf, len, &e);
 	if(err) return err;
 

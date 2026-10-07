@@ -94,6 +94,12 @@ typedef void (*HleOutputFunc)(const char *text, u32 len);
    el hilo principal. host_dir: carpeta del host que se ve como ms0:/ y
    host0:/. Devuelve 0 si todo va bien. */
 int  hle_init(PspModule *mod, const char *host_dir, const char *exec_name);
+/* Otro módulo cargado (sceKernelLoadModule): sus imports al HLE y el enlace
+   de exportaciones entre módulos. Cargarlo con loader_syscall_base =
+   hle_next_syscall(). */
+int  hle_link_module(const PspModule *m);
+void hle_unlink_module(const PspModule *m);
+u32  hle_next_syscall(void);
 void hle_shutdown(void);
 
 /* Ejecuta hasta el siguiente vblank. Devuelve 0 si el programa sigue
@@ -149,6 +155,30 @@ extern const HleLibrary hle_misc_libs[];
 extern const u32 hle_misc_libs_count;
 extern const HleLibrary hle_ge_libs[];
 extern const u32 hle_ge_libs_count;
+extern const HleLibrary hle_sas_libs[];
+extern const u32 hle_sas_libs_count;
+void sas_init(void);
+extern const HleLibrary hle_atrac_libs[];
+extern const u32 hle_atrac_libs_count;
+void atrac_init(void);
+void atrac_shutdown(void);
+/* sceUtilityLoadModule del módulo de Atrac: sus contextos viven en su BSS */
+void atrac_notify_load(u32 bss);
+extern const HleLibrary hle_mpeg_libs[];
+extern const u32 hle_mpeg_libs_count;
+void mpeg_init(void);
+extern const HleLibrary hle_audio_libs[];
+extern const u32 hle_audio_libs_count;
+void audio_init(void);
+/* Salida de sonido de la plataforma: cada bloque mezclado del sceAudio
+   (estéreo s16, 44100 Hz). NULL = sin sonido. */
+typedef void (*HleAudioSink)(const s16 *stereo, u32 frames);
+extern HleAudioSink hle_audio_sink;
+extern const HleLibrary hle_net_libs[];
+extern const u32 hle_net_libs_count;
+extern const HleLibrary hle_module_libs[];
+extern const u32 hle_module_libs_count;
+void module_shutdown(void);
 
 /* Hilos y planificador (kernel.c) */
 void kernel_init(const PspModule *mod, const char *exec_path);
@@ -161,12 +191,21 @@ void kernel_thread_return(void);
    propia, sin poder bloquearse) y vuelve cuando termina. Devuelve su v0.
    Se puede llamar desde dentro de un syscall. */
 u32  kernel_call_guest(u32 func, u32 a0, u32 a1, u32 a2);
+/* Igual, pero con la pila sp (0 = la de interrupciones). Para callbacks que
+   la PSP ejecuta en el hilo que llama, como el del ringbuffer de sceMpeg. */
+u32  kernel_call_guest_sp(u32 func, u32 sp, u32 a0, u32 a1, u32 a2);
+u32  kernel_module_gp(void);   /* gp del módulo principal */
 void kernel_callback_return(void);
 /* 1 mientras se atiende una interrupción o se ejecuta kernel_call_guest */
 int  kernel_in_interrupt(void);
 int  kernel_wait_vblank(void); /* bloquea el hilo actual hasta el vblank */
 /* Bloquea el hilo actual hasta el ciclo indicado (si no es una interrupción) */
 void kernel_wait_until(u64 cycle);
+/* El syscall "tarda" us microsegundos: el hilo espera (hleDelayResult) */
+#define hle_delay_us(us) kernel_wait_until(cpu_cycles + (u64)(us) * CYCLES_PER_US)
+/* El Media Engine hace un trabajo a la vez: devuelve cuánto esperará quien
+   le encargue uno de us microsegundos (atrac.c) */
+u32  me_schedule_job(u32 us);
 
 /* Eventos programados, como CoreTiming de PPSSPP (kernel.c): fn(userdata)
    se llama cuando cpu_cycles llega a `when`. unschedule devuelve los
@@ -206,8 +245,15 @@ u32  kernel_sdk_version(void);
 
 /* El hilo actual espera a un objeto del HLE; kernel_wake_object despierta
    a todos los que esperan ese (tipo, id) por orden de llegada. */
-enum { KWAIT_GE_DRAW = 1, KWAIT_GE_LIST = 2 };
+enum { KWAIT_GE_DRAW = 1, KWAIT_GE_LIST = 2, KWAIT_AUDIO = 3, KWAIT_SAVEDATA = 4 };
 void kernel_wait_object(int type, u32 id);
+/* Hilos creados desde el HLE (module_start): como sceKernelCreateThread /
+   StartThread. kernel_wait_module_start pone al hilo actual a esperar el
+   fin del hilo thread; entonces devuelve ret y escribe su estado de salida
+   en status_addr. */
+u32  kernel_create_thread(const char *name, u32 entry, u32 prio, u32 stack_size, u32 attr, u32 gp);
+int  kernel_start_thread(u32 uid, u32 arglen, u32 argp);
+void kernel_wait_module_start(u32 thread, u32 ret, u32 status_addr);
 int  kernel_wake_object(int type, u32 id, u32 ret);
 
 /* Asignador de memoria de usuario (kernel.c) */
@@ -218,6 +264,10 @@ void kernel_free(u32 addr);
 /* boot_from_disc: el directorio actual empieza en disc0:/PSP_GAME/USRDIR */
 void io_init(const char *host_dir, int boot_from_disc);
 void io_shutdown(void);
+/* Un archivo entero por su ruta de la PSP, o el resto de un descriptor
+   abierto desde su posición actual (malloc; NULL si falla) */
+u8  *io_load_path(const char *path, u32 *len);
+u8  *io_load_fd(u32 fd, u32 *len);
 
 /* Escribe una ScePspDateTime (16 bytes) a partir de microsegundos Unix (misc.c) */
 void hle_write_datetime(u32 addr, u64 unix_us);

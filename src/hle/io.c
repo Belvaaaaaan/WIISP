@@ -5,8 +5,9 @@
  *
  * Dispositivos:
  *   - ms0:/, fatms0:/ y host0:/ apuntan a una carpeta del anfitrión (la del
- *     ejecutable o la imagen). Las rutas con ".." se rechazan para que un
- *     programa no pueda salir de esa carpeta.
+ *     ejecutable o la imagen). "." y ".." se resuelven, pero nunca se puede
+ *     salir de esa carpeta. ms0:/PSP/GAME/WIISP, donde argv[0] dice que
+ *     está el ejecutable, es esa misma carpeta.
  *   - disc0:/, umd0:/, umd1:/ y umd:/ son el UMD montado (loader/disc.c).
  *     "umd0:" sin ruta es el disco entero en modo sector: las lecturas y
  *     los desplazamientos cuentan sectores de 2048 bytes. "disc0:/sce_lbn
@@ -79,6 +80,7 @@ typedef struct {
 static IoFile files[MAX_FILES];
 static IoDir dirs[MAX_DIRS];
 static char host_dir[256];
+#define EXEC_DIR "PSP/GAME/WIISP"   /* como en app.c */
 static char cwd[256];        /* con dispositivo: "ms0:/PSP" o "disc0:/PSP_GAME/USRDIR" */
 static int umd_activated;
 
@@ -126,12 +128,35 @@ static int is_host_device(const char *dev, u32 n){
 }
 
 /* Traduce una ruta de la PSP. Devuelve 0 si es válida. */
+/* Quita "." y ".." de una ruta sin dispositivo ni '/' inicial (en su
+   sitio). -1 si sube por encima de la raíz. */
+static int normalize_path(char *p){
+	char *out = p, *in = p;
+	while(*in){
+		char *seg = in, *end = strchr(in, '/');
+		size_t len = end ? (size_t)(end - in) : strlen(in);
+		in = end ? end + 1 : in + len;
+		if(len == 0 || (len == 1 && seg[0] == '.')) continue;
+		if(len == 2 && seg[0] == '.' && seg[1] == '.'){
+			if(out == p) return -1;
+			out--;
+			while(out > p && out[-1] != '/') out--;
+			continue;
+		}
+		memmove(out, seg, len);
+		out += len;
+		*out++ = '/';
+	}
+	if(out > p) out--;   /* sin la '/' final */
+	*out = 0;
+	return 0;
+}
+
 static int resolve_str(const char *in, Resolved *r){
-	char full[512];
+	char full[512], rel[512];
 	const char *colon, *p;
 	u32 n;
 	memset(r, 0, sizeof(*r));
-	if(strstr(in, "..")) return -1;
 	colon = strchr(in, ':');
 	if(colon) snprintf(full, sizeof(full), "%s", in);
 	else {
@@ -142,18 +167,24 @@ static int resolve_str(const char *in, Resolved *r){
 	}
 	colon = strchr(full, ':');
 	n = (u32)(colon - full);
-	p = colon + 1;
-	while(*p == '/') p++;
+	snprintf(rel, sizeof(rel), "%s", colon + 1);
+	if(normalize_path(rel)) return -1;
+	p = rel;
 	if(is_disc_device(full, n)){
 		if(disc_is_open()){
 			r->disc = 1;
 			r->whole_device = !*p && full[0] == 'u';
-			snprintf(r->path, sizeof(r->path), "%s", p);
-			return 0;
+			n = (u32)snprintf(r->path, sizeof(r->path), "%s", p);
+			return n < sizeof(r->path) ? 0 : -1;
 		}
 	} else if(!is_host_device(full, n)) return -1;
-	snprintf(r->path, sizeof(r->path), "%s/%s", host_dir, p);
-	return 0;
+	/* La carpeta donde "vive" el ejecutable (argv[0]) es la del anfitrión */
+	if(!strncmp(p, EXEC_DIR, sizeof(EXEC_DIR) - 1) && (p[sizeof(EXEC_DIR) - 1] == '/' || !p[sizeof(EXEC_DIR) - 1])){
+		p += sizeof(EXEC_DIR) - 1;
+		while(*p == '/') p++;
+	}
+	n = (u32)snprintf(r->path, sizeof(r->path), "%s/%s", host_dir, p);
+	return n < sizeof(r->path) ? 0 : -1;   /* nunca una ruta recortada */
 }
 
 static int resolve(u32 addr, Resolved *r){
@@ -185,6 +216,55 @@ static int alloc_fd(void){
 }
 
 /* --- Archivos ------------------------------------------------------------------ */
+
+/* Lee hasta el final desde la posición actual (para cargar módulos) */
+static u8 *load_rest(IoFile *o, u32 *len){
+	u8 *buf;
+	u64 n;
+	if(o->kind == F_HOST){
+		long pos = ftell(o->f), end;
+		if(pos < 0 || fseek(o->f, 0, SEEK_END) || (end = ftell(o->f)) < pos) return NULL;
+		fseek(o->f, pos, SEEK_SET);
+		n = (u64)(end - pos);
+		if(n > 64u * 1024 * 1024 || !(buf = malloc(n ? (size_t)n : 1))) return NULL;
+		if(fread(buf, 1, (size_t)n, o->f) != n){ free(buf); return NULL; }
+	} else if(o->kind == F_DISC){
+		n = o->pos < o->size ? o->size - o->pos : 0;
+		if(n > 64u * 1024 * 1024 || !(buf = malloc(n ? (size_t)n : 1))) return NULL;
+		if(disc_read((u64)o->lba * DISC_SECTOR + o->pos, (u32)n, buf) != n){ free(buf); return NULL; }
+		o->pos += n;
+	} else return NULL;
+	*len = (u32)n;
+	return buf;
+}
+
+u8 *io_load_fd(u32 fd, u32 *len){
+	IoFile *o = fd < MAX_FILES && files[fd].kind != F_NONE ? &files[fd] : NULL;
+	return o ? load_rest(o, len) : NULL;
+}
+
+u8 *io_load_path(const char *path, u32 *len){
+	Resolved r;
+	IoFile o;
+	u8 *buf;
+	DiscEntry e;
+	u32 lba, size;
+	if(resolve_str(path, &r)) return NULL;
+	memset(&o, 0, sizeof(o));
+	if(r.disc){
+		if(parse_lbn(r.path, &lba, &size)){ o.lba = lba; o.size = size; }
+		else if(disc_lookup(r.path, &e) || e.is_dir) return NULL;
+		else { o.lba = e.lba; o.size = e.size; }
+		o.kind = F_DISC;
+		return load_rest(&o, len);
+	}
+	o.f = fopen(r.path, "rb");
+	if(!o.f) return NULL;
+	o.kind = F_HOST;
+	buf = load_rest(&o, len);
+	fclose(o.f);
+	return buf;
+}
 
 /* Abre en fd. Devuelve 0 o un código de error */
 static u32 open_at(int fd, u32 path_addr, u32 flags){

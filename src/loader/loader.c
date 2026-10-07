@@ -71,6 +71,22 @@ static int unwrap(const u8 *buf, u32 len, const u8 **elf, u32 *elf_len, u8 **own
 	return LOADER_OK;
 }
 
+int loader_unwrap(u8 *buf, u32 len, const u8 **elf, u32 *elf_len, u8 **owned){
+	return unwrap(buf, len, elf, elf_len, owned, 1);
+}
+
+void loader_psp_name(const u8 *buf, u32 len, char *out, u32 out_size){
+	u32 n = 0;
+	out[0] = 0;
+	if(len >= 8 && !memcmp(buf, "~SCE", 4)){
+		u32 hs = rd_le32(buf + 4);
+		if(hs < len){ buf += hs; len -= hs; }
+	}
+	if(len < 0x26 || memcmp(buf, "~PSP", 4) || !out_size) return;
+	while(n + 1 < out_size && n < 28 && buf[0x0A + n]){ out[n] = (char)buf[0x0A + n]; n++; }
+	out[n] = 0;
+}
+
 static int load_unwrapped(const u8 *buf, u32 len, u32 prx_base, PspModule *mod, int inplace){
 	const u8 *elf;
 	u32 elf_len;
@@ -119,6 +135,7 @@ int loader_load_inplace(u8 *buf, u32 len, u32 prx_base, PspModule *mod){
 
 void loader_free(PspModule *mod){
 	free(mod->imports);
+	free(mod->exports);
 	memset(mod, 0, sizeof(*mod));
 }
 

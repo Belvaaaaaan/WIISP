@@ -57,6 +57,9 @@ void app_set_output(AppOutputFunc func);
 void app_set_null_renderer(void);
 /* Geometría con float normal, como con el backend GX */
 void app_set_fast_math(int on);
+/* La carpeta que hace de ms0:/ si el ejecutable está dentro de ella (si
+   no, es la del ejecutable) */
+void app_set_root(const char *dir);
 
 /* Perfilado: reloj del anfitrión y tiempo acumulado dentro del GE */
 void app_set_host_clock(unsigned long long (*clock)(void));

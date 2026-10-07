@@ -13,14 +13,22 @@
 #include "core/memory.h"
 #include "gpu/ge.h"
 
+/* Todos los imports de todos los módulos cargados: el código del syscall
+   de cada stub es su índice aquí */
 typedef struct {
 	HleFunc func;
 	const char *name;  /* nombre del NID o NULL si es desconocido */
 	int warned;
+	char lib[LOADER_LIB_NAME_LEN];
+	u32 nid, stub;
+	int linked;        /* el stub salta a la función de otro módulo */
 } ResolvedImport;
 
 static const PspModule *module;
 static ResolvedImport *resolved;
+static u32 num_resolved, cap_resolved;
+static PspExport *exports;     /* funciones exportadas por los módulos cargados */
+static u32 num_exports, cap_exports;
 static HleOutputFunc output_func;
 static int exited;
 static const char *exit_reason = "";
@@ -47,6 +55,12 @@ static const HleLibrary *find_library(const char *lib){
 		{ hle_display_libs, &hle_display_libs_count },
 		{ hle_misc_libs, &hle_misc_libs_count },
 		{ hle_ge_libs, &hle_ge_libs_count },
+		{ hle_module_libs, &hle_module_libs_count },
+		{ hle_net_libs, &hle_net_libs_count },
+		{ hle_audio_libs, &hle_audio_libs_count },
+		{ hle_sas_libs, &hle_sas_libs_count },
+		{ hle_atrac_libs, &hle_atrac_libs_count },
+		{ hle_mpeg_libs, &hle_mpeg_libs_count },
 	};
 	u32 g, i;
 	for(g = 0; g < sizeof(groups) / sizeof(groups[0]); g++)
@@ -79,7 +93,7 @@ void hle_syscall(u32 code){
 		kernel_callback_return();
 		return;
 	}
-	if(!module || code >= module->num_imports){
+	if(!module || code >= num_resolved){
 		cpu_fault("syscall desconocido", cpu.pc - 4, code);
 		return;
 	}
@@ -91,13 +105,15 @@ void hle_syscall(u32 code){
 		if(trace) hle_log("      -> %08X\n", cpu.r[R_V0]);
 		return;
 	}
+	/* Una función conocida sin implementar devuelve 0; un NID que no
+	   existe, "biblioteca sin enlazar" como la PSP (modules/unresolved) */
 	if(!resolved[code].warned){
-		const PspImport *imp = &module->imports[code];
 		resolved[code].warned = 1;
-		hle_log("[HLE] sin implementar: %s::%s (NID 0x%08X), devuelve 0\n",
-		        imp->lib, resolved[code].name ? resolved[code].name : "?", imp->nid);
+		hle_log("[HLE] sin implementar: %s::%s (NID 0x%08X), devuelve %s\n",
+		        resolved[code].lib, resolved[code].name ? resolved[code].name : "?", resolved[code].nid,
+		        resolved[code].name ? "0" : "8002013A");
 	}
-	RETURN(0);
+	RETURN(resolved[code].name ? 0 : 0x8002013Au);
 }
 
 void cpu_fault(const char *what, u32 addr, u32 instr){
@@ -145,19 +161,81 @@ void hle_exit(const char *reason){
 /* Arranque                                                           */
 /* ------------------------------------------------------------------ */
 
-int hle_init(PspModule *mod, const char *host_dir, const char *exec_name){
-	u32 i;
+/* --- Varios módulos ---------------------------------------------------------- */
 
+static void patch_jump(u32 stub, u32 target){
+	mem_write32(stub, 0x08000000u | ((target >> 2) & 0x03FFFFFFu));   /* j target */
+	mem_write32(stub + 4, 0);
+}
+
+int hle_link_module(const PspModule *m){
+	u32 i, j;
+	if(m->syscall_base != num_resolved) return -1;
+	if(num_resolved + m->num_imports > cap_resolved){
+		u32 cap = (num_resolved + m->num_imports) * 2 + 64;
+		ResolvedImport *n = realloc(resolved, cap * sizeof(ResolvedImport));
+		if(!n) return -1;
+		resolved = n;
+		cap_resolved = cap;
+	}
+	for(i = 0; i < m->num_imports; i++){
+		ResolvedImport *r = &resolved[num_resolved + i];
+		memset(r, 0, sizeof(*r));
+		snprintf(r->lib, sizeof(r->lib), "%s", m->imports[i].lib);
+		r->nid = m->imports[i].nid;
+		r->stub = m->imports[i].stub_addr;
+		r->func = hle_find(r->lib, r->nid, &r->name);
+		/* Una función de un módulo ya cargado gana al HLE */
+		for(j = 0; j < num_exports; j++)
+			if(exports[j].nid == r->nid && !strcmp(exports[j].lib, r->lib)){
+				patch_jump(r->stub, exports[j].addr);
+				r->linked = 1;
+				break;
+			}
+	}
+	num_resolved += m->num_imports;
+
+	/* Sus exportaciones, para los imports pendientes y los módulos futuros */
+	for(i = 0; i < m->num_exports; i++){
+		const PspExport *x = &m->exports[i];
+		if(!x->lib[0]) continue;   /* module_start y compañía */
+		if(num_exports == cap_exports){
+			u32 cap = cap_exports * 2 + 64;
+			PspExport *n = realloc(exports, cap * sizeof(PspExport));
+			if(!n) return -1;
+			exports = n;
+			cap_exports = cap;
+		}
+		exports[num_exports++] = *x;
+		for(j = 0; j < num_resolved; j++)
+			if(!resolved[j].linked && resolved[j].nid == x->nid && !strcmp(resolved[j].lib, x->lib)){
+				patch_jump(resolved[j].stub, x->addr);
+				resolved[j].linked = 1;
+			}
+	}
+	return 0;
+}
+
+void hle_unlink_module(const PspModule *m){
+	u32 i = 0;
+	/* Fuera sus exportaciones (quien las importó apuntará a memoria libre,
+	   como en la PSP si no se descarga antes) */
+	while(i < num_exports){
+		if(exports[i].addr >= m->load_start && exports[i].addr < m->load_end) exports[i] = exports[--num_exports];
+		else i++;
+	}
+}
+
+u32 hle_next_syscall(void){ return num_resolved; }
+
+int hle_init(PspModule *mod, const char *host_dir, const char *exec_name){
 	hle_shutdown();
 	module = mod;
 	exited = 0;
 	exit_reason = "";
 	cpu_cycles = 0;
 
-	resolved = calloc(mod->num_imports ? mod->num_imports : 1, sizeof(ResolvedImport));
-	if(!resolved) return -1;
-	for(i = 0; i < mod->num_imports; i++)
-		resolved[i].func = hle_find(mod->imports[i].lib, mod->imports[i].nid, &resolved[i].name);
+	if(hle_link_module(mod)) return -1;
 
 	/* Trampolín al que vuelven los hilos al terminar su función */
 	mem_write32(HLE_KERNEL_TRAMPOLINE, MIPS_SYSCALL(HLE_SYSCALL_THREAD_RETURN));
@@ -167,6 +245,10 @@ int hle_init(PspModule *mod, const char *host_dir, const char *exec_name){
 
 	io_init(host_dir, exec_name && !strncmp(exec_name, "disc0:", 6));
 	display_init();
+	audio_init();
+	sas_init();
+	atrac_init();
+	mpeg_init();
 	ge_init();
 	kernel_init(mod, exec_name);
 	return 0;
@@ -174,11 +256,17 @@ int hle_init(PspModule *mod, const char *host_dir, const char *exec_name){
 
 void hle_shutdown(void){
 	if(module){
+		module_shutdown();
+		atrac_shutdown();
 		kernel_shutdown();
 		io_shutdown();
 	}
 	free(resolved);
 	resolved = NULL;
+	num_resolved = cap_resolved = 0;
+	free(exports);
+	exports = NULL;
+	num_exports = cap_exports = 0;
 	module = NULL;
 }
 

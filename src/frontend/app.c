@@ -22,6 +22,7 @@
 static PspModule module;
 static char exec_path[256];
 static char host_dir[256];
+static char root_dir[256];
 static AppOutputFunc output_func;
 static int verbose = 1;
 
@@ -121,6 +122,7 @@ int app_load(const char *path, int max_imports, const char *imports_out){
 	hle_shutdown();
 	loader_free(&module);
 	disc_close();
+	loader_syscall_base = 0;
 
 	if(app_is_disc_image(path)){
 		if(load_disc(path)) return -1;
@@ -147,6 +149,10 @@ int app_load(const char *path, int max_imports, const char *imports_out){
 	if(slash) host_dir[slash - host_dir] = 0;
 	else strcpy(host_dir, ".");
 	if(!disc_is_open()) snprintf(exec_path, sizeof(exec_path), "ms0:/PSP/GAME/WIISP/%s", slash ? slash + 1 : path);
+	if(root_dir[0] && !strncmp(path, root_dir, strlen(root_dir)) && path[strlen(root_dir)] == '/'){
+		snprintf(host_dir, sizeof(host_dir), "%s", root_dir);
+		if(!disc_is_open()) snprintf(exec_path, sizeof(exec_path), "ms0:%s", path + strlen(root_dir));
+	}
 
 	if(imports_out){
 		if(hle_write_imports_report(&module, path, imports_out) == 0)
@@ -286,3 +292,10 @@ static const GeHwRenderer null_renderer = { null_begin, null_tri, null_two, null
 void app_set_null_renderer(void){ ge_hw = &null_renderer; ge_fast_math = 1; }
 
 void app_set_fast_math(int on){ ge_fast_math = on; }
+
+void app_set_root(const char *dir){
+	size_t n;
+	snprintf(root_dir, sizeof(root_dir), "%s", dir);
+	n = strlen(root_dir);
+	while(n > 1 && root_dir[n - 1] == '/') root_dir[--n] = 0;
+}

@@ -43,6 +43,13 @@ typedef struct {
 	u32  stub_addr;                /* dirección del stub parcheado */
 } PspImport;
 
+/* Función exportada por un módulo (lib "" = la del sistema: module_start...) */
+typedef struct {
+	char lib[LOADER_LIB_NAME_LEN];
+	u32  nid;
+	u32  addr;
+} PspExport;
+
 typedef struct {
 	/* sceModuleInfo */
 	char name[29];
@@ -63,7 +70,10 @@ typedef struct {
 	u32  num_imports;  /* funciones importadas */
 	u32  num_var_imports; /* variables importadas (aún no soportadas) */
 	u32  sdk_version;  /* variable exportada module_sdk_version (0 si no hay) */
-	PspImport *imports;   /* el índice es el código del syscall */
+	PspImport *imports;   /* el índice + syscall_base es el código del syscall */
+	u32  syscall_base;    /* primer código de syscall de sus imports */
+	u32  num_exports;
+	PspExport *exports;
 
 	/* Metadatos del PARAM.SFO si venía en un PBP */
 	char title[128];
@@ -74,10 +84,24 @@ typedef struct {
 #define MIPS_JR_RA          0x03E00008u
 #define MIPS_SYSCALL(code)  (0x0000000Cu | ((u32)(code) << 6))
 
+/* Código de syscall del primer import del próximo módulo que se cargue
+   (0 para el ejecutable principal; los módulos de sceKernelLoadModule
+   siguen a los anteriores) */
+extern u32 loader_syscall_base;
+
 /* Carga buf (PBP o ELF). La memoria emulada debe estar inicializada.
    prx_base: dirección para PRX relocalizables (0 = LOADER_DEFAULT_PRX_BASE).
    Si devuelve error, mod queda liberado. */
 int  loader_load(const u8 *buf, u32 len, u32 prx_base, PspModule *mod);
+/* Quita "~SCE" y descifra "~PSP" (sobre buf si inplace). *owned: memoria
+   nueva a liberar, o NULL. */
+int  loader_unwrap(u8 *buf, u32 len, const u8 **elf, u32 *elf_len, u8 **owned);
+/* Bytes de memoria que ocupa un ELF/PRX ya descifrado (0 si no es válido),
+   y si es relocalizable */
+u32  loader_elf_span(const u8 *elf, u32 len, int *relocatable);
+/* Nombre del módulo según la cabecera "~PSP" (sin descifrar) o "" */
+void loader_psp_name(const u8 *buf, u32 len, char *out, u32 out_size);
+
 /* Igual, pero puede descifrar sobre buf (que queda modificado) */
 int  loader_load_inplace(u8 *buf, u32 len, u32 prx_base, PspModule *mod);
 int  loader_load_elf(const u8 *buf, u32 len, u32 prx_base, PspModule *mod);

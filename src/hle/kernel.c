@@ -31,7 +31,7 @@
 /* UIDs                                                               */
 /* ------------------------------------------------------------------ */
 
-enum { UID_THREAD = 1, UID_SEMA, UID_EVF, UID_MEMBLOCK, UID_CALLBACK, UID_LWMUTEX };
+enum { UID_THREAD = 1, UID_SEMA, UID_EVF, UID_MEMBLOCK, UID_CALLBACK, UID_LWMUTEX, UID_FPL };
 
 /* UID = 0x04 tipo índice+1: positivo y fácil de reconocer en los logs */
 static inline u32 make_uid(int type, int index){ return 0x04000000u | ((u32)type << 16) | (u32)(index + 1); }
@@ -53,7 +53,10 @@ enum {
 
 enum {
 	W_NONE = 0, W_SLEEP = 1, W_DELAY = 2, W_SEMA = 3, W_EVF = 4, W_THREADEND = 9,
-	W_VBLANK = 100, W_LWMUTEX = 101, W_GEDRAW = 102, W_GELIST = 103
+	W_FPL = 10,
+	W_VBLANK = 100, W_LWMUTEX = 101, W_GEDRAW = 102, W_GELIST = 103,
+	W_MODULE = 104,     /* sceKernelStartModule: espera el fin de module_start */
+	W_HLE = 200         /* + tipo: esperas genéricas del HLE (kernel_wait_object) */
 };
 
 typedef struct {
@@ -70,11 +73,13 @@ typedef struct {
 	u64 wait_seq;       /* orden de llegada a la espera */
 	int has_timeout;
 	u64 wait_until;     /* ciclo en el que vence */
+	u32 delay_ret;      /* v0 al despertar de W_DELAY */
 	u32 timeout_addr;   /* puntero a u32 con microsegundos, o 0 */
 	u32 wait_a, wait_b, wait_c; /* datos de la espera (cuenta, patrón...) */
 
 	int wakeup_count;
 	u32 exit_status;
+	int suspend_pending;  /* sceKernelSuspendThread mientras esperaba */
 } Thread;
 
 static Thread threads[MAX_THREADS];
@@ -112,6 +117,10 @@ static void make_ready(int i){
 static void wake(int i, u32 ret){
 	thread_ctx(i)->r[R_V0] = ret;
 	make_ready(i);
+	if(threads[i].suspend_pending){   /* suspendido mientras esperaba */
+		threads[i].suspend_pending = 0;
+		threads[i].status = TH_SUSPEND;
+	}
 }
 
 /* El hilo actual pasa a esperar. timeout_addr: puntero a microsegundos
@@ -187,7 +196,7 @@ static void process_timeouts(void){
 	for(i = 0; i < MAX_THREADS; i++){
 		Thread *t = &threads[i];
 		if(!t->used || t->status != TH_WAITING) continue;
-		if(t->wait == W_DELAY && cpu_cycles >= t->wait_until) wake(i, 0);
+		if(t->wait == W_DELAY && cpu_cycles >= t->wait_until) wake(i, t->delay_ret);
 		else if(t->has_timeout && cpu_cycles >= t->wait_until){
 			if(t->timeout_addr) mem_write32(t->timeout_addr, 0);
 			if(t->wait == W_EVF) evf_timeout(t);
@@ -567,14 +576,18 @@ void kernel_run_until(u64 target){
 	}
 }
 
-/* Esperas por objetos del HLE (el GE): el hilo actual espera a (tipo, id) */
+static int kwait_to_w(int type){
+	return type == KWAIT_GE_DRAW ? W_GEDRAW : type == KWAIT_GE_LIST ? W_GELIST : W_HLE + type;
+}
+
+/* Esperas por objetos del HLE: el hilo actual espera a (tipo, id) */
 void kernel_wait_object(int type, u32 id){
-	wait_current(type == KWAIT_GE_DRAW ? W_GEDRAW : W_GELIST, (int)id, 0);
+	wait_current(kwait_to_w(type), (int)id, 0);
 }
 
 /* Despierta, por orden de llegada, a los que esperan (tipo, id) */
 int kernel_wake_object(int type, u32 id, u32 ret){
-	int w = type == KWAIT_GE_DRAW ? W_GEDRAW : W_GELIST, woke = 0;
+	int w = kwait_to_w(type), woke = 0;
 	for(;;){
 		int i, best = -1;
 		for(i = 0; i < MAX_THREADS; i++){
@@ -600,9 +613,12 @@ void kernel_vblank(void){
 
 void kernel_wait_until(u64 cycle){
 	Thread *t = current();
-	if(!t || kernel_in_interrupt() || cycle <= cpu_cycles) return;
+	u32 v0 = cpu.r[R_V0];
+	if(!t || kernel_in_interrupt() || !kernel_dispatch_enabled() || cycle <= cpu_cycles) return;
 	wait_current(W_DELAY, 0, 0);
 	t->wait_until = cycle;
+	t->delay_ret = v0;   /* el resultado del syscall se conserva */
+	cpu.r[R_V0] = v0;
 }
 
 int kernel_wait_vblank(void){
@@ -892,10 +908,17 @@ static void exit_thread(int i, u32 status, int del){
 	threads[i].status = TH_DORMANT;
 	threads[i].wait = W_NONE;
 	threads[i].exit_status = status;
-	for(j = 0; j < MAX_THREADS; j++)
-		if(threads[j].used && threads[j].status == TH_WAITING &&
-		   threads[j].wait == W_THREADEND && threads[j].wait_index == i)
-			wake(j, status);
+	for(j = 0; j < MAX_THREADS; j++){
+		if(!threads[j].used || threads[j].status != TH_WAITING || threads[j].wait_index != i) continue;
+		if(threads[j].wait == W_THREADEND) wake(j, status);
+		else if(threads[j].wait == W_MODULE){
+			/* sceKernelStartModule devuelve el UID del módulo y el estado de
+			   module_start va a *status; el hilo de module_start se borra */
+			if(threads[j].wait_b && mem_valid(threads[j].wait_b, 4)) mem_write32(threads[j].wait_b, status);
+			wake(j, threads[j].wait_a);
+			del = 1;
+		}
+	}
 	if(i == cur){
 		threads[cur].ctx = cpu;
 		cur = -1;
@@ -913,7 +936,13 @@ void kernel_callback_return(void){
 	cpu_stop_requested = 1;
 }
 
+u32 kernel_module_gp(void){ return module_gp; }
+
 u32 kernel_call_guest(u32 func, u32 a0, u32 a1, u32 a2){
+	return kernel_call_guest_sp(func, 0, a0, a1, a2);
+}
+
+u32 kernel_call_guest_sp(u32 func, u32 sp, u32 a0, u32 a1, u32 a2){
 	CpuState saved = cpu;
 	int saved_done = callback_done, saved_stop = cpu_stop_requested;
 	u32 ret;
@@ -923,7 +952,7 @@ u32 kernel_call_guest(u32 func, u32 a0, u32 a1, u32 a2){
 	cpu.r[R_A0] = a0;
 	cpu.r[R_A1] = a1;
 	cpu.r[R_A2] = a2;
-	cpu.r[R_SP] = HLE_INTERRUPT_STACK_TOP - 64 - (u32)(in_interrupt - 1) * 0x2000;
+	cpu.r[R_SP] = sp ? sp : HLE_INTERRUPT_STACK_TOP - 64 - (u32)(in_interrupt - 1) * 0x2000;
 	cpu.r[R_GP] = module_gp;
 	cpu.r[R_RA] = HLE_CALLBACK_TRAMPOLINE;
 	cpu.pc = func;
@@ -1045,6 +1074,73 @@ static void sceKernelGetThreadStackFreeSize(void){
 	RETURN(n);
 }
 
+/* --- Hilos creados por el HLE (module_start) ------------------------------ */
+
+u32 kernel_create_thread(const char *name, u32 entry, u32 prio, u32 stack_size, u32 attr, u32 gp){
+	u32 saved[5], uid;
+	int i;
+	/* El nombre va en la zona de kernel, como el del hilo principal */
+	u32 name_addr = HLE_KERNEL_TRAMPOLINE + 0x200;
+	size_t n = strlen(name);
+	if(n > 31) n = 31;
+	memcpy(mem_ptr(name_addr, 32), name, n);
+	mem_write8(name_addr + (u32)n, 0);
+	saved[0] = cpu.r[R_A0]; saved[1] = cpu.r[R_A1]; saved[2] = cpu.r[R_A2]; saved[3] = cpu.r[R_A3]; saved[4] = cpu.r[R_T0];
+	cpu.r[R_A0] = name_addr; cpu.r[R_A1] = entry; cpu.r[R_A2] = prio; cpu.r[R_A3] = stack_size; cpu.r[R_T0] = attr;
+	sceKernelCreateThread();
+	uid = cpu.r[R_V0];
+	cpu.r[R_A0] = saved[0]; cpu.r[R_A1] = saved[1]; cpu.r[R_A2] = saved[2]; cpu.r[R_A3] = saved[3]; cpu.r[R_T0] = saved[4];
+	i = find_thread(uid);
+	if(i >= 0 && gp) threads[i].gp = gp;
+	return uid;
+}
+
+int kernel_start_thread(u32 uid, u32 arglen, u32 argp){
+	int i = find_thread(uid);
+	if(i < 0 || uid == 0 || threads[i].status != TH_DORMANT) return -1;
+	start_thread(i, arglen, argp);
+	return 0;
+}
+
+void kernel_wait_module_start(u32 thread, u32 ret, u32 status_addr){
+	int i = find_thread(thread);
+	Thread *t = current();
+	if(i < 0 || !t || i == cur){ RETURN(ret); return; }
+	wait_current(W_MODULE, i, 0);
+	t->wait_a = ret;
+	t->wait_b = status_addr;
+}
+
+/* sceKernelSuspendThread / ResumeThread: un hilo suspendido no se
+   planifica; si estaba esperando, lo queda también al despertar */
+static void sceKernelSuspendThread(void){
+	int i = find_thread(ARG(0));
+	if(i < 0 || ARG(0) == 0 || i == cur){ RETURN(i < 0 ? SCE_KERNEL_ERROR_UNKNOWN_THID : SCE_KERNEL_ERROR_ILLEGAL_THID); return; }
+	if(threads[i].status == TH_DORMANT){ RETURN(SCE_KERNEL_ERROR_DORMANT); return; }
+	if(threads[i].status == TH_SUSPEND){ RETURN(0x800201A3u /* SUSPEND */); return; }
+	if(threads[i].status == TH_READY) threads[i].status = TH_SUSPEND;
+	else threads[i].suspend_pending = 1;   /* al despertar quedará suspendido */
+	RETURN(0);
+}
+
+static void sceKernelResumeThread(void){
+	int i = find_thread(ARG(0));
+	if(i < 0 || ARG(0) == 0){ RETURN(SCE_KERNEL_ERROR_UNKNOWN_THID); return; }
+	if(threads[i].status == TH_SUSPEND) make_ready(i);
+	else if(threads[i].suspend_pending) threads[i].suspend_pending = 0;
+	else { RETURN(0x800201A4u); return; }
+	RETURN(0);
+}
+
+static void sceKernelChangeCurrentThreadAttr(void){
+	Thread *t = current();
+	u32 clear = ARG(0), set = ARG(1);
+	/* Solo VFPU y similares; no se pueden cambiar a modo kernel */
+	if((clear | set) & 0xF0000000u & ~0x80000000u){ RETURN(SCE_KERNEL_ERROR_ILLEGAL_ATTR); return; }
+	if(t) t->attr = (t->attr & ~clear) | set;
+	RETURN(0);
+}
+
 static void sceKernelSleepThread(void){
 	Thread *t = current();
 	if(t && t->wakeup_count > 0){ t->wakeup_count--; RETURN(0); return; }
@@ -1075,6 +1171,7 @@ static void delay_us(u64 us){
 	us = us < 200 ? 210 : us + 10;
 	wait_current(W_DELAY, 0, 0);
 	t->wait_until = cpu_cycles + us * CYCLES_PER_US;
+	t->delay_ret = 0;
 }
 
 static void sceKernelDelayThread(void){
@@ -1505,6 +1602,173 @@ static void sceKernelUnlockLwMutex(void){
 }
 
 /* ------------------------------------------------------------------ */
+/* Pools de bloques fijos (FPL)                                       */
+/* ------------------------------------------------------------------ */
+
+#define MAX_FPLS 64
+#define SCE_KERNEL_ERROR_UNKNOWN_FPLID 0x8002019Du
+#define SCE_KERNEL_ERROR_WAIT_CANCEL   0x800201A9u
+#define SCE_KERNEL_ERROR_ILLEGAL_FPL_BLOCK 0x800201B6u
+#define FPL_ATTR_PRIORITY 0x100
+#define FPL_ATTR_HIGHMEM  0x4000
+
+typedef struct {
+	int used;
+	char name[32];
+	u32 attr, block_size, aligned, num_blocks, base;
+	u8 *taken;
+} Fpl;
+
+static Fpl fpls[MAX_FPLS];
+
+static int find_fpl(u32 uid){
+	int i = uid_index(uid, UID_FPL, MAX_FPLS);
+	return (i >= 0 && fpls[i].used) ? i : -1;
+}
+
+static int fpl_take(Fpl *f){
+	u32 b;
+	for(b = 0; b < f->num_blocks; b++)
+		if(!f->taken[b]){ f->taken[b] = 1; return (int)b; }
+	return -1;
+}
+
+/* El primer hilo que espera (por llegada o prioridad) */
+static int fpl_first_waiter(int fi){
+	int i, best = -1;
+	for(i = 0; i < MAX_THREADS; i++){
+		Thread *t = &threads[i];
+		if(!t->used || t->status != TH_WAITING || t->wait != W_FPL || t->wait_index != fi) continue;
+		if(best < 0 || ((fpls[fi].attr & FPL_ATTR_PRIORITY) ? t->prio < threads[best].prio : t->wait_seq < threads[best].wait_seq))
+			best = i;
+	}
+	return best;
+}
+
+static void sceKernelCreateFpl(void){
+	u32 name = ARG(0), part = ARG(1), attr = ARG(2), bs = ARG(3), n = ARG(4), opt = ARG(5), align = 4, total;
+	int i;
+	Fpl *f;
+	if(!name){ RETURN(SCE_KERNEL_ERROR_NO_MEMORY); return; }
+	if(part < 1 || part > 6){ RETURN(0x800200D6u); return; }
+	if(bs == 0 || n == 0 || (u64)((bs + 3) & ~3u) * n > 0x01800000u){ RETURN(SCE_KERNEL_ERROR_ILLEGAL_MEMSIZE); return; }
+	if(opt && mem_valid(opt, 8) && mem_read32(opt) >= 4) align = mem_read32(opt + 4);
+	if(align & (align - 1)){ RETURN(0x800200D2u); return; }
+	if(align < 4) align = 4;
+	for(i = 0; i < MAX_FPLS && fpls[i].used; i++);
+	if(i == MAX_FPLS){ RETURN(SCE_KERNEL_ERROR_NO_MEMORY); return; }
+	f = &fpls[i];
+	memset(f, 0, sizeof(*f));
+	f->aligned = (bs + align - 1) & ~(align - 1);
+	total = f->aligned * n;
+	f->base = kernel_alloc(total, (attr & FPL_ATTR_HIGHMEM) != 0, "fpl");
+	f->taken = calloc(n, 1);
+	if(!f->base || !f->taken){
+		if(f->base) kernel_free(f->base);
+		free(f->taken);
+		f->taken = NULL;
+		RETURN(SCE_KERNEL_ERROR_NO_MEMORY);
+		return;
+	}
+	f->used = 1;
+	mem_read_cstr(name, f->name, sizeof(f->name));
+	f->attr = attr;
+	f->block_size = bs;
+	f->num_blocks = n;
+	RETURN(make_uid(UID_FPL, i));
+}
+
+static void fpl_wake_all(int fi, u32 ret){
+	int i;
+	for(i = 0; i < MAX_THREADS; i++)
+		if(threads[i].used && threads[i].status == TH_WAITING && threads[i].wait == W_FPL && threads[i].wait_index == fi)
+			wake(i, ret);
+}
+
+static void sceKernelDeleteFpl(void){
+	int fi = find_fpl(ARG(0));
+	if(fi < 0){ RETURN(SCE_KERNEL_ERROR_UNKNOWN_FPLID); return; }
+	fpl_wake_all(fi, SCE_KERNEL_ERROR_WAIT_DELETE);
+	kernel_free(fpls[fi].base);
+	free(fpls[fi].taken);
+	memset(&fpls[fi], 0, sizeof(fpls[fi]));
+	RETURN(0);
+}
+
+static void allocate_fpl(int can_wait){
+	int fi = find_fpl(ARG(0)), b;
+	u32 out = ARG(1);
+	if(fi < 0){ RETURN(SCE_KERNEL_ERROR_UNKNOWN_FPLID); return; }
+	if(!mem_valid(out, 4)){ RETURN(SCE_KERNEL_ERROR_ILLEGAL_ADDR); return; }
+	b = fpl_first_waiter(fi) < 0 ? fpl_take(&fpls[fi]) : -1;
+	if(b >= 0){
+		mem_write32(out, fpls[fi].base + (u32)b * fpls[fi].aligned);
+		RETURN(0);
+		return;
+	}
+	if(!can_wait){ RETURN(SCE_KERNEL_ERROR_NO_MEMORY); return; }
+	wait_current(W_FPL, fi, ARG(2));
+	if(cur >= 0) threads[cur].wait_a = out;
+}
+
+static void sceKernelAllocateFpl(void){ allocate_fpl(1); }
+static void sceKernelTryAllocateFpl(void){ allocate_fpl(0); }
+
+static void sceKernelFreeFpl(void){
+	int fi = find_fpl(ARG(0)), w;
+	u32 addr = ARG(1), b;
+	Fpl *f;
+	if(fi < 0){ RETURN(SCE_KERNEL_ERROR_UNKNOWN_FPLID); return; }
+	f = &fpls[fi];
+	b = (addr - f->base) / f->aligned;
+	if(addr < f->base || b >= f->num_blocks || (addr - f->base) % f->aligned || !f->taken[b]){
+		RETURN(SCE_KERNEL_ERROR_ILLEGAL_FPL_BLOCK);
+		return;
+	}
+	f->taken[b] = 0;
+	/* El bloque pasa directamente al primero que esperaba */
+	w = fpl_first_waiter(fi);
+	if(w >= 0){
+		int nb = fpl_take(f);
+		mem_write32(threads[w].wait_a, f->base + (u32)nb * f->aligned);
+		wake(w, 0);
+	}
+	RETURN(0);
+}
+
+static void sceKernelCancelFpl(void){
+	int fi = find_fpl(ARG(0)), i, n = 0;
+	if(fi < 0){ RETURN(SCE_KERNEL_ERROR_UNKNOWN_FPLID); return; }
+	for(i = 0; i < MAX_THREADS; i++)
+		if(threads[i].used && threads[i].status == TH_WAITING && threads[i].wait == W_FPL && threads[i].wait_index == fi){
+			wake(i, SCE_KERNEL_ERROR_WAIT_CANCEL);
+			n++;
+		}
+	if(ARG(1) && mem_valid(ARG(1), 4)) mem_write32(ARG(1), (u32)n);
+	RETURN(0);
+}
+
+static void sceKernelReferFplStatus(void){
+	int fi = find_fpl(ARG(0)), i, waiting = 0;
+	u32 info = ARG(1), b, free_blocks = 0;
+	if(fi < 0){ RETURN(SCE_KERNEL_ERROR_UNKNOWN_FPLID); return; }
+	if(!mem_valid(info, 56)){ RETURN(SCE_KERNEL_ERROR_ILLEGAL_ADDR); return; }
+	for(b = 0; b < fpls[fi].num_blocks; b++) free_blocks += !fpls[fi].taken[b];
+	for(i = 0; i < MAX_THREADS; i++)
+		waiting += threads[i].used && threads[i].status == TH_WAITING && threads[i].wait == W_FPL && threads[i].wait_index == fi;
+	if(mem_read32(info) != 0){
+		memset(mem_ptr(info + 4, 52), 0, 52);
+		memcpy(mem_ptr(info + 4, 32), fpls[fi].name, strlen(fpls[fi].name));
+		mem_write32(info + 36, fpls[fi].attr);
+		mem_write32(info + 40, fpls[fi].block_size);
+		mem_write32(info + 44, fpls[fi].num_blocks);
+		mem_write32(info + 48, free_blocks);
+		mem_write32(info + 52, (u32)waiting);
+	}
+	RETURN(0);
+}
+
+/* ------------------------------------------------------------------ */
 /* Callbacks, interrupciones y varios                                 */
 /* ------------------------------------------------------------------ */
 
@@ -1519,9 +1783,6 @@ static void sceKernelStdout(void){ RETURN(1); }
 static void sceKernelStderr(void){ RETURN(2); }
 
 static void sceKernelExitGame(void){ hle_exit("sceKernelExitGame"); }
-static void sceKernelSelfStopUnloadModule(void){ hle_exit("el modulo se descargo"); }
-static void sceKernelGetModuleIdByAddress(void){ RETURN(0x04100001); }
-static void sceKernelLoadModule(void){ RETURN(SCE_ERROR_FILE_NOT_FOUND); }
 
 static void sceKernelGetGPI(void){ RETURN(0); }
 
@@ -1575,6 +1836,8 @@ void kernel_init(const PspModule *mod, const char *exec_path){
 	u32 len, argp;
 
 	memset(threads, 0, sizeof(threads));
+	for(i = 0; i < MAX_FPLS; i++) free(fpls[i].taken);
+	memset(fpls, 0, sizeof(fpls));
 	memset(semas, 0, sizeof(semas));
 	memset(evfs, 0, sizeof(evfs));
 	memset(blocks, 0, sizeof(blocks));
@@ -1682,7 +1945,21 @@ static const HleFunction thread_man[] = {
 	{ "sceKernelCreateLwMutex", sceKernelCreateLwMutex },
 	{ "sceKernelDeleteLwMutex", sceKernelDeleteLwMutex },
 	{ "sceKernelCreateCallback", sceKernelCreateCallback },
+	{ "sceKernelDeleteCallback", return_zero },
 	{ "sceKernelCheckCallback", return_zero },
+	{ "sceKernelCreateFpl", sceKernelCreateFpl },
+	{ "sceKernelDeleteFpl", sceKernelDeleteFpl },
+	{ "sceKernelAllocateFpl", sceKernelAllocateFpl },
+	{ "sceKernelAllocateFplCB", sceKernelAllocateFpl },
+	{ "sceKernelTryAllocateFpl", sceKernelTryAllocateFpl },
+	{ "sceKernelFreeFpl", sceKernelFreeFpl },
+	{ "sceKernelCancelFpl", sceKernelCancelFpl },
+	{ "sceKernelReferFplStatus", sceKernelReferFplStatus },
+	{ "sceKernelSuspendThread", sceKernelSuspendThread },
+	{ "sceKernelResumeThread", sceKernelResumeThread },
+	{ "sceKernelChangeCurrentThreadAttr", sceKernelChangeCurrentThreadAttr },
+	{ "sceKernelReferThreadProfiler", return_zero },
+	{ "sceKernelReferGlobalProfiler", return_zero },
 };
 
 static const HleFunction kernel_library[] = {
@@ -1731,12 +2008,6 @@ static const HleFunction loadexec_user[] = {
 	{ "sceKernelRegisterExitCallback", return_zero },
 };
 
-static const HleFunction modulemgr_user[] = {
-	{ "sceKernelSelfStopUnloadModule", sceKernelSelfStopUnloadModule },
-	{ "sceKernelStopUnloadSelfModule", sceKernelSelfStopUnloadModule },
-	{ "sceKernelGetModuleIdByAddress", sceKernelGetModuleIdByAddress },
-	{ "sceKernelLoadModule", sceKernelLoadModule },
-};
 
 static const HleFunction utils_user[] = {
 	{ "sceKernelLibcTime", sceKernelLibcTime },
@@ -1769,7 +2040,6 @@ const HleLibrary hle_kernel_libs[] = {
 	HLE_LIBRARY("SysMemUserForUser", sysmem_user),
 	HLE_LIBRARY("StdioForUser", stdio_user),
 	HLE_LIBRARY("LoadExecForUser", loadexec_user),
-	HLE_LIBRARY("ModuleMgrForUser", modulemgr_user),
 	HLE_LIBRARY("UtilsForUser", utils_user),
 };
 const u32 hle_kernel_libs_count = sizeof(hle_kernel_libs) / sizeof(hle_kernel_libs[0]);
