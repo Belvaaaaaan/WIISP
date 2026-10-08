@@ -41,10 +41,12 @@ static inline u32 hle_arg(int n){ return n < 4 ? cpu.r[R_A0 + n] : cpu.r[R_T0 + 
 /* Códigos de syscall especiales (por encima de los imports) */
 #define HLE_SYSCALL_THREAD_RETURN   0xFFF00u  /* un hilo volvió de su función */
 #define HLE_SYSCALL_CALLBACK_RETURN 0xFFF01u  /* volvió una llamada de kernel_call_guest */
+#define HLE_SYSCALL_THREAD_CB_RETURN 0xFFF02u /* volvió un callback de un hilo */
 
 /* Direcciones en la zona de kernel (no la usa el juego) */
 #define HLE_KERNEL_TRAMPOLINE  0x08000000u  /* syscall THREAD_RETURN; nop */
 #define HLE_CALLBACK_TRAMPOLINE 0x08000008u /* syscall CALLBACK_RETURN; nop */
+#define HLE_THREAD_CB_TRAMPOLINE 0x08000020u /* syscall THREAD_CB_RETURN; nop */
 #define HLE_INTERRUPT_STACK_TOP 0x08010000u /* pila para las llamadas tipo interrupción */
 
 /* Errores del kernel de la PSP */
@@ -221,6 +223,7 @@ u32  kernel_call_guest(u32 func, u32 a0, u32 a1, u32 a2);
 u32  kernel_call_guest_sp(u32 func, u32 sp, u32 a0, u32 a1, u32 a2);
 u32  kernel_module_gp(void);   /* gp del módulo principal */
 void kernel_callback_return(void);
+void kernel_thread_cb_return(void);   /* trampolín de los callbacks de hilo */
 /* 1 mientras se atiende una interrupción o se ejecuta kernel_call_guest */
 int  kernel_in_interrupt(void);
 int  kernel_wait_vblank(void); /* bloquea el hilo actual hasta el vblank */
@@ -270,8 +273,15 @@ u32  kernel_sdk_version(void);
 
 /* El hilo actual espera a un objeto del HLE; kernel_wake_object despierta
    a todos los que esperan ese (tipo, id) por orden de llegada. */
-enum { KWAIT_GE_DRAW = 1, KWAIT_GE_LIST = 2, KWAIT_AUDIO = 3, KWAIT_SAVEDATA = 4 };
+enum { KWAIT_GE_DRAW = 1, KWAIT_GE_LIST = 2, KWAIT_AUDIO = 3, KWAIT_SAVEDATA = 4, KWAIT_UMD = 5 };
 void kernel_wait_object(int type, u32 id);
+/* Igual, con un límite en microsegundos (despierta con WAIT_TIMEOUT) */
+void kernel_wait_object_timeout(int type, u32 id, u32 us);
+/* Despierta a los que esperan un id con algún bit de mask */
+int  kernel_wake_object_mask(int type, u32 mask, u32 ret);
+/* Tras ejecutar callbacks, una espera del HLE se vuelve a comprobar con fn:
+   si pone *done, el hilo despierta con lo que devuelve */
+void kernel_set_wait_recheck(int type, u32 (*fn)(u32 id, int *done));
 /* Hilos creados desde el HLE (module_start): como sceKernelCreateThread /
    StartThread. kernel_wait_module_start pone al hilo actual a esperar el
    fin del hilo thread; entonces devuelve ret y escribe su estado de salida

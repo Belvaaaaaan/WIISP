@@ -125,6 +125,12 @@ python3 tools/dolphin_autotest.py --run --frames 600 demo/EBOOT.PBP   # FPS
 Con GX, "CASI" quiere decir que solo cambian colores en ±6 (la aritmética de
 GX no es la del GE).
 
+## Seguir el desarrollo
+
+`docs/CONTINUAR.md` resume el estado actual y los siguientes pasos, y
+`tools/setup_entorno.sh` prepara lo necesario (devkitPPC, pspautotests,
+PPSSPP como referencia) en una máquina nueva.
+
 ## Licencia
 
 GPLv2 o posterior (ver [LICENSE](LICENSE)). Incluye material de referencia de

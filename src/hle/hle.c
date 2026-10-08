@@ -173,6 +173,10 @@ void hle_syscall(u32 code){
 		kernel_callback_return();
 		return;
 	}
+	if(code == HLE_SYSCALL_THREAD_CB_RETURN){
+		kernel_thread_cb_return();
+		return;
+	}
 	if(!module || code >= num_resolved){
 		cpu_fault("syscall desconocido", cpu.pc - 4, code);
 		return;
@@ -420,6 +424,8 @@ int hle_init(PspModule *mod, const char *host_dir, const char *exec_name){
 	mem_write32(HLE_KERNEL_TRAMPOLINE + 4, 0);
 	mem_write32(HLE_CALLBACK_TRAMPOLINE, MIPS_SYSCALL(HLE_SYSCALL_CALLBACK_RETURN));
 	mem_write32(HLE_CALLBACK_TRAMPOLINE + 4, 0);
+	mem_write32(HLE_THREAD_CB_TRAMPOLINE, MIPS_SYSCALL(HLE_SYSCALL_THREAD_CB_RETURN));
+	mem_write32(HLE_THREAD_CB_TRAMPOLINE + 4, 0);
 
 	io_init(host_dir, exec_name && !strncmp(exec_name, "disc0:", 6));
 	display_init();

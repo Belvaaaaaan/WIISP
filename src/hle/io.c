@@ -610,8 +610,9 @@ static void put_dirent_name(u32 out, const char *name){
 }
 
 /* SceIoDirent (352 bytes): SceIoStat, char d_name[256], d_private, dummy.
-   Devuelve 1 si leyó una entrada y 0 al llegar al final. En el UMD, como
-   en la PSP, las dos primeras son "." y "..". */
+   Devuelve 1 si leyó una entrada y 0 al llegar al final. En el UMD no hay
+   "." ni ".." (como en PPSSPP): los juegos que recorren el disco entero,
+   como GTA LCS, entran en cada directorio que ven y no acabarían nunca. */
 static void sceIoDread(void){
 	int i = dir_index(ARG(0));
 	u32 out = ARG(1), d_private;
@@ -620,11 +621,7 @@ static void sceIoDread(void){
 	d_private = mem_read32(out + 344);
 	if(dirs[i].is_disc){
 		DiscEntry e;
-		int k = dirs[i].disc_index;
-		if(k < 2){
-			e = dirs[i].disc;
-			strcpy(e.name, k == 0 ? "." : "..");
-		} else if(!disc_dir_entry(&dirs[i].disc, k - 2, &e)){ RETURN(0); return; }
+		if(!disc_dir_entry(&dirs[i].disc, dirs[i].disc_index, &e)){ RETURN(0); return; }
 		dirs[i].disc_index++;
 		memset(mem_ptr(out, 344), 0, 344);
 		write_disc_stat(out, &e);

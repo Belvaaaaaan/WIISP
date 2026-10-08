@@ -60,6 +60,17 @@ enum {
 	W_HLE = 200         /* + tipo: esperas genéricas del HLE (kernel_wait_object) */
 };
 
+/* Un callback en curso en un hilo: el hilo tal como estaba al
+   interrumpirlo (justo después del syscall) y la espera que retomará */
+#define MAX_CB_DEPTH 2   /* un callback puede hacer una espera CB (PPSSPP) */
+typedef struct {
+	CpuState cpu;
+	int wait, wait_index, has_timeout, cb_wait;
+	u64 wait_seq, wait_until;
+	u32 wait_a, wait_b, wait_c, delay_ret, timeout_addr;
+	int k;              /* callback que se está ejecutando */
+} CbFrame;
+
 typedef struct {
 	int used;
 	char name[32];
@@ -84,7 +95,8 @@ typedef struct {
 	const char *last_hle;   /* última función del HLE que llamó (diagnóstico) */
 	int cb_wait;    /* está en una espera CB: sus callbacks pueden ejecutarse */
 	int cb_paused;  /* sacado de esa espera para ejecutar callbacks; la retoma */
-	int cb_depth;   /* ejecutando un callback */
+	int cb_depth;   /* callbacks en curso (cbf[0..cb_depth-1]) */
+	CbFrame cbf[MAX_CB_DEPTH];
 	int suspend_pending;  /* sceKernelSuspendThread mientras esperaba */
 } Thread;
 
@@ -643,6 +655,27 @@ static int kwait_to_w(int type){
 /* Esperas por objetos del HLE: el hilo actual espera a (tipo, id) */
 void kernel_wait_object(int type, u32 id){
 	wait_current(kwait_to_w(type), (int)id, 0);
+}
+
+void kernel_wait_object_timeout(int type, u32 id, u32 us){
+	Thread *t = current();
+	wait_current(kwait_to_w(type), (int)id, 0);
+	if(t && t->status == TH_WAITING){
+		t->has_timeout = 1;
+		t->wait_until = cpu_cycles + (u64)us * CYCLES_PER_US;
+	}
+}
+
+int kernel_wake_object_mask(int type, u32 mask, u32 ret){
+	int w = kwait_to_w(type), woke = 0, i;
+	for(i = 0; i < MAX_THREADS; i++){
+		Thread *t = &threads[i];
+		if(t->used && t->status == TH_WAITING && t->wait == w && ((u32)t->wait_index & mask)){
+			wake(i, ret);
+			woke++;
+		}
+	}
+	return woke;
 }
 
 /* Despierta, por orden de llegada, a los que esperan (tipo, id) */
@@ -1910,7 +1943,15 @@ static void forget_thread_callbacks(int i){
 	for(k = 0; k < MAX_CALLBACKS; k++) if(callbacks[k].used && callbacks[k].thread == i) callbacks[k].used = 0;
 }
 
-/* Vuelve a mirar si la espera del hilo i ya se cumple (tras sus callbacks) */
+static u32 (*hle_recheck[16])(u32 id, int *done);
+
+void kernel_set_wait_recheck(int type, u32 (*fn)(u32 id, int *done)){
+	if(type > 0 && type < 16) hle_recheck[type] = fn;
+}
+
+/* Vuelve a mirar si la espera del hilo i (el actual) ya se cumple: tras
+   sus callbacks, la espera sigue, pero lo que pasó mientras tanto (un
+   semáforo libre, un objeto borrado...) cuenta, como en PPSSPP */
 static void recheck_wait(int i){
 	Thread *t = &threads[i];
 	switch(t->wait){
@@ -1920,79 +1961,121 @@ static void recheck_wait(int i){
 	case W_DELAY:
 		if(cpu_cycles >= t->wait_until) wake(i, t->delay_ret);
 		break;
-	case W_SEMA: sema_wake_waiters(t->wait_index); break;
+	case W_SEMA:
+		if(!semas[t->wait_index].used) wake(i, SCE_KERNEL_ERROR_WAIT_DELETE);
+		else sema_wake_waiters(t->wait_index);
+		break;
 	case W_EVF:
-		if(evf_try(t->wait_index, t->wait_a, t->wait_b, t->wait_c)) wake(i, 0);
+		if(!evfs[t->wait_index].used) wake(i, SCE_KERNEL_ERROR_WAIT_DELETE);
+		else if(evf_try(t->wait_index, t->wait_a, t->wait_b, t->wait_c)) wake(i, 0);
 		break;
 	case W_THREADEND:
 		if(!threads[t->wait_index].used || threads[t->wait_index].status == TH_DORMANT)
 			wake(i, threads[t->wait_index].exit_status);
 		break;
-	default: break;
+	case W_LWMUTEX: {
+		u32 err;
+		if(lwmutex_try(t->wait_a, (s32)t->wait_b, &err)){
+			mem_write32(t->wait_a + 12, mem_read32(t->wait_a + 12) - 1);
+			wake(i, 0);
+		}
+		break;
+	}
+	case W_FPL: {
+		int fi = t->wait_index, b;
+		if(!fpls[fi].used){ wake(i, SCE_KERNEL_ERROR_WAIT_DELETE); break; }
+		if(fpl_first_waiter(fi) != i || (b = fpl_take(&fpls[fi])) < 0) break;
+		mem_write32(t->wait_a, fpls[fi].base + (u32)b * fpls[fi].aligned);
+		wake(i, 0);
+		break;
+	}
+	default:
+		if(t->wait > W_HLE && t->wait < W_HLE + 16 && hle_recheck[t->wait - W_HLE]){
+			int done = 0;
+			u32 ret = hle_recheck[t->wait - W_HLE]((u32)t->wait_index, &done);
+			if(done) wake(i, ret);
+		}
+		break;
 	}
 }
 
-/* Ejecuta el callback k en el hilo actual, en el acto, y deja el hilo
-   exactamente como estaba (registros y espera) */
-static void run_callback(int k){
+/* El siguiente callback notificado del hilo i, o -1 */
+static int next_pending_callback(int i){
+	int k;
+	for(k = 0; k < MAX_CALLBACKS; k++)
+		if(callbacks[k].used && callbacks[k].thread == i && callbacks[k].notify_count > 0) return k;
+	return -1;
+}
+
+/* Pone el hilo actual a ejecutar el callback k: a0 = veces notificado,
+   a1 = último argumento, a2 = el del creador; vuelve al trampolín */
+static void enter_callback(int k){
 	Thread *t = &threads[cur];
 	Callback *c = &callbacks[k];
-	CpuState saved = cpu;
-	/* La espera interrumpida (el callback puede despertar al hilo: eso no
-	   se deshace) */
-	const int st = t->status, w = t->wait, wi = t->wait_index, hto = t->has_timeout, cbw = t->cb_wait;
-	const u64 wseq = t->wait_seq, wu = t->wait_until;
-	const u32 wa = t->wait_a, wb = t->wait_b, wc = t->wait_c, dret = t->delay_ret, tadr = t->timeout_addr;
-	int saved_done = callback_done;
-	u32 ret;
+	CbFrame *f = &t->cbf[t->cb_depth - 1];
+	f->k = k;
 	cpu.r[R_A0] = (u32)c->notify_count;
 	cpu.r[R_A1] = (u32)c->notify_arg;
 	cpu.r[R_A2] = c->common;
 	c->notify_count = 0;
 	c->notify_arg = 0;
-	t->status = TH_RUNNING;
-	t->wait = W_NONE;
-	t->has_timeout = 0;
-	t->cb_wait = 0;
-	t->cb_depth++;
-	cpu.r[R_SP] = (cpu.r[R_SP] - 64) & ~15u;
-	cpu.r[R_RA] = HLE_CALLBACK_TRAMPOLINE;
+	cpu.r[R_SP] = (f->cpu.r[R_SP] - 64) & ~15u;
+	cpu.r[R_RA] = HLE_THREAD_CB_TRAMPOLINE;
 	cpu.pc = c->entry;
 	cpu.npc = c->entry + 4;
 	kernel_stat_guest_calls++;
 	/* Preparar la llamada cuesta ~8 us en la PSP (PPSSPP) */
 	cpu_cycles += 1800;
-	callback_done = 0;
-	while(!callback_done && !hle_has_exited()){
-		cpu_stop_requested = 0;
-		cpu_run(100000);
-	}
-	ret = cpu.r[R_V0];
-	cpu = saved;
-	t->status = st; t->wait = w; t->wait_index = wi; t->has_timeout = hto; t->cb_wait = cbw;
-	t->wait_seq = wseq; t->wait_until = wu;
-	t->wait_a = wa; t->wait_b = wb; t->wait_c = wc; t->delay_ret = dret; t->timeout_addr = tadr;
-	t->cb_depth--;
-	callback_done = saved_done;
 	cpu_stop_requested = 1;
-	if(ret != 0 && c->used && c->thread == (int)(t - threads)) c->used = 0;
 }
 
-/* Ejecuta todos los callbacks notificados del hilo actual. Devuelve cuántos. */
-static int run_pending_callbacks(void){
-	int k, n = 0, again = 1;
-	if(cur < 0 || threads[cur].cb_depth > 1) return 0;
-	while(again && !hle_has_exited()){
-		again = 0;
-		for(k = 0; k < MAX_CALLBACKS; k++)
-			if(callbacks[k].used && callbacks[k].thread == cur && callbacks[k].notify_count > 0){
-				run_callback(k);
-				n++;
-				again = 1;
-				break;
-			}
+/* Interrumpe el hilo actual (dentro de un syscall) para ejecutar el
+   callback k. El callback es código normal del hilo: puede esperar, y
+   mientras tanto corren los demás hilos. Al volver (trampolín), el hilo
+   sigue donde estaba y, si esperaba, retoma la espera. */
+static void start_callback(int k){
+	Thread *t = &threads[cur];
+	CbFrame *f = &t->cbf[t->cb_depth++];
+	f->cpu = cpu;
+	f->wait = t->wait; f->wait_index = t->wait_index; f->has_timeout = t->has_timeout; f->cb_wait = t->cb_wait;
+	f->wait_seq = t->wait_seq; f->wait_until = t->wait_until;
+	f->wait_a = t->wait_a; f->wait_b = t->wait_b; f->wait_c = t->wait_c;
+	f->delay_ret = t->delay_ret; f->timeout_addr = t->timeout_addr;
+	t->status = TH_RUNNING;
+	t->wait = W_NONE;
+	t->has_timeout = 0;
+	t->cb_wait = t->cb_paused = 0;
+	enter_callback(k);
+}
+
+static int can_run_callbacks(void){
+	return cur >= 0 && threads[cur].cb_depth < MAX_CB_DEPTH && !kernel_in_interrupt() && !hle_has_exited();
+}
+
+/* El trampolín: un callback del hilo actual ha vuelto */
+void kernel_thread_cb_return(void){
+	Thread *t;
+	CbFrame *f;
+	int k, i = cur;
+	if(cur < 0 || !threads[cur].cb_depth) return;
+	t = &threads[cur];
+	f = &t->cbf[t->cb_depth - 1];
+	k = f->k;
+	/* Si devuelve algo distinto de 0, el callback se borra */
+	if(cpu.r[R_V0] != 0 && callbacks[k].used && callbacks[k].thread == i) callbacks[k].used = 0;
+	k = next_pending_callback(i);
+	if(k >= 0 && !hle_has_exited()){ enter_callback(k); return; }
+	cpu = f->cpu;
+	t->cb_depth--;
+	if(f->wait != W_NONE){
+		t->status = TH_WAITING;
+		t->wait = f->wait; t->wait_index = f->wait_index; t->has_timeout = f->has_timeout; t->cb_wait = f->cb_wait;
+		t->wait_seq = f->wait_seq; t->wait_until = f->wait_until;
+		t->wait_a = f->wait_a; t->wait_b = f->wait_b; t->wait_c = f->wait_c;
+		t->delay_ret = f->delay_ret; t->timeout_addr = f->timeout_addr;
+		recheck_wait(i);
 	}
-	return n;
+	request_resched();
 }
 
 static void notify_callback(int k, s32 arg){
@@ -2002,7 +2085,7 @@ static void notify_callback(int k, s32 arg){
 	c->notify_arg = arg;
 	/* Un hilo en espera CB sale de ella para ejecutar sus callbacks cuando
 	   le toque correr; después la retoma */
-	if(t->used && c->thread != cur && t->status == TH_WAITING && t->cb_wait && !t->cb_paused){
+	if(t->used && t->status == TH_WAITING && t->cb_wait && !t->cb_paused && t->cb_depth < MAX_CB_DEPTH){
 		t->cb_paused = 1;
 		t->status = TH_READY;
 		t->ready_seq = ++seq;
@@ -2017,27 +2100,33 @@ int kernel_notify_callback(u32 uid, s32 arg){
 	return 0;
 }
 
-/* El hilo actual, sacado de su espera CB, ejecuta sus callbacks y vuelve a
-   esperar (o termina la espera si ya se cumple) */
+/* El hilo actual, sacado de su espera CB, ejecuta sus callbacks y luego
+   vuelve a esperar (o termina la espera si ya se cumple) */
 static void resume_after_callbacks(void){
 	Thread *t = &threads[cur];
-	int i = cur;
+	int k = next_pending_callback(cur);
 	t->cb_paused = 0;
-	run_pending_callbacks();
-	if(t->wait == W_NONE) return;
+	if(k >= 0 && can_run_callbacks()){
+		start_callback(k);
+		return;
+	}
 	t->status = TH_WAITING;
-	t->cb_wait = 1;
-	recheck_wait(i);
+	recheck_wait(cur);
 	request_resched();
 }
 
-/* Las variantes CB de las esperas: primero los callbacks pendientes */
+/* Las variantes CB de las esperas: la espera empieza y, si hay callbacks
+   pendientes, se ejecutan ya (con la espera en pausa), como PPSSPP
+   (hleCheckCurrentCallbacks + __KernelForceCallbacks) */
 void kernel_cb_wait(void (*fn)(void)){
-	Thread *t = current();
-	if(t && !t->cb_depth) run_pending_callbacks();
+	Thread *t;
+	int k;
 	fn();
 	t = current();
-	if(t && t->status == TH_WAITING) t->cb_wait = 1;
+	if(!t) return;
+	if(t->status == TH_WAITING) t->cb_wait = 1;
+	if(!can_run_callbacks() || (k = next_pending_callback(cur)) < 0) return;
+	start_callback(k);
 }
 
 static void sceKernelCreateCallback(void){
@@ -2103,13 +2192,16 @@ static void sceKernelReferCallbackStatus(void){
 	RETURN(0);
 }
 
+/* Ejecuta los callbacks pendientes del hilo; devuelve 1 si había alguno
+   (el valor se ve cuando terminan) */
 static void sceKernelCheckCallback(void){
 	Thread *t = current();
-	int n;
+	int k;
 	if(t && t->cb_depth){ RETURN(SCE_KERNEL_ERROR_ILLEGAL_CONTEXT); kernel_eat_cycles(230); return; }
-	n = run_pending_callbacks();
-	RETURN(n ? 1 : 0);
+	k = t && can_run_callbacks() ? next_pending_callback(cur) : -1;
+	RETURN(k >= 0 ? 1 : 0);
 	kernel_eat_cycles(230);
+	if(k >= 0) start_callback(k);
 }
 
 static void sceKernelRegisterExitCallback(void){

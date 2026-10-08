@@ -100,6 +100,7 @@ int main(int argc, char **argv){
 		unsigned long long instr;
 		double secs;
 		for(i = 0; i < frames && !exited; i++) exited = app_run_frame();
+		if(!exited) hle_dump_state("limite de frames alcanzado");   /* al --log */
 		secs = (double)(clock() - start) / CLOCKS_PER_SEC;
 		app_get_stats(&run_frames, &instr);
 		fprintf(stderr, "[WIISP] %s tras %d frames (%.1f MIPS en este PC)\n",

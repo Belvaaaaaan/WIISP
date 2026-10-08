@@ -151,12 +151,12 @@ void test_io(void){
 	CHECK_EQ(mem_read8(BUF), (u8)70);
 	call("sceIoClose", fd, 0, 0, 0, 0, 0);
 
-	/* Directorio del disco: ".", "..", DATA, VACIO */
+	/* Directorio del disco: DATA, VACIO (sin "." ni "..", como en la PSP) */
 	fd = call("sceIoDopen", str("disc0:/PSP_GAME/USRDIR"), 0, 0, 0, 0, 0);
 	CHECK(fd >= 0x100);
 	{
-		static const char *const want[] = { ".", "..", "DATA", "VACIO" };
-		for(i = 0; i < 4; i++){
+		static const char *const want[] = { "DATA", "VACIO" };
+		for(i = 0; i < 2; i++){
 			CHECK_EQ(call("sceIoDread", fd, RES, 0, 0, 0, 0), 1);
 			CHECK(!strcmp((const char *)mem_ptr(RES + 88, 8), want[i]));
 		}
