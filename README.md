@@ -20,7 +20,7 @@ completo** con dos renderizadores:
 - **Software exacto**: port del renderizador de PPSSPP, idéntico al bit a
   una PSP en las pruebas, pero lento en el Wii.
 
-Pasan 212 de los 557 [pspautotests](https://github.com/hrydgard/pspautotests)
+Pasan 244 de los 557 [pspautotests](https://github.com/hrydgard/pspautotests)
 (97 de 109 de gráficos y 20 de 26 de la VFPU). Para los juegos comerciales ya
 hay carga de módulos, la VFPU completa (con las funciones trascendentes
 exactas al bit), sceAudio, el mezclador SAS, la lógica de Atrac3+ y sceMpeg

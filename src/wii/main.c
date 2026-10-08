@@ -248,7 +248,7 @@ int main(int argc, char **argv){
 	video_init();
 	input_init();
 
-	printf("\n\nWIISP - emulador de PSP para Wii\n\n");
+	printf("\n\nWIISP " WIISP_VERSION " - emulador de PSP para Wii\n\n");
 	if(app_init() || !fatInitDefault()){
 		printf("Error: %s\n", "no hay memoria o no se pudo montar la SD/USB");
 		printf("Pulsa A o B para salir.\n");

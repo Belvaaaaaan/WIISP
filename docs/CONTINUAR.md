@@ -9,8 +9,10 @@ nueva sin perder nada. Léelo junto con `README.md`, `ARQUITECTURA.md` y
 - Todo en español: respuestas, comentarios del código y mensajes de commit.
   El texto que se ve en la pantalla del Wii va **sin acentos** (la fuente no
   los tiene).
-- Rama de trabajo: `claude/psp-wii-emulator-dt141p`. No abrir pull requests
-  si no se piden.
+- Rama de trabajo: `claude/psp-wii-emulator-dt141p` hasta la v0.4.3; la
+  v0.4.4 sigue encima en `claude/wiisp-psp-wii-emulator-gr0b83` (la rama
+  que asigna cada sesión puede cambiar: partir siempre de la más reciente).
+  No abrir pull requests si no se piden.
 - Nunca subir datos de juegos (ISO, EBOOT descifrados, volcados): son de
   Sony/Rockstar.
 - PPSSPP (GPLv2+) es la referencia de comportamiento: ante una duda de cómo
@@ -109,42 +111,42 @@ Pruebas: 360 comprobaciones unitarias y 214/214 pspautotests en x86; una
 prueba sintética de callbacks (notificar, CheckCallback, SleepThreadCB en
 otro hilo) da OK. No se repitió la pasada en PowerPC.
 
+### Sesión siguiente (v0.4.4)
+
+- **Captura del usuario** (sin `wiisp.log`): `[STATS]` crece 107 944
+  instrucciones por minuto emulado, ~207 cambios de hilo por segundo y
+  **0 llamadas del HLE al juego**; 205 887 frames en 5,1 s (todos los hilos
+  esperan y los frames pasan en vacío). Echando cuentas (6,15 M en 57
+  minutos), el juego casi no ejecutó nada antes de quedarse así: solo hay
+  un hilo que se despierta ~100 veces por segundo (como el bucle
+  `sceKernelDelayThreadCB(10000)` de `SysManager`). Coincide con lo descrito
+  para la v0.4.1 (~6 M, 0 llamadas); no se sabe qué versión era porque el
+  programa no la mostraba. **Desde la v0.4.4 la versión sale en el menú y
+  en la primera línea de `wiisp.log`.** Hace falta el `wiisp.log` (sus
+  `[DIAGNOSTICO]` de "atasco" dicen qué espera cada hilo).
+- Paso 2 (UMD) hecho: commit "UMD como en PPSSPP". Pasan umd/api,
+  umd/register y umd/wait (umd/io y raw_access necesitan una ISO).
+- Paso 3 (LwMutex) hecho: commit "LwMutex como objetos del kernel". De
+  paso: plazos de espera como la PSP (mínimo 205 us + 30), tiempo restante
+  escrito al despertar, `sceKernelCancelSema`, `sceKernelCancelEventFlag`,
+  y `SCE_KERNEL_ERROR_ILLEGAL_ATTR` corregido (0x80020191). **Los 12
+  pspautotests de threads/callbacks que ya pasan validan los callbacks
+  como código del hilo contra una PSP real.** Total 244/244.
+- Siguen fallando en threads/callbacks: `callbacks` y `waittypes` (faltan
+  los mutex normales `sceKernelCreateMutex`...), `exit` (validación de
+  `sceKernelRegisterExitCallback` y `LoadExecForUser_362A956B`), `count`
+  (orden: el callback notificado más veces corre antes), `create` (máximo
+  64 callbacks; la PSP admite 1024+), `combos` (coste de notificar a un
+  hilo mejor que duerme: 10-25 us).
+
 ## Siguientes pasos, por prioridad
 
-1. **Mandar v0.4.3 al usuario** (si no se hizo ya) y pedir el nuevo
-   `wiisp.log`. Lo siguiente que haga GTA tras recorrer el disco dirá dónde
-   se para ahora.
+1. **Mandar v0.4.4 al usuario** y pedir el nuevo `wiisp.log` (comprobar en
+   su primera línea que es la 0.4.4).
 
-2. **UMD como en PPSSPP** (`Core/HLE/sceUmd.cpp`):
-   - El UMD empieza **activado** (`umdActivated = true`): `umd_activated = 1`
-     en `io_init` (con disco, `sceUmdGetDriveStat` da 0x32 desde el inicio).
-   - `sceUmdWaitDriveStat`, `...WithTimer` y `...CB` deben **esperar de
-     verdad**: si `(stat & 0x3B) == 0` → 0x80010016; en interrupción →
-     0x80020064; sin dispatch → 0x800201A7; gastan 520 ciclos; si
-     `stat & estado` ya se cumple devuelven 0 (WithTimer/CB además
-     replanifican); si no, `kernel_wait_object_timeout(KWAIT_UMD, stat, t)`
-     (t = 0: para siempre; t ≤ 209 µs → 240; en WithTimer, t ≤ 1 → 25) y al
-     vencer devuelven 0x800201A8. Al activar/desactivar,
-     `kernel_wake_object_mask(KWAIT_UMD, estado, 0)`. Registrar con
-     `kernel_set_wait_recheck` una función que mire `stat & estado`.
-   - `sceUmdCancelWaitDriveStat`: el NID 0x6AF9B50A sale como
-     `sceUmd_6AF9B50A` en `src/hle/nid_names.c`; renombrarlo y despertar a
-     todos con 0x800201A9.
+2. Hecho (UMD).
 
-3. **LwMutex como objetos del kernel** (portar `Core/HLE/sceKernelMutex.cpp`,
-   líneas ~596-1010 de PPSSPP). Hoy WIISP no crea objetos: si la memoria del
-   workarea se libera y se reutiliza, `sceKernelLockLwMutex` ve basura y
-   espera para siempre; en la PSP da error 0x800201CA porque el UID ya no
-   existe. Esto bloquea el marco de pruebas de los 20 pspautotests
-   `threads/callbacks/*` (comprobado con `threads/callbacks/check`: el hilo
-   se queda en `lwmutex 088421E0`). Con esto arreglado esas pruebas
-   validarán los callbacks contra una PSP real. Detalles: tabla de objetos
-   con UID en workarea+16; `Create` valida nombre, attr < 0x400, cuenta;
-   `Delete` despierta a los que esperan con 0x800201B5 y deja el workarea
-   con lockLevel 0, lockThread -1, uid -1; al ir a esperar o al tomar uno
-   libre con lockThread ≠ 0, comprobar que el UID existe; despertar en
-   orden FIFO o de prioridad (attr 0x100); `wait_index` = índice del
-   objeto. GTA no usa LwMutex, pero las pruebas sí.
+3. Hecho (LwMutex).
 
 4. **Event flags**: despertar en orden de llegada (`wait_seq`) o de
    prioridad, como PPSSPP, no en el orden de la tabla de hilos

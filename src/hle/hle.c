@@ -241,6 +241,7 @@ void hle_set_log_file(const char *path){
 	if(log_file) fclose(log_file);
 	log_file = path ? fopen(path, "w") : NULL;
 	log_written = 0;
+	if(log_file) fprintf(log_file, "[WIISP] version " WIISP_VERSION "\n");
 }
 
 /* En la SD (libfat) el tamaño del archivo solo se apunta al cerrarlo o con

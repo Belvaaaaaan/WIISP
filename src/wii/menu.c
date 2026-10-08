@@ -18,6 +18,7 @@
 #include <stdio.h>
 #include <string.h>
 #include "wii/wii.h"
+#include "hle/hle.h"
 #include "frontend/filelist.h"
 
 #define VISIBLE_ROWS 18
@@ -91,7 +92,7 @@ static int current_device(const char *path){
 static void draw(const FileList *fl, int sel, int top, int ok){
 	int i, dev = current_device(fl->path);
 	video_clear_console();
-	printf("\n WIISP - elige un programa de PSP      ");
+	printf("\n WIISP " WIISP_VERSION " - elige un programa de PSP");
 	for(i = 0; i < NUM_DEVICES; i++){
 		int present = dir_exists(devices[i]);
 		const char *name = i == 0 ? "SD" : "USB";
