@@ -80,6 +80,7 @@ static void sceDisplayGetFrameBuf(void){
 }
 
 static void sceDisplayWaitVblank(void){ kernel_wait_vblank(); }
+static void sceDisplayWaitVblankCB(void){ kernel_cb_wait(sceDisplayWaitVblank); }
 
 static void sceDisplayGetVcount(void){ RETURN((u32)(cpu_cycles / CYCLES_PER_FRAME)); }
 static void sceDisplayIsVblank(void){ RETURN(0); }
@@ -127,9 +128,9 @@ static const HleFunction display[] = {
 	{ "sceDisplaySetFrameBuf", sceDisplaySetFrameBuf },
 	{ "sceDisplayGetFrameBuf", sceDisplayGetFrameBuf },
 	{ "sceDisplayWaitVblank", sceDisplayWaitVblank },
-	{ "sceDisplayWaitVblankCB", sceDisplayWaitVblank },
+	{ "sceDisplayWaitVblankCB", sceDisplayWaitVblankCB },
 	{ "sceDisplayWaitVblankStart", sceDisplayWaitVblank },
-	{ "sceDisplayWaitVblankStartCB", sceDisplayWaitVblank },
+	{ "sceDisplayWaitVblankStartCB", sceDisplayWaitVblankCB },
 	{ "sceDisplayGetVcount", sceDisplayGetVcount },
 	{ "sceDisplayIsVblank", sceDisplayIsVblank },
 	{ "sceDisplayGetFramePerSec", sceDisplayGetFramePerSec },

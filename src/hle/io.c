@@ -14,6 +14,13 @@
  *     0x<sector>_size0x<bytes>" abre un trozo del disco por su posición.
  *     Sin disco montado, apuntan a la carpeta del anfitrión (homebrew).
  *
+ * Las rutas se leen como en la PSP: '\\' vale como '/', el dispositivo no
+ * distingue mayúsculas, "umd00:" es umd0: y, arrancando desde un disco,
+ * host0: es el disco.
+ *
+ * La Memory Stick (mscmhc0:, fatms0:) siempre está insertada: sus
+ * sceIoDevctl responden como tal y avisan a sus callbacks al registrarlos.
+ *
  * La E/S asíncrona (sceIo*Async) se completa en el acto y guarda el
  * resultado para sceIoWaitAsync/sceIoPollAsync.
  *
@@ -41,7 +48,10 @@
 #define SCE_KERNEL_ERROR_NOASYNC 0x8002032Au
 #define SCE_ERRNO_INVALID_ARGUMENT 0x80010016u
 #define SCE_ERRNO_READ_ONLY 0x8001001Eu
+#define SCE_ERRNO_INVALID_FLAG 0x8001B004u
 #define SCE_ERRNO_IO_ERROR 0x80010005u
+#define SCE_ERRNO_DEVICE_NOT_FOUND 0x80010013u
+#define SCE_MEMSTICK_BAD_PARAMS 0x80220081u
 
 #define PSP_O_RDONLY 0x0001
 #define PSP_O_WRONLY 0x0002
@@ -67,6 +77,7 @@ typedef struct {
 	int async_pending;
 	s64 async_result;
 	int by_sector;    /* abierto por sectores (umd0:, sce_lbn): sin espera */
+	int free_on_collect;   /* sceIoOpenAsync fallido: se libera al recoger el error */
 } IoFile;
 
 typedef struct {
@@ -87,12 +98,20 @@ static char host_dir[256];
 static char cwd[256];
 static char savedata_dir[256];   /* "" = la de ms0:/ */        /* con dispositivo: "ms0:/PSP" o "disc0:/PSP_GAME/USRDIR" */
 static int umd_activated;
+static u32 umd_callback;   /* sceUmdRegisterUMDCallBack: solo hay uno */
+
+/* Callbacks de inserción de la Memory Stick (sceIoDevctl): la tarjeta
+   siempre está puesta (es la SD o el USB), así que se avisan al registrarlos */
+#define MAX_MS_CALLBACKS 32
+static u32 ms_callbacks[2][MAX_MS_CALLBACKS];   /* [0] mscmhc0:, [1] fatms0: */
 
 void io_init(const char *dir, int boot_from_disc){
 	io_shutdown();
 	snprintf(host_dir, sizeof(host_dir), "%s", dir && dir[0] ? dir : ".");
 	snprintf(cwd, sizeof(cwd), "%s", boot_from_disc ? "disc0:/PSP_GAME/USRDIR" : "ms0:/");
 	umd_activated = 0;
+	umd_callback = 0;
+	memset(ms_callbacks, 0, sizeof(ms_callbacks));
 }
 
 void io_shutdown(void){
@@ -131,9 +150,8 @@ static int is_host_device(const char *dev, u32 n){
 	return 0;
 }
 
-/* Traduce una ruta de la PSP. Devuelve 0 si es válida. */
 /* Quita "." y ".." de una ruta sin dispositivo ni '/' inicial (en su
-   sitio). -1 si sube por encima de la raíz. */
+   sitio). Como en la PSP, ".." en la raíz se queda en la raíz. */
 static int normalize_path(char *p){
 	char *out = p, *in = p;
 	while(*in){
@@ -142,7 +160,7 @@ static int normalize_path(char *p){
 		in = end ? end + 1 : in + len;
 		if(len == 0 || (len == 1 && seg[0] == '.')) continue;
 		if(len == 2 && seg[0] == '.' && seg[1] == '.'){
-			if(out == p) return -1;
+			if(out == p) continue;
 			out--;
 			while(out > p && out[-1] != '/') out--;
 			continue;
@@ -156,11 +174,34 @@ static int normalize_path(char *p){
 	return 0;
 }
 
-static int resolve_str(const char *in, Resolved *r){
-	char full[512], rel[512];
+/* El dispositivo como lo entiende la PSP (PPSSPP MetaFileSystem.cpp):
+   sin espacios delante, '\\' igual que '/', el nombre en minúsculas,
+   "memstick:" es ms0:, "umd00:" es umd0:, "hostN:" es host0: y, si se
+   arrancó desde un disco, host0: es el propio disco */
+static void canonical_path(const char *in, char *out, u32 size){
+	char *colon, *c;
+	u32 n;
+	if(strchr(in, ':')) while(*in == ' ') in++;
+	snprintf(out, size, "%s", in);
+	for(c = out; *c; c++) if(*c == '\\') *c = '/';
+	colon = strchr(out, ':');
+	if(!colon) return;
+	for(c = out; c < colon; c++) *c = (char)tolower((unsigned char)*c);
+	n = (u32)(colon - out);
+	if(n == 8 && !memcmp(out, "memstick", 8)) memmove(out, "ms0", 3), memmove(out + 3, colon, strlen(colon) + 1);
+	else if(n > 3 && !memcmp(out, "umd", 3) && strncmp(out, "umd1:", 5))
+		memmove(out + 4, colon, strlen(colon) + 1), out[3] = '0';
+	else if(n >= 4 && !memcmp(out, "host", 4))
+		memmove(out + 5, colon, strlen(colon) + 1), out[4] = '0';
+	if(!strncmp(out, "host0:", 6) && disc_is_open()) memcpy(out, "umd0:", 5), memmove(out + 4, out + 5, strlen(out + 5) + 1);
+}
+
+static int resolve_str(const char *raw, Resolved *r){
+	char full[800], rel[800], in[512];
 	const char *colon, *p;
 	u32 n;
 	memset(r, 0, sizeof(*r));
+	canonical_path(raw, in, sizeof(in));
 	colon = strchr(in, ':');
 	if(colon) snprintf(full, sizeof(full), "%s", in);
 	else {
@@ -296,7 +337,8 @@ static u32 open_at(int fd, u32 path_addr, u32 flags){
 	if(r.disc){
 		u32 lba, size;
 		DiscEntry e;
-		if(flags & (PSP_O_WRONLY | PSP_O_APPEND | PSP_O_CREAT | PSP_O_TRUNC)) return SCE_ERRNO_READ_ONLY;
+		/* El UMD solo rechaza la escritura; CREAT, TRUNC o APPEND se ignoran */
+		if(flags & PSP_O_WRONLY) return SCE_ERRNO_INVALID_FLAG;
 		if(r.whole_device){
 			o->kind = F_DISC_SECTORS;
 			o->lba = 0;
@@ -697,26 +739,132 @@ static void sceIoIoctl(void){
 	RETURN(0);
 }
 
+/* Registra un callback de inserción y lo avisa: la tarjeta está puesta */
+static u32 ms_register(int which, u32 arg, u32 arg_len){
+	u32 cb, i;
+	if(!mem_valid(arg, 4) || (arg & 3) || arg_len < 4) return SCE_MEMSTICK_BAD_PARAMS;
+	cb = mem_read32(arg);
+	if(!kernel_is_callback(cb)) return SCE_ERRNO_INVALID_ARGUMENT;
+	for(i = 0; i < MAX_MS_CALLBACKS && ms_callbacks[which][i]; i++);
+	if(i == MAX_MS_CALLBACKS) return SCE_ERRNO_INVALID_ARGUMENT;
+	ms_callbacks[which][i] = cb;
+	kernel_notify_callback(cb, 1);   /* 1 = insertada (y asignada, en fatms0:) */
+	return 0;
+}
+
+static u32 ms_unregister(int which, u32 arg, u32 arg_len){
+	u32 cb, i;
+	if(!mem_valid(arg, 4) || arg_len < 4) return SCE_MEMSTICK_BAD_PARAMS;
+	cb = mem_read32(arg);
+	for(i = 0; i < MAX_MS_CALLBACKS; i++)
+		if(cb && ms_callbacks[which][i] == cb){
+			for(; i + 1 < MAX_MS_CALLBACKS; i++) ms_callbacks[which][i] = ms_callbacks[which][i + 1];
+			ms_callbacks[which][i] = 0;
+			return 0;
+		}
+	return SCE_ERRNO_INVALID_ARGUMENT;
+}
+
+/* Capacidad: el struct DeviceSize al que apunta *arg, con ~1 GB libre */
+static u32 ms_capacity(u32 arg, u32 arg_len){
+	u32 p, clusters = (u32)((1024ull * 1024 * 1024 * 95 / 100) / (0x200 * 64));
+	if(!mem_valid(arg, 4) || arg_len < 4) return SCE_MEMSTICK_BAD_PARAMS;
+	p = mem_read32(arg);
+	if(mem_valid(p, 20)){
+		mem_write32(p, clusters);        /* maxClusters */
+		mem_write32(p + 4, clusters);    /* freeClusters */
+		mem_write32(p + 8, clusters);    /* maxSectors */
+		mem_write32(p + 12, 0x200);      /* sectorSize */
+		mem_write32(p + 16, 64);         /* sectorCount */
+	}
+	return 0;
+}
+
+/* Memory Stick (como PPSSPP sceIo.cpp): siempre insertada y montada.
+   Devuelve 1 si el comando era de la tarjeta */
+static int ms_devctl(const char *dev, u32 cmd, u32 in, u32 in_len, u32 out, u32 out_len, u32 *ret){
+	int fat = !strcmp(dev, "fatms0:");
+	if(!fat && strcmp(dev, "mscmhc0:") && strcmp(dev, "ms0:") && strcmp(dev, "memstick:")) return 0;
+	*ret = 0;
+	switch(cmd){
+	case 0x02025801:   /* estado del controlador: 4 = tarjeta insertada */
+		if(fat) return 0;
+		if(!mem_valid(out, 4) || out_len < 4){ *ret = SCE_MEMSTICK_BAD_PARAMS; break; }
+		mem_write32(out, 4);
+		break;
+	case 0x02025806:   /* ¿insertada? 1 = sí */
+		if(fat) return 0;
+		if(!mem_valid(out, 4) || (out & 3) || out_len < 4){ *ret = SCE_MEMSTICK_BAD_PARAMS; break; }
+		mem_write32(out, 1);
+		break;
+	case 0x02015804: if(fat) return 0; *ret = out ? SCE_MEMSTICK_BAD_PARAMS : ms_register(0, in, in_len); break;
+	case 0x02015805: if(fat) return 0; *ret = ms_unregister(0, in, in_len); break;
+	case 0x02415821: if(!fat) return 0; *ret = ms_register(1, in, in_len); break;
+	case 0x02415822: if(!fat) return 0; *ret = ms_unregister(1, in, in_len); break;
+	case 0x0240D81E: if(!fat) return 0; break;   /* invalidar la caché de la FAT */
+	case 0x02415823: if(!fat) return 0; break;   /* asignar la FAT */
+	case 0x02425823:   /* ¿FAT asignada? 1 = sí */
+		if(!fat) return 0;
+		if(!mem_valid(out, 4)){ *ret = SCE_ERRNO_INVALID_ARGUMENT; break; }
+		mem_write32(out, 1);
+		hle_delay_us(23500 / 222);   /* 23500 ciclos de la PSP */
+		break;
+	case 0x02425824:   /* ¿protegida contra escritura? 0 = no */
+		if(!mem_valid(out, 4) || out_len != 4){ *ret = 0xFFFFFFFFu; break; }
+		mem_write32(out, 0);
+		break;
+	case 0x02425818: *ret = ms_capacity(in, in_len); break;
+	case 0x02425856: if(fat) return 0; break;
+	default: return 0;
+	}
+	return 1;
+}
+
 static void sceIoDevctl(void){
 	char dev[32];
-	u32 cmd = ARG(1), in = ARG(2), in_len = ARG(3), out = ARG(4), out_len = ARG(5);
+	u32 cmd = ARG(1), in = ARG(2), in_len = ARG(3), out = ARG(4), out_len = ARG(5), ret;
 	mem_read_cstr(ARG(0), dev, sizeof(dev));
-	if(!strncmp(dev, "umd", 3) || !strncmp(dev, "disc0", 5) || !strncmp(dev, "isofs", 5)){
-		switch(cmd){
-		case 0x01F20001:   /* tipo de disco y estado */
-			if(mem_valid(out, 8)){ mem_write32(out, 0xFFFFFFFFu); mem_write32(out + 4, 0x10); }
-			break;
-		case 0x01F20002:   /* último sector leído */
-		case 0x01F20003:   /* tamaño del disco en sectores */
-			if(mem_valid(out, 4)) mem_write32(out, cmd == 0x01F20003 ? disc_sectors() : 0);
-			break;
-		default:           /* precargas y cachés del UMD: nada que hacer */
-			break;
-		}
+	/* Comandos del UMD: valen con cualquier nombre de dispositivo (PPSSPP) */
+	switch(cmd){
+	case 0x01E18030:   /* ¿coincide la región del disco? 1 = sí */
+		RETURN(in_len >= 16 ? 1 : 0xFFFFFFFFu);
+		return;
+	case 0x01F20001:   /* tipo de disco y estado */
+		if(!mem_valid(out, 8) || (out & 3) || out_len < 8){ RETURN(SCE_MEMSTICK_BAD_PARAMS); return; }
+		mem_write32(out, 0xFFFFFFFFu);
+		mem_write32(out + 4, 0x10);   /* disco de juego */
+		RETURN(0);
+		return;
+	case 0x01F20002:   /* último sector leído */
+	case 0x01F20003:   /* último sector del disco */
+		if(!mem_valid(out, 4) || (out & 3) || out_len < 4){ RETURN(SCE_MEMSTICK_BAD_PARAMS); return; }
+		mem_write32(out, cmd == 0x01F20003 ? disc_sectors() - 1 : 0x10);
+		RETURN(0);
+		return;
+	case 0x01F300A5:   /* precarga a la caché y estado: lectura n.º 1 */
+		if(!mem_valid(in, 4) || in_len < 4 || !mem_valid(out, 4) || (out & 3)){ RETURN(SCE_MEMSTICK_BAD_PARAMS); return; }
+		mem_write32(out, 1);
+		RETURN(0);
+		return;
+	case 0x01F100A3:   /* búsqueda en el disco */
+		if(!mem_valid(in, 4) || in_len < 4){ RETURN(SCE_MEMSTICK_BAD_PARAMS); return; }
+		RETURN(0);
+		hle_delay_us(100);
+		return;
+	case 0x01F100A4: case 0x01F300A7: case 0x01F300A8: case 0x01F300A9:
+		/* caché del UMD: el hilo de la caché siempre ha terminado */
+		RETURN(mem_valid(in, 4) && in_len >= 4 ? 0 : SCE_MEMSTICK_BAD_PARAMS);
+		return;
+	case 0x01F100A6: case 0x01F100A8: case 0x01F100A9:
 		RETURN(0);
 		return;
 	}
+	if(ms_devctl(dev, cmd, in, in_len, out, out_len, &ret)){
+		RETURN(ret);
+		return;
+	}
 	if(strcmp(dev, "emulator:") && strcmp(dev, "kemulator:")){
+		hle_log("[E/S] sceIoDevctl(\"%s\", %08X) sin implementar\n", dev, cmd);
 		RETURN(SCE_KERNEL_ERROR_UNSUP);
 		return;
 	}
@@ -755,7 +903,11 @@ static void sceIoOpenAsync(void){
 	u32 err;
 	if(fd < 0){ RETURN(SCE_KERNEL_ERROR_MFILE); return; }
 	err = open_at(fd, ARG(0), ARG(1));
-	if(err){ memset(&files[fd], 0, sizeof(files[fd])); files[fd].kind = F_FAILED; }
+	if(err){
+		memset(&files[fd], 0, sizeof(files[fd]));
+		files[fd].kind = F_FAILED;
+		files[fd].free_on_collect = 1;
+	}
 	set_async((u32)fd, err ? (s32)err : fd);
 	RETURN(fd);
 }
@@ -772,6 +924,7 @@ static void sceIoCloseAsync(void){
 	u32 fd = ARG(0);
 	IoFile *o = get_file(fd);
 	if(!o){ RETURN(SCE_KERNEL_ERROR_BADF); return; }
+	if(o->async_pending){ RETURN(SCE_KERNEL_ERROR_ASYNC_BUSY); return; }
 	/* Se cierra al recoger el resultado */
 	if(o->f){ fclose(o->f); o->f = NULL; }
 	o->kind = F_FAILED;
@@ -815,9 +968,9 @@ static void collect_async(u32 fd, u32 res){
 	if(!o->async_pending){ RETURN(SCE_KERNEL_ERROR_NOASYNC); return; }
 	r = o->async_result;
 	o->async_pending = 0;
-	if(r == CLOSE_PENDING){
+	if(r == CLOSE_PENDING || o->free_on_collect){
 		memset(o, 0, sizeof(*o));
-		r = 0;
+		if(r == CLOSE_PENDING) r = 0;
 	}
 	if(mem_valid(res, 8)){
 		mem_write32(res, (u32)r);
@@ -827,13 +980,15 @@ static void collect_async(u32 fd, u32 res){
 }
 
 static void sceIoWaitAsync(void){ collect_async(ARG(0), ARG(1)); }
-static void sceIoWaitAsyncCB(void){ collect_async(ARG(0), ARG(1)); }
+static void sceIoWaitAsyncPlain(void){ collect_async(ARG(0), ARG(1)); }
+static void sceIoWaitAsyncCB(void){ kernel_cb_wait(sceIoWaitAsyncPlain); }
 static void sceIoPollAsync(void){ collect_async(ARG(0), ARG(1)); }
 static void sceIoGetAsyncStat(void){ collect_async(ARG(0), ARG(2)); }   /* (fd, poll, res) */
 
 static void sceIoChangeAsyncPriority(void){ RETURN(get_file(ARG(0)) || (s32)ARG(0) == -1 ? 0 : SCE_KERNEL_ERROR_BADF); }
 static void sceIoSetAsyncCallback(void){ RETURN(get_file(ARG(0)) ? 0 : SCE_KERNEL_ERROR_BADF); }
-static void sceIoCancel(void){ RETURN(get_file(ARG(0)) ? 0 : SCE_KERNEL_ERROR_BADF); }
+/* La PSP no sabe cancelar en el UMD ni en la Memory Stick (PPSSPP) */
+static void sceIoCancel(void){ RETURN(get_file(ARG(0)) ? SCE_KERNEL_ERROR_UNSUP : SCE_KERNEL_ERROR_BADF); }
 
 /* --- UMD ----------------------------------------------------------------------- */
 
@@ -854,12 +1009,35 @@ static void sceUmdCheckMedium(void){ RETURN(disc_is_open() ? 1 : 0); }
 static void sceUmdActivate(void){
 	if(ARG(0) < 1 || ARG(0) > 2){ RETURN(SCE_ERRNO_INVALID_ARGUMENT); return; }
 	umd_activated = 1;
+	/* Avisa al callback del UMD, como la PSP (PPSSPP sceUmd.cpp): listo
+	   solo si el juego declara versión de SDK */
+	if(umd_callback)
+		kernel_notify_callback(umd_callback, (s32)(PSP_UMD_PRESENT | PSP_UMD_READABLE |
+		                                           (kernel_sdk_version() ? PSP_UMD_READY : 0)));
 	RETURN(0);
 }
-static void sceUmdDeactivate(void){ umd_activated = 0; RETURN(0); }
+static void sceUmdDeactivate(void){
+	umd_activated = 0;
+	if(umd_callback) kernel_notify_callback(umd_callback, (s32)(PSP_UMD_PRESENT | PSP_UMD_READY));
+	RETURN(0);
+}
+
+static void sceUmdRegisterUMDCallBack(void){
+	if(!kernel_is_callback(ARG(0))){ RETURN(SCE_ERRNO_INVALID_ARGUMENT); return; }
+	umd_callback = ARG(0);
+	RETURN(0);
+}
+
+static void sceUmdUnRegisterUMDCallBack(void){
+	u32 cb = ARG(0);
+	if(!cb || cb != umd_callback){ RETURN(SCE_ERRNO_INVALID_ARGUMENT); return; }
+	umd_callback = 0;
+	RETURN(kernel_sdk_version() > 0x3000000 ? 0 : cb);
+}
 static void sceUmdGetDriveStat(void){ RETURN(umd_state()); }
 /* Las esperas acaban en el acto: el disco está siempre listo */
 static void sceUmdWaitDriveStat(void){ RETURN(0); }
+static void sceUmdWaitDriveStatCB(void){ kernel_cb_wait(sceUmdWaitDriveStat); }
 static void sceUmdGetDiscInfo(void){
 	u32 p = ARG(0);
 	if(!mem_valid(p, 8) || mem_read32(p) != 8){ RETURN(SCE_ERRNO_INVALID_ARGUMENT); return; }
@@ -908,11 +1086,11 @@ static const HleFunction umd_user[] = {
 	{ "sceUmdGetDriveStat", sceUmdGetDriveStat },
 	{ "sceUmdWaitDriveStat", sceUmdWaitDriveStat },
 	{ "sceUmdWaitDriveStatWithTimer", sceUmdWaitDriveStat },
-	{ "sceUmdWaitDriveStatCB", sceUmdWaitDriveStat },
+	{ "sceUmdWaitDriveStatCB", sceUmdWaitDriveStatCB },
 	{ "sceUmdCancelWaitDriveStat", umd_zero },
 	{ "sceUmdGetDiscInfo", sceUmdGetDiscInfo },
-	{ "sceUmdRegisterUMDCallBack", umd_zero },
-	{ "sceUmdUnRegisterUMDCallBack", umd_zero },
+	{ "sceUmdRegisterUMDCallBack", sceUmdRegisterUMDCallBack },
+	{ "sceUmdUnRegisterUMDCallBack", sceUmdUnRegisterUMDCallBack },
 	{ "sceUmdGetErrorStat", umd_zero },
 	{ "sceUmdReplaceProhibit", umd_zero },
 	{ "sceUmdReplacePermit", umd_zero },

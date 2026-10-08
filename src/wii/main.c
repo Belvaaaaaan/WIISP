@@ -113,6 +113,7 @@ static void run_program(void){
 	}
 	gx_ge_reset();
 	video_show_console();
+	if(!exited) hle_dump_state("detenido por el usuario");
 
 	app_get_stats(&frames, &instr);
 	elapsed = now_ms() - start;

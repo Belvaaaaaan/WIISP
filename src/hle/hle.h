@@ -118,6 +118,17 @@ void hle_set_log_file(const char *path);
 /* Asegura que lo escrito llega a la SD (también lo hace solo cada segundo) */
 void hle_log_sync(void);
 
+/* Diagnóstico (wiisp.log): hilos y sus esperas; últimas llamadas al HLE */
+void kernel_dump_state(void);
+/* Callbacks: notificar uno (UMD, energía...) y las esperas CB de otros
+   módulos (fn es la espera normal) */
+int  kernel_is_callback(u32 uid);
+int  kernel_notify_callback(u32 uid, s32 arg);
+void kernel_cb_wait(void (*fn)(void));
+void kernel_note_hle_call(const char *name);
+int  kernel_current_thread(void);
+void hle_dump_state(const char *why);
+
 /* Estadísticas de rendimiento (instrucciones, VFPU, cambios de hilo) al
    registro: cada minuto de juego emulado y al terminar. En PC solo con la
    variable de entorno WIISP_STATS. */
@@ -293,6 +304,7 @@ void hle_write_datetime(u32 addr, u64 unix_us);
 
 /* Display y mandos (display.c) */
 void display_init(void);
+void power_init(void);   /* net.c: ranuras de callbacks de energía */
 void display_fill_ctrl(u32 addr);
 
 #endif

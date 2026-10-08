@@ -136,9 +136,42 @@ static u32 cpu_mhz = 222, bus_mhz = 111;
 
 static void return_float(float f){ cpu.fpr[0].f = f; RETURN(0); }
 
+/* Callbacks de energía: 16 ranuras del usuario. Al registrar uno se le
+   avisa en el acto del estado (con cargador y batería llena), como en
+   PPSSPP scePower.cpp. */
+#define POWER_SLOTS 16
+#define POWER_SLOTS_PRIVATE 32
+static u32 power_cb[POWER_SLOTS];
+
+void power_init(void){ memset(power_cb, 0, sizeof(power_cb)); }
+
 static void scePowerRegisterCallback(void){
-	/* slot -1: el primero libre */
-	RETURN((s32)ARG(0) < 0 ? 0 : 0);
+	s32 slot = (s32)ARG(0);
+	u32 cb = ARG(1);
+	int i;
+	if(slot < -1 || slot >= POWER_SLOTS_PRIVATE){ RETURN(0x80000102u); return; }   /* INVALID_SLOT */
+	if(slot >= POWER_SLOTS){ RETURN(0x80000023u); return; }                         /* PRIV_REQUIRED */
+	if(!cb){ RETURN(0x80000100u); return; }                                          /* INVALID_CB */
+	if(slot == -1){
+		for(i = 0; i < POWER_SLOTS && power_cb[i]; i++);
+		if(i == POWER_SLOTS){ RETURN(0x80000022u); return; }                         /* SLOTS_FULL */
+		slot = i;
+		RETURN((u32)i);
+	} else {
+		if(power_cb[slot]){ RETURN(0x80000020u); return; }                          /* TAKEN_SLOT */
+		RETURN(0);
+	}
+	power_cb[slot] = cb;
+	kernel_notify_callback(cb, 0x00001000 | 0x00000080 | 0x00000064);   /* AC, batería, llena */
+}
+
+static void scePowerUnregisterCallback(void){
+	s32 slot = (s32)ARG(0);
+	if(slot < 0 || slot >= POWER_SLOTS_PRIVATE){ RETURN(0x80000102u); return; }
+	if(slot >= POWER_SLOTS){ RETURN(0x80000023u); return; }
+	if(!power_cb[slot]){ RETURN(0x80000025u); return; }                             /* EMPTY_SLOT */
+	power_cb[slot] = 0;
+	RETURN(0);
 }
 
 static void scePowerSetClockFrequency(void){
@@ -163,8 +196,8 @@ static void scePowerGetBatteryVolt(void){ RETURN(4135); }
 
 static const HleFunction power[] = {
 	{ "scePowerRegisterCallback", scePowerRegisterCallback },
-	{ "scePowerUnregisterCallback", return_zero },
-	{ "scePowerUnregitserCallback", return_zero },
+	{ "scePowerUnregisterCallback", scePowerUnregisterCallback },
+	{ "scePowerUnregitserCallback", scePowerUnregisterCallback },
 	{ "scePowerSetClockFrequency", scePowerSetClockFrequency },
 	{ "scePowerSetCpuClockFrequency", scePowerSetCpuClockFrequency },
 	{ "scePowerSetBusClockFrequency", scePowerSetBusClockFrequency },

@@ -176,6 +176,7 @@ misc/sdkver
 misc/testgp
 misc/timeconv
 modules/unresolved/unresolved
+mstick/mstick
 rtc/rtc
 string/string
 threads/events/events
@@ -186,6 +187,7 @@ threads/semaphores/priority
 threads/semaphores/semaphores
 threads/threads/threads
 threads/wakeup/wakeup
+umd/callbacks/umd
 utility/dialog/abort
 utility/dialog/htmlviewer
 utility/dialog/priority

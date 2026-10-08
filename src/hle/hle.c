@@ -89,6 +89,81 @@ HleFunc hle_find(const char *lib, u32 nid, const char **name_out){
 /* Syscalls                                                           */
 /* ------------------------------------------------------------------ */
 
+static FILE *log_file;
+
+/* --- Diagnóstico: traza del arranque y últimas llamadas ------------------- */
+/* Las primeras llamadas al HLE van a wiisp.log con sus argumentos (y el
+   texto de las rutas y nombres); las repeticiones de un bucle se resumen.
+   Las últimas siempre quedan en un anillo que se vuelca si el juego se
+   atasca, falla o lo detiene el usuario. */
+#define TRACE_MAX   8000
+#define RING_SIZE   96
+typedef struct { const char *name; u32 a[4], ret; s8 th; u32 ms; } CallRec;
+static CallRec ring[RING_SIZE];
+static u32 ring_pos, trace_count, trace_skipped;
+static CallRec trace_recent[6];
+
+static int call_has_string(const char *n){
+	return strstr(n, "Open") || strstr(n, "Dopen") || strstr(n, "stat") || strstr(n, "Mkdir") || strstr(n, "Rename") ||
+	       strstr(n, "Remove") || strstr(n, "Chdir") || strstr(n, "Devctl") || strstr(n, "Create") ||
+	       strstr(n, "LoadModule") || !strcmp(n, "sceKernelPrintf");
+}
+
+static void format_call(const CallRec *r, char *out, size_t cap){
+	char str[96];
+	int n;
+	str[0] = 0;
+	if(call_has_string(r->name) && r->a[0] && mem_read_cstr(r->a[0], str + 1, sizeof(str) - 3) == 0){
+		size_t l;
+		str[0] = '"';
+		l = strlen(str);
+		str[l] = '"'; str[l + 1] = 0;
+	} else str[0] = 0;
+	n = snprintf(out, cap, "h%d %s(", r->th, r->name);
+	if(str[0]) n += snprintf(out + n, cap - (size_t)n, "%s, ", str);
+	else n += snprintf(out + n, cap - (size_t)n, "%08X, ", r->a[0]);
+	snprintf(out + n, cap - (size_t)n, "%08X, %08X, %08X) = %08X @%u ms", r->a[1], r->a[2], r->a[3], r->ret, r->ms);
+}
+
+static void trace_call(const CallRec *r){
+	char line[256];
+	int i;
+	if(trace_count >= TRACE_MAX) return;
+	/* Un bucle que repite las mismas llamadas no llena el registro */
+	for(i = 0; i < 6; i++){
+		const CallRec *p = &trace_recent[i];
+		if(p->name == r->name && p->a[0] == r->a[0] && p->a[1] == r->a[1] && p->a[2] == r->a[2] && p->ret == r->ret){
+			trace_skipped++;
+			return;
+		}
+	}
+	memmove(&trace_recent[1], &trace_recent[0], sizeof(trace_recent) - sizeof(trace_recent[0]));
+	trace_recent[0] = *r;
+	if(trace_skipped){
+		hle_log("[LLAMADA] (%u repetidas omitidas)\n", trace_skipped);
+		trace_skipped = 0;
+	}
+	format_call(r, line, sizeof(line));
+	hle_log("[LLAMADA] %s\n", line);
+	if(++trace_count == TRACE_MAX) hle_log("[LLAMADA] fin de la traza del arranque (%u llamadas)\n", TRACE_MAX);
+}
+
+void hle_dump_state(const char *why){
+	char line[256];
+	u32 i;
+	if(!module) return;
+	hle_log("[DIAGNOSTICO] %s\n", why);
+	kernel_dump_state();
+	hle_log("[DIAGNOSTICO] ultimas llamadas al HLE:\n");
+	for(i = 0; i < RING_SIZE; i++){
+		const CallRec *r = &ring[(ring_pos + i) % RING_SIZE];
+		if(!r->name) continue;
+		format_call(r, line, sizeof(line));
+		hle_log("[ULTIMA] %s\n", line);
+	}
+	hle_log_sync();
+}
+
 void hle_syscall(u32 code){
 	if(code == HLE_SYSCALL_THREAD_RETURN){
 		kernel_thread_return();
@@ -104,9 +179,19 @@ void hle_syscall(u32 code){
 	}
 	if(resolved[code].func){
 		static int trace = -1;
+		CallRec *r = &ring[ring_pos];
 		if(trace < 0) trace = getenv("WIISP_TRACE_HLE") != NULL;
 		if(trace) hle_log("[HLE] %s(%08X, %08X, %08X) @%llu\n", resolved[code].name, cpu.r[R_A0], cpu.r[R_A1], cpu.r[R_A2], (unsigned long long)cpu_cycles);
+		r->name = resolved[code].name;
+		r->a[0] = cpu.r[R_A0]; r->a[1] = cpu.r[R_A1]; r->a[2] = cpu.r[R_A2]; r->a[3] = cpu.r[R_A3];
+		r->th = (s8)kernel_current_thread();
+		r->ms = (u32)(cpu_cycles / (CYCLES_PER_US * 1000ull));
+		kernel_note_hle_call(r->name);
+		/* Avanza antes: la función puede llamar al juego, que llama al HLE */
+		ring_pos = (ring_pos + 1) % RING_SIZE;
 		resolved[code].func();
+		r->ret = cpu.r[R_V0];
+		if(log_file) trace_call(r);
 		if(trace) hle_log("      -> %08X\n", cpu.r[R_V0]);
 		return;
 	}
@@ -126,6 +211,7 @@ void cpu_fault(const char *what, u32 addr, u32 instr){
 	snprintf(reason, sizeof(reason), "%s en 0x%08X (instr/valor 0x%08X, pc 0x%08X)",
 	         what, addr, instr, cpu.pc);
 	hle_log("[CPU] %s\n", reason);
+	hle_dump_state("fallo de CPU");
 	hle_exit("fallo de CPU");
 }
 
@@ -145,7 +231,6 @@ void hle_output(const char *text, u32 len){
 }
 
 #define LOG_FILE_MAX (2u * 1024 * 1024)
-static FILE *log_file;
 static u32 log_written;
 
 void hle_set_log_file(const char *path){
@@ -192,8 +277,8 @@ void hle_log(const char *fmt, ...){
 int hle_has_exited(void){ return exited; }
 const char *hle_exit_reason(void){ return exit_reason; }
 
-static u64 stats_base_instr, stats_logged_instr;
-static int stats_final;
+static u64 stats_base_instr, stats_logged_instr, stall_last_instr;
+static int stats_final, stalled, stall_dumps;
 
 void hle_exit(const char *reason){
 	if(!exited){
@@ -320,6 +405,11 @@ int hle_init(PspModule *mod, const char *host_dir, const char *exec_name){
 	cpu_cycles = 0;
 	stats_base_instr = stats_logged_instr = cpu_executed;
 	stats_final = 0;
+	stall_last_instr = cpu_executed;
+	stalled = stall_dumps = 0;
+	memset(ring, 0, sizeof(ring));
+	memset(trace_recent, 0, sizeof(trace_recent));
+	ring_pos = trace_count = trace_skipped = 0;
 	vfpu_stats_fold();
 	memset(vfpu_stat, 0, sizeof(vfpu_stat));
 
@@ -338,6 +428,7 @@ int hle_init(PspModule *mod, const char *host_dir, const char *exec_name){
 	atrac_init();
 	mpeg_init();
 	utility_init();
+	power_init();
 	ge_init();
 	kernel_init(mod, exec_name);
 	return 0;
@@ -361,12 +452,30 @@ void hle_shutdown(void){
 }
 
 int hle_run_frame(void){
+	u64 frame;
 	if(exited) return 1;
 	kernel_run_until((cpu_cycles / CYCLES_PER_FRAME + 1) * CYCLES_PER_FRAME);
 	if(!exited) kernel_vblank();
 	vfpu_stats_fold();
+	frame = cpu_cycles / CYCLES_PER_FRAME;
+	if(exited || !frame) return exited;
 	/* Cada minuto de juego emulado, por si la sesión acaba apagando */
-	if(cpu_cycles / CYCLES_PER_FRAME % 3600 == 0) hle_log_stats();
+	if(frame % 3600 == 0) hle_log_stats();
+	/* Atasco: 10 s emulados casi sin ejecutar nada (todos los hilos
+	   esperan algo). Se vuelca el estado para saber qué esperan. */
+	if(frame % 600 == 0){
+		u64 done = cpu_executed - stall_last_instr;
+		stall_last_instr = cpu_executed;
+		if(done < 60000){
+			if(!stalled && stall_dumps < 3){
+				char why[96];
+				stall_dumps++;
+				snprintf(why, sizeof(why), "atasco: %llu instrucciones en 10 s emulados", (unsigned long long)done);
+				hle_dump_state(why);
+			}
+			stalled = 1;
+		} else stalled = 0;
+	}
 	return exited;
 }
 

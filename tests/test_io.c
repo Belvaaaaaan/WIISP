@@ -72,7 +72,26 @@ void test_io(void){
 	CHECK_EQ(call("sceIoWrite", fd, BUF, 4, 0, 0, 0), 0x8001001Eu);
 	CHECK_EQ(call("sceIoClose", fd, 0, 0, 0, 0, 0), 0);
 	CHECK_EQ(call("sceIoClose", fd, 0, 0, 0, 0, 0), 0x80020323u);
-	CHECK_EQ(call("sceIoOpen", str("disc0:/PSP_GAME/SYSDIR/EBOOT.BIN"), 0x602, 0, 0, 0, 0), 0x8001001Eu);
+	/* En el UMD solo se rechaza la escritura; CREAT o TRUNC se ignoran */
+	CHECK_EQ(call("sceIoOpen", str("disc0:/PSP_GAME/SYSDIR/EBOOT.BIN"), 0x602, 0, 0, 0, 0), 0x8001B004u);
+	fd = call("sceIoOpen", str("disc0:/PSP_GAME/SYSDIR/EBOOT.BIN"), 0x601, 0, 0, 0, 0);
+	CHECK((s32)fd >= 3);
+	call("sceIoClose", fd, 0, 0, 0, 0, 0);
+
+	/* Rutas como en la PSP: '\\', dispositivo en mayúsculas, umd00:, espacios */
+	fd = call("sceIoOpen", str("DISC0:\\PSP_GAME\\USRDIR\\DATA\\A.TXT"), 1, 0, 0, 0, 0);
+	CHECK((s32)fd >= 3);
+	call("sceIoClose", fd, 0, 0, 0, 0, 0);
+	fd = call("sceIoOpen", str("  umd00:/PSP_GAME/USRDIR/DATA/A.TXT"), 1, 0, 0, 0, 0);
+	CHECK((s32)fd >= 3);
+	call("sceIoClose", fd, 0, 0, 0, 0, 0);
+	fd = call("sceIoOpen", str("DATA\\A.TXT"), 1, 0, 0, 0, 0);
+	CHECK((s32)fd >= 3);
+	call("sceIoClose", fd, 0, 0, 0, 0, 0);
+	/* Arrancando desde un disco, host0: es el disco */
+	fd = call("sceIoOpen", str("host0:/UMD_DATA.BIN"), 1, 0, 0, 0, 0);
+	CHECK((s32)fd >= 3);
+	call("sceIoClose", fd, 0, 0, 0, 0, 0);
 
 	/* Relativa al directorio actual (disc0:/PSP_GAME/USRDIR), sin mayúsculas */
 	fd = call("sceIoOpen", str("DATA/A.TXT"), 1, 0, 0, 0, 0);
@@ -85,15 +104,22 @@ void test_io(void){
 	CHECK((s32)fd >= 3);
 	call("sceIoClose", fd, 0, 0, 0, 0, 0);
 	CHECK_EQ(call("sceIoOpen", str("NO.TXT"), 1, 0, 0, 0, 0), SCE_ERROR_FILE_NOT_FOUND);
-	/* "." y ".." se resuelven, pero no se sale de la raíz */
+	/* "." y ".." se resuelven; ".." en la raíz se queda en la raíz, así que
+	   nunca se sale de ella */
 	fd = call("sceIoOpen", str("../data/./a.txt"), 1, 0, 0, 0, 0);
 	CHECK((s32)fd >= 3);
 	call("sceIoClose", fd, 0, 0, 0, 0, 0);
 	fd = call("sceIoOpen", str("disc0:/PSP_GAME/../PSP_GAME/USRDIR/DATA/A.TXT"), 1, 0, 0, 0, 0);
 	CHECK((s32)fd >= 3);
 	call("sceIoClose", fd, 0, 0, 0, 0, 0);
-	CHECK_EQ(call("sceIoOpen", str("disc0:/../PSP_GAME/USRDIR/DATA/A.TXT"), 1, 0, 0, 0, 0), SCE_ERROR_FILE_NOT_FOUND);
-	CHECK_EQ(call("sceIoOpen", str("ms0:/../io.iso"), 1, 0, 0, 0, 0), SCE_ERROR_FILE_NOT_FOUND);
+	fd = call("sceIoOpen", str("disc0:/../PSP_GAME/USRDIR/DATA/A.TXT"), 1, 0, 0, 0, 0);
+	CHECK((s32)fd >= 3);
+	call("sceIoClose", fd, 0, 0, 0, 0, 0);
+	fd = call("sceIoOpen", str("ms0:/../io.iso"), 1, 0, 0, 0, 0);   /* build-pc/io.iso */
+	CHECK((s32)fd >= 3);
+	call("sceIoClose", fd, 0, 0, 0, 0, 0);
+	/* Saliendo de build-pc sí existiría: build-pc/build-pc/io.iso no */
+	CHECK_EQ(call("sceIoOpen", str("ms0:/../../build-pc/io.iso"), 1, 0, 0, 0, 0), SCE_ERROR_FILE_NOT_FOUND);
 
 	/* El disco entero por sectores: el descriptor de volumen en el 16 */
 	fd = call("sceIoOpen", str("umd0:"), 1, 0, 0, 0, 0);
@@ -157,7 +183,36 @@ void test_io(void){
 	CHECK((s32)fd >= 3);
 	CHECK_EQ(call("sceIoWaitAsync", fd, RES, 0, 0, 0, 0), 0);
 	CHECK_EQ(mem_read32(RES), SCE_ERROR_FILE_NOT_FOUND);
-	call("sceIoClose", fd, 0, 0, 0, 0, 0);
+	/* Un sceIoOpenAsync fallido se libera al recoger el error */
+	CHECK_EQ(call("sceIoClose", fd, 0, 0, 0, 0, 0), 0x80020323u);
+	/* sceIoCloseAsync espera a que se recoja lo pendiente; sceIoCancel no
+	   está disponible en el UMD */
+	fd = call("sceIoOpen", str("disc0:/UMD_DATA.BIN"), 1, 0, 0, 0, 0);
+	CHECK_EQ(call("sceIoReadAsync", fd, BUF, 4, 0, 0, 0), 0);
+	CHECK_EQ(call("sceIoCloseAsync", fd, 0, 0, 0, 0, 0), 0x80020329u);
+	CHECK_EQ(call("sceIoCancel", fd, 0, 0, 0, 0, 0), 0x80020325u);
+	CHECK_EQ(call("sceIoWaitAsync", fd, RES, 0, 0, 0, 0), 0);
+	CHECK_EQ(call("sceIoClose", fd, 0, 0, 0, 0, 0), 0);
+
+	/* Memory Stick: insertada, con la FAT montada y sin protección */
+	mem_write32(RES, 0xFFFFFFFFu);
+	CHECK_EQ(call("sceIoDevctl", str("mscmhc0:"), 0x02025801, 0, 0, RES, 4), 0);
+	CHECK_EQ(mem_read32(RES), 4);
+	CHECK_EQ(call("sceIoDevctl", str("mscmhc0:"), 0x02025806, 0, 0, RES, 4), 0);
+	CHECK_EQ(mem_read32(RES), 1);
+	mem_write32(RES, 0);
+	CHECK_EQ(call("sceIoDevctl", str("fatms0:"), 0x02425823, 0, 0, RES, 4), 0);
+	CHECK_EQ(mem_read32(RES), 1);
+	mem_write32(RES, 0xFFFFFFFFu);
+	CHECK_EQ(call("sceIoDevctl", str("fatms0:"), 0x02425824, 0, 0, RES, 4), 0);
+	CHECK_EQ(mem_read32(RES), 0);
+	mem_write32(RES + 32, RES + 64);
+	CHECK_EQ(call("sceIoDevctl", str("ms0:"), 0x02425818, RES + 32, 4, 0, 0), 0);
+	CHECK_EQ(mem_read32(RES + 64 + 12), 0x200);
+	CHECK(mem_read32(RES + 64 + 4) > 0);
+	/* Comandos del UMD con cualquier dispositivo */
+	CHECK_EQ(call("sceIoDevctl", str("umd0:"), 0x01F300A5, RES + 32, 4, RES, 4), 0);
+	CHECK_EQ(mem_read32(RES), 1);
 
 	/* ms0: sigue en la carpeta del anfitrión */
 	fd = call("sceIoOpen", str("ms0:/io_test.txt"), 0x602, 0, 0, 0, 0);

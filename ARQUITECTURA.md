@@ -275,7 +275,11 @@ porta entero: su consumo de memoria no cabe en el Wii.
 - `hle/io.c`: `disc0:/`, `umd0:` (modo sector), `sce_lbn0x..._size0x...`,
   los ioctl/devctl de UMD, la E/S asíncrona (se completa en el acto) y
   `sceUmdUser`. El directorio inicial de un juego es
-  `disc0:/PSP_GAME/USRDIR`.
+  `disc0:/PSP_GAME/USRDIR`. Las rutas se leen como en la PSP (`\` vale
+  como `/`, el dispositivo sin distinguir mayúsculas, `umd00:` es `umd0:`
+  y, arrancando de un disco, `host0:` es el disco). La Memory Stick
+  (`mscmhc0:`, `fatms0:`) está siempre insertada: sus devctl responden y
+  sus callbacks de inserción se avisan al registrarlos.
 - `loader/prx_decrypt.c` + `loader/kirk.c`: los EBOOT.BIN y PRX cifrados
   (`~PSP`) se descifran con el método de PPSSPP (PrxDecrypter, GPLv2+); el
   AES, el SHA-1 y los comandos del KIRK están escritos para WIISP (la
@@ -286,6 +290,20 @@ porta entero: su consumo de memoria no cabe en el Wii.
   probar todo esto sin archivos de juegos.
 
 ### 6.4 Juegos comerciales (lo que pide GTA LCS)
+
+- Callbacks (`hle/kernel.c`, como `sceKernelThread.cpp` de PPSSPP): cada
+  callback es del hilo que lo crea; el sistema (UMD al activarse, energía al
+  registrarse, Memory Stick) o el juego los notifican, y corren en el hilo
+  dueño cuando este entra en una espera `...CB` o llama a
+  `sceKernelCheckCallback`. Si devuelven algo distinto de 0 se borran.
+  Tras ejecutarlos, la espera sigue (o termina si su condición ya se
+  cumplió).
+- Diagnóstico en `wiisp.log`: las primeras 8000 llamadas al HLE con sus
+  argumentos (`[LLAMADA]`), y si el juego se atasca (menos de 100
+  instrucciones por frame durante 10 s), el estado de cada hilo, en qué
+  espera y con qué objeto, las últimas 96 llamadas, los callbacks, los
+  semáforos y los event flags (`[DIAGNOSTICO]`). Igual al detenerlo con
+  HOME o tras un fallo de CPU.
 
 - `hle/module.c`: `ModuleMgrForUser`. Los PRX del disco se cargan y enlazan
   entre sí (tabla global de syscalls, exports parcheados como `j destino`);

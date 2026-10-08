@@ -81,6 +81,10 @@ typedef struct {
 
 	int wakeup_count;
 	u32 exit_status;
+	const char *last_hle;   /* última función del HLE que llamó (diagnóstico) */
+	int cb_wait;    /* está en una espera CB: sus callbacks pueden ejecutarse */
+	int cb_paused;  /* sacado de esa espera para ejecutar callbacks; la retoma */
+	int cb_depth;   /* ejecutando un callback */
 	int suspend_pending;  /* sceKernelSuspendThread mientras esperaba */
 } Thread;
 
@@ -91,6 +95,10 @@ static u64 seq;
 static u32 module_gp;
 
 static inline Thread *current(void){ return cur >= 0 ? &threads[cur] : NULL; }
+
+/* Callbacks (más abajo) */
+static void resume_after_callbacks(void);
+static void forget_thread_callbacks(int i);
 
 /* --- VFPU perezosa ---------------------------------------------------- */
 /* `vfpu` tiene los registros VFPU del hilo vfpu_owner (-1: de ninguno). Al
@@ -160,6 +168,7 @@ static void make_ready(int i){
 /* Despierta un hilo en espera con el valor de retorno indicado */
 static void wake(int i, u32 ret){
 	thread_ctx(i)->r[R_V0] = ret;
+	threads[i].cb_wait = threads[i].cb_paused = 0;
 	make_ready(i);
 	if(threads[i].suspend_pending){   /* suspendido mientras esperaba */
 		threads[i].suspend_pending = 0;
@@ -598,6 +607,11 @@ void kernel_run_until(u64 target){
 		process_timeouts();
 		run_interrupts();
 		if(need_resched) schedule();
+		/* Un hilo sacado de su espera CB: sus callbacks y de vuelta a esperar */
+		if(cur >= 0 && threads[cur].cb_paused){
+			resume_after_callbacks();
+			continue;
+		}
 		if(!any_thread_alive()){
 			hle_exit("todos los hilos terminaron");
 			break;
@@ -932,6 +946,8 @@ static void start_thread(int i, u32 arglen, u32 argp){
 	c->npc = t->entry + 4;
 	t->exit_status = SCE_KERNEL_ERROR_NOT_DORMANT;
 	t->wakeup_count = 0;
+	t->last_hle = NULL;
+	t->cb_wait = t->cb_paused = t->cb_depth = 0;
 	t->prio = t->init_prio;
 	make_ready(i);
 }
@@ -949,6 +965,7 @@ static void free_thread(int i){
 	kernel_free(threads[i].stack);
 	threads[i].used = 0;
 	vfpu_forget(i);
+	forget_thread_callbacks(i);
 }
 
 /* Termina el hilo i (pasa a DORMANT) y despierta a quien esperaba su fin */
@@ -1606,17 +1623,34 @@ static void sceKernelDeleteLwMutex(void){
 	RETURN(0);
 }
 
-static int lwmutex_try(u32 wa, s32 n){
+/* Toma el lwmutex para el hilo actual: 1 si lo consigue, 0 si hay que
+   esperar; *err != 0 si la llamada es un error (como PPSSPP
+   sceKernelMutex.cpp: volver a tomar uno no recursivo propio es un error,
+   no una espera eterna) */
+#define LWMUTEX_ERROR_NO_SUCH        0x800201CAu
+#define LWMUTEX_ERROR_TRYLOCK_FAILED 0x800201CBu
+#define LWMUTEX_ERROR_NOT_LOCKED     0x800201CCu
+#define LWMUTEX_ERROR_LOCK_OVERFLOW  0x800201CDu
+#define LWMUTEX_ERROR_UNDERFLOW      0x800201CEu
+#define LWMUTEX_ERROR_ALREADY_LOCKED 0x800201CFu
+static int lwmutex_try(u32 wa, s32 n, u32 *err){
 	s32 count = (s32)mem_read32(wa);
-	u32 owner = mem_read32(wa + 4), me = cur >= 0 ? thread_uid(cur) : 0;
+	u32 owner = mem_read32(wa + 4), attr = mem_read32(wa + 8), me = cur >= 0 ? thread_uid(cur) : 0;
+	*err = 0;
+	if(n <= 0 || (n > 1 && !(attr & LWMUTEX_RECURSIVE))){ *err = SCE_KERNEL_ERROR_ILLEGAL_COUNT; return 0; }
+	if(count + n < 0){ *err = LWMUTEX_ERROR_LOCK_OVERFLOW; return 0; }
+	if(mem_read32(wa + 16) == 0xFFFFFFFFu){ *err = LWMUTEX_ERROR_NO_SUCH; return 0; }
 	if(count == 0){
 		mem_write32(wa, (u32)n);
 		mem_write32(wa + 4, me);
 		return 1;
 	}
-	if(owner == me && (mem_read32(wa + 8) & LWMUTEX_RECURSIVE)){
-		mem_write32(wa, (u32)(count + n));
-		return 1;
+	if(owner == me){
+		if(attr & LWMUTEX_RECURSIVE){
+			mem_write32(wa, (u32)(count + n));
+			return 1;
+		}
+		*err = LWMUTEX_ERROR_ALREADY_LOCKED;
 	}
 	return 0;
 }
@@ -1625,7 +1659,9 @@ static void sceKernelLockLwMutex(void){
 	u32 wa = ARG(0);
 	s32 n = (s32)ARG(1);
 	if(!mem_valid(wa, 32)){ RETURN(SCE_KERNEL_ERROR_ILLEGAL_ADDR); return; }
-	if(lwmutex_try(wa, n)){ RETURN(0); return; }
+	u32 err;
+	if(lwmutex_try(wa, n, &err)){ RETURN(0); return; }
+	if(err){ RETURN(err); return; }
 	wait_current(W_LWMUTEX, 0, ARG(2));
 	if(cur >= 0){ threads[cur].wait_a = wa; threads[cur].wait_b = (u32)n; }
 	mem_write32(wa + 12, mem_read32(wa + 12) + 1);
@@ -1634,7 +1670,9 @@ static void sceKernelLockLwMutex(void){
 static void sceKernelTryLockLwMutex(void){
 	u32 wa = ARG(0);
 	if(!mem_valid(wa, 32)){ RETURN(SCE_KERNEL_ERROR_ILLEGAL_ADDR); return; }
-	RETURN(lwmutex_try(wa, (s32)ARG(1)) ? 0 : 0x800201C4u /* LWMUTEX_LOCKED */);
+	u32 err;
+	/* Sea cual sea el motivo, el mismo error (PPSSPP) */
+	RETURN(lwmutex_try(wa, (s32)ARG(1), &err) ? 0 : 0x800201C4u /* TRYLOCK_FAILED */);
 }
 
 static void sceKernelUnlockLwMutex(void){
@@ -1642,8 +1680,12 @@ static void sceKernelUnlockLwMutex(void){
 	s32 n = (s32)ARG(1), count;
 	int i;
 	if(!mem_valid(wa, 32)){ RETURN(SCE_KERNEL_ERROR_ILLEGAL_ADDR); return; }
-	count = (s32)mem_read32(wa) - n;
-	if(count < 0) count = 0;
+	if(mem_read32(wa + 16) == 0xFFFFFFFFu){ RETURN(LWMUTEX_ERROR_NO_SUCH); return; }
+	if(n <= 0 || (n > 1 && !(mem_read32(wa + 8) & LWMUTEX_RECURSIVE))){ RETURN(SCE_KERNEL_ERROR_ILLEGAL_COUNT); return; }
+	count = (s32)mem_read32(wa);
+	if(count == 0 || mem_read32(wa + 4) != (cur >= 0 ? thread_uid(cur) : 0)){ RETURN(LWMUTEX_ERROR_NOT_LOCKED); return; }
+	if(count < n){ RETURN(LWMUTEX_ERROR_UNDERFLOW); return; }
+	count -= n;
 	mem_write32(wa, (u32)count);
 	RETURN(0);
 	if(count) return;
@@ -1653,7 +1695,8 @@ static void sceKernelUnlockLwMutex(void){
 		if(t->used && t->status == TH_WAITING && t->wait == W_LWMUTEX && t->wait_a == wa){
 			int prev = cur;
 			cur = i; /* el dueño será el hilo despertado */
-			lwmutex_try(wa, (s32)t->wait_b);
+			u32 err;
+			lwmutex_try(wa, (s32)t->wait_b, &err);
 			cur = prev;
 			mem_write32(wa + 12, mem_read32(wa + 12) - 1);
 			wake(i, 0);
@@ -1833,10 +1876,256 @@ static void sceKernelReferFplStatus(void){
 /* Callbacks, interrupciones y varios                                 */
 /* ------------------------------------------------------------------ */
 
-static void sceKernelCreateCallback(void){
-	static int counter;
-	RETURN(make_uid(UID_CALLBACK, counter++ & 0x7FFF));
+/* Un callback pertenece al hilo que lo crea. Se notifica (el sistema o el
+   juego) y se ejecuta en ese hilo cuando está en una espera CB
+   (sceKernelSleepThreadCB, DelayThreadCB, WaitSemaCB...) o llama a
+   sceKernelCheckCallback; luego el hilo vuelve a su espera. Si el callback
+   devuelve algo distinto de 0, se borra. Como en PPSSPP
+   (sceKernelThread.cpp). */
+#define MAX_CALLBACKS 64
+#define SCE_KERNEL_ERROR_UNKNOWN_CBID 0x800201A1u
+#ifndef SCE_KERNEL_ERROR_ILLEGAL_ARGUMENT
+#define SCE_KERNEL_ERROR_ILLEGAL_ARGUMENT 0x800200D2u
+#endif
+typedef struct {
+	int used;
+	char name[32];
+	int thread;
+	u32 entry, common;
+	s32 notify_count, notify_arg;
+} Callback;
+static Callback callbacks[MAX_CALLBACKS];
+static u32 exit_callback;
+
+static int find_callback(u32 uid){
+	int i = uid_index(uid, UID_CALLBACK, MAX_CALLBACKS);
+	return (i >= 0 && callbacks[i].used) ? i : -1;
 }
+
+int kernel_is_callback(u32 uid){ return find_callback(uid) >= 0; }
+
+/* Los callbacks de un hilo borrado desaparecen con él */
+static void forget_thread_callbacks(int i){
+	int k;
+	for(k = 0; k < MAX_CALLBACKS; k++) if(callbacks[k].used && callbacks[k].thread == i) callbacks[k].used = 0;
+}
+
+/* Vuelve a mirar si la espera del hilo i ya se cumple (tras sus callbacks) */
+static void recheck_wait(int i){
+	Thread *t = &threads[i];
+	switch(t->wait){
+	case W_SLEEP:
+		if(t->wakeup_count > 0){ t->wakeup_count--; wake(i, 0); }
+		break;
+	case W_DELAY:
+		if(cpu_cycles >= t->wait_until) wake(i, t->delay_ret);
+		break;
+	case W_SEMA: sema_wake_waiters(t->wait_index); break;
+	case W_EVF:
+		if(evf_try(t->wait_index, t->wait_a, t->wait_b, t->wait_c)) wake(i, 0);
+		break;
+	case W_THREADEND:
+		if(!threads[t->wait_index].used || threads[t->wait_index].status == TH_DORMANT)
+			wake(i, threads[t->wait_index].exit_status);
+		break;
+	default: break;
+	}
+}
+
+/* Ejecuta el callback k en el hilo actual, en el acto, y deja el hilo
+   exactamente como estaba (registros y espera) */
+static void run_callback(int k){
+	Thread *t = &threads[cur];
+	Callback *c = &callbacks[k];
+	CpuState saved = cpu;
+	/* La espera interrumpida (el callback puede despertar al hilo: eso no
+	   se deshace) */
+	const int st = t->status, w = t->wait, wi = t->wait_index, hto = t->has_timeout, cbw = t->cb_wait;
+	const u64 wseq = t->wait_seq, wu = t->wait_until;
+	const u32 wa = t->wait_a, wb = t->wait_b, wc = t->wait_c, dret = t->delay_ret, tadr = t->timeout_addr;
+	int saved_done = callback_done;
+	u32 ret;
+	cpu.r[R_A0] = (u32)c->notify_count;
+	cpu.r[R_A1] = (u32)c->notify_arg;
+	cpu.r[R_A2] = c->common;
+	c->notify_count = 0;
+	c->notify_arg = 0;
+	t->status = TH_RUNNING;
+	t->wait = W_NONE;
+	t->has_timeout = 0;
+	t->cb_wait = 0;
+	t->cb_depth++;
+	cpu.r[R_SP] = (cpu.r[R_SP] - 64) & ~15u;
+	cpu.r[R_RA] = HLE_CALLBACK_TRAMPOLINE;
+	cpu.pc = c->entry;
+	cpu.npc = c->entry + 4;
+	kernel_stat_guest_calls++;
+	/* Preparar la llamada cuesta ~8 us en la PSP (PPSSPP) */
+	cpu_cycles += 1800;
+	callback_done = 0;
+	while(!callback_done && !hle_has_exited()){
+		cpu_stop_requested = 0;
+		cpu_run(100000);
+	}
+	ret = cpu.r[R_V0];
+	cpu = saved;
+	t->status = st; t->wait = w; t->wait_index = wi; t->has_timeout = hto; t->cb_wait = cbw;
+	t->wait_seq = wseq; t->wait_until = wu;
+	t->wait_a = wa; t->wait_b = wb; t->wait_c = wc; t->delay_ret = dret; t->timeout_addr = tadr;
+	t->cb_depth--;
+	callback_done = saved_done;
+	cpu_stop_requested = 1;
+	if(ret != 0 && c->used && c->thread == (int)(t - threads)) c->used = 0;
+}
+
+/* Ejecuta todos los callbacks notificados del hilo actual. Devuelve cuántos. */
+static int run_pending_callbacks(void){
+	int k, n = 0, again = 1;
+	if(cur < 0 || threads[cur].cb_depth > 1) return 0;
+	while(again && !hle_has_exited()){
+		again = 0;
+		for(k = 0; k < MAX_CALLBACKS; k++)
+			if(callbacks[k].used && callbacks[k].thread == cur && callbacks[k].notify_count > 0){
+				run_callback(k);
+				n++;
+				again = 1;
+				break;
+			}
+	}
+	return n;
+}
+
+static void notify_callback(int k, s32 arg){
+	Callback *c = &callbacks[k];
+	Thread *t = &threads[c->thread];
+	c->notify_count++;
+	c->notify_arg = arg;
+	/* Un hilo en espera CB sale de ella para ejecutar sus callbacks cuando
+	   le toque correr; después la retoma */
+	if(t->used && c->thread != cur && t->status == TH_WAITING && t->cb_wait && !t->cb_paused){
+		t->cb_paused = 1;
+		t->status = TH_READY;
+		t->ready_seq = ++seq;
+		request_resched();
+	}
+}
+
+int kernel_notify_callback(u32 uid, s32 arg){
+	int k = find_callback(uid);
+	if(k < 0) return (int)SCE_KERNEL_ERROR_UNKNOWN_CBID;
+	notify_callback(k, arg);
+	return 0;
+}
+
+/* El hilo actual, sacado de su espera CB, ejecuta sus callbacks y vuelve a
+   esperar (o termina la espera si ya se cumple) */
+static void resume_after_callbacks(void){
+	Thread *t = &threads[cur];
+	int i = cur;
+	t->cb_paused = 0;
+	run_pending_callbacks();
+	if(t->wait == W_NONE) return;
+	t->status = TH_WAITING;
+	t->cb_wait = 1;
+	recheck_wait(i);
+	request_resched();
+}
+
+/* Las variantes CB de las esperas: primero los callbacks pendientes */
+void kernel_cb_wait(void (*fn)(void)){
+	Thread *t = current();
+	if(t && !t->cb_depth) run_pending_callbacks();
+	fn();
+	t = current();
+	if(t && t->status == TH_WAITING) t->cb_wait = 1;
+}
+
+static void sceKernelCreateCallback(void){
+	u32 name = ARG(0), entry = ARG(1);
+	int i;
+	if(!name){ RETURN(SCE_KERNEL_ERROR_ERROR); return; }
+	if(entry & 0xF0000000u){ RETURN(SCE_KERNEL_ERROR_ILLEGAL_ADDR); return; }
+	for(i = 0; i < MAX_CALLBACKS && callbacks[i].used; i++);
+	if(i == MAX_CALLBACKS){ RETURN(SCE_KERNEL_ERROR_NO_MEMORY); return; }
+	memset(&callbacks[i], 0, sizeof(callbacks[i]));
+	callbacks[i].used = 1;
+	mem_read_cstr(name, callbacks[i].name, sizeof(callbacks[i].name));
+	callbacks[i].thread = cur;
+	callbacks[i].entry = entry;
+	callbacks[i].common = ARG(2);
+	RETURN(make_uid(UID_CALLBACK, i));
+}
+
+static void sceKernelDeleteCallback(void){
+	int k = find_callback(ARG(0));
+	if(k < 0){ RETURN(SCE_KERNEL_ERROR_UNKNOWN_CBID); return; }
+	callbacks[k].used = 0;
+	RETURN(0);
+}
+
+static void sceKernelNotifyCallback(void){
+	int k = find_callback(ARG(0));
+	if(k < 0){ RETURN(SCE_KERNEL_ERROR_UNKNOWN_CBID); return; }
+	notify_callback(k, (s32)ARG(1));
+	RETURN(0);
+}
+
+static void sceKernelCancelCallback(void){
+	int k = find_callback(ARG(0));
+	if(k < 0){ RETURN(SCE_KERNEL_ERROR_UNKNOWN_CBID); return; }
+	callbacks[k].notify_count = callbacks[k].notify_arg = 0;
+	RETURN(0);
+}
+
+static void sceKernelGetCallbackCount(void){
+	int k = find_callback(ARG(0));
+	if(k < 0){ RETURN(SCE_KERNEL_ERROR_UNKNOWN_CBID); return; }
+	RETURN((u32)callbacks[k].notify_count);
+}
+
+static void sceKernelReferCallbackStatus(void){
+	int k = find_callback(ARG(0));
+	u32 p = ARG(1);
+	const Callback *c;
+	if(k < 0){ RETURN(SCE_KERNEL_ERROR_UNKNOWN_CBID); return; }
+	c = &callbacks[k];
+	if(mem_valid(p, 56) && mem_read32(p) != 0){
+		/* size, name[32], threadId, entry, common, notifyCount, notifyArg */
+		mem_write32(p, 56);
+		memset(mem_ptr(p + 4, 32), 0, 32);
+		memcpy(mem_ptr(p + 4, 32), c->name, strlen(c->name));
+		mem_write32(p + 36, c->thread >= 0 ? thread_uid(c->thread) : 0);
+		mem_write32(p + 40, c->entry);
+		mem_write32(p + 44, c->common);
+		mem_write32(p + 48, (u32)c->notify_count);
+		mem_write32(p + 52, (u32)c->notify_arg);
+	}
+	RETURN(0);
+}
+
+static void sceKernelCheckCallback(void){
+	Thread *t = current();
+	int n;
+	if(t && t->cb_depth){ RETURN(SCE_KERNEL_ERROR_ILLEGAL_CONTEXT); kernel_eat_cycles(230); return; }
+	n = run_pending_callbacks();
+	RETURN(n ? 1 : 0);
+	kernel_eat_cycles(230);
+}
+
+static void sceKernelRegisterExitCallback(void){
+	if(ARG(0) && find_callback(ARG(0)) < 0){ RETURN(SCE_KERNEL_ERROR_ILLEGAL_ARGUMENT); return; }
+	exit_callback = ARG(0);
+	RETURN(0);
+}
+
+static void cb_sleep(void){ kernel_cb_wait(sceKernelSleepThread); }
+static void cb_delay(void){ kernel_cb_wait(sceKernelDelayThread); }
+static void cb_delay_sysclock(void){ kernel_cb_wait(sceKernelDelaySysClockThread); }
+static void cb_wait_thread_end(void){ kernel_cb_wait(sceKernelWaitThreadEnd); }
+static void cb_wait_sema(void){ kernel_cb_wait(wait_sema); }
+static void cb_wait_evf(void){ kernel_cb_wait(wait_evf); }
+static void cb_allocate_fpl(void){ kernel_cb_wait(sceKernelAllocateFpl); }
+static void cb_lock_lwmutex(void){ kernel_cb_wait(sceKernelLockLwMutex); }
 
 
 static void sceKernelStdin(void){ RETURN(0); }
@@ -1904,6 +2193,8 @@ void kernel_init(const PspModule *mod, const char *exec_path){
 	memset(blocks, 0, sizeof(blocks));
 	memset(events, 0, sizeof(events));
 	memset(subintrs, 0, sizeof(subintrs));
+	memset(callbacks, 0, sizeof(callbacks));
+	exit_callback = 0;
 	pending_len = 0;
 	intr_running = in_interrupt = 0;
 	intr_enabled = dispatch_enabled = 1;
@@ -1949,6 +2240,91 @@ void kernel_init(const PspModule *mod, const char *exec_path){
 	memset(&cpu, 0, sizeof(cpu));
 }
 
+/* ------------------------------------------------------------------ */
+/* Diagnóstico: qué hace cada hilo (para wiisp.log)                   */
+/* ------------------------------------------------------------------ */
+
+void kernel_note_hle_call(const char *name){
+	if(cur >= 0) threads[cur].last_hle = name;
+}
+
+int kernel_current_thread(void){ return cur; }
+
+static const char *status_name(int st){
+	switch(st){
+	case TH_RUNNING: return "corriendo";
+	case TH_READY: return "listo";
+	case TH_WAITING: return "esperando";
+	case TH_SUSPEND: return "suspendido";
+	case TH_WAITING | TH_SUSPEND: return "esperando+suspendido";
+	case TH_DORMANT: return "dormant";
+	default: return "?";
+	}
+}
+
+void kernel_dump_state(void){
+	int i, j;
+	hle_log("[ESTADO] %.1f s emulados, hilo actual %d, interrupciones %s, dispatch %s\n",
+	        (double)cpu_cycles / (CYCLES_PER_US * 1e6), cur, intr_enabled ? "si" : "NO",
+	        dispatch_enabled ? "si" : "NO");
+	for(i = 0; i < MAX_THREADS; i++){
+		const Thread *t = &threads[i];
+		char det[160];
+		const CpuState *c = (i == cur) ? &cpu : &t->ctx;
+		if(!t->used) continue;
+		det[0] = 0;
+		if(t->status & TH_WAITING){
+			switch(t->wait){
+			case W_SLEEP: snprintf(det, sizeof(det), "sleep (despertares %d)", t->wakeup_count); break;
+			case W_DELAY: snprintf(det, sizeof(det), "delay"); break;
+			case W_SEMA:
+				snprintf(det, sizeof(det), "sema \"%s\" cuenta %d/%d, pide %u", semas[t->wait_index].name,
+				         (int)semas[t->wait_index].count, (int)semas[t->wait_index].max, t->wait_a);
+				break;
+			case W_EVF:
+				snprintf(det, sizeof(det), "evf \"%s\" bits %08X, patron %08X modo %X", evfs[t->wait_index].name,
+				         evfs[t->wait_index].bits, t->wait_a, t->wait_b);
+				break;
+			case W_THREADEND:
+				snprintf(det, sizeof(det), "fin del hilo \"%s\"", threads[t->wait_index].name);
+				break;
+			case W_FPL: snprintf(det, sizeof(det), "fpl \"%s\"", fpls[t->wait_index].name); break;
+			case W_VBLANK: snprintf(det, sizeof(det), "vblank"); break;
+			case W_LWMUTEX: snprintf(det, sizeof(det), "lwmutex %08X", t->wait_a); break;
+			case W_GEDRAW: snprintf(det, sizeof(det), "GE drawsync"); break;
+			case W_GELIST: snprintf(det, sizeof(det), "GE lista %d", t->wait_index); break;
+			case W_MODULE: snprintf(det, sizeof(det), "module_start del hilo \"%s\"", threads[t->wait_index].name); break;
+			default: snprintf(det, sizeof(det), "HLE tipo %d obj %d", t->wait - W_HLE, t->wait_index); break;
+			}
+			if(t->has_timeout){
+				size_t l = strlen(det);
+				snprintf(det + l, sizeof(det) - l, ", vence en %lld us",
+				         (long long)((s64)(t->wait_until - cpu_cycles) / CYCLES_PER_US));
+			} else if(t->wait == W_DELAY){
+				size_t l = strlen(det);
+				snprintf(det + l, sizeof(det) - l, ", quedan %lld us",
+				         (long long)((s64)(t->wait_until - cpu_cycles) / CYCLES_PER_US));
+			}
+		}
+		hle_log("[HILO] %d \"%s\" prio %u attr %08X %s%s%s pc %08X ra %08X ultima %s\n", i, t->name, t->prio,
+		        t->attr, status_name(t->status), det[0] ? ": " : "", det, c->pc, c->r[R_RA],
+		        t->last_hle ? t->last_hle : "-");
+	}
+	for(i = 0; i < PSP_NUM_INTR; i++)
+		for(j = 0; j < MAX_SUBINTR; j++)
+			if(subintrs[i][j].used)
+				hle_log("[INTR] %d.%d manejador %08X arg %08X %s\n", i, j, subintrs[i][j].handler,
+				        subintrs[i][j].arg, subintrs[i][j].enabled ? "activo" : "inactivo");
+	for(i = 0; i < MAX_CALLBACKS; i++)
+		if(callbacks[i].used)
+			hle_log("[CALLBACK] \"%s\" hilo %d funcion %08X notificado %d (arg %08X)\n", callbacks[i].name,
+			        callbacks[i].thread, callbacks[i].entry, (int)callbacks[i].notify_count, (u32)callbacks[i].notify_arg);
+	for(i = 0; i < MAX_SEMAS; i++)
+		if(semas[i].used) hle_log("[SEMA] \"%s\" %d/%d\n", semas[i].name, (int)semas[i].count, (int)semas[i].max);
+	for(i = 0; i < MAX_EVFS; i++)
+		if(evfs[i].used) hle_log("[EVF] \"%s\" bits %08X attr %X\n", evfs[i].name, evfs[i].bits, evfs[i].attr);
+}
+
 void kernel_shutdown(void){
 	cur = -1;
 }
@@ -1975,15 +2351,15 @@ static const HleFunction thread_man[] = {
 	{ "sceKernelCheckThreadStack", sceKernelCheckThreadStack },
 	{ "sceKernelGetThreadStackFreeSize", sceKernelGetThreadStackFreeSize },
 	{ "sceKernelSleepThread", sceKernelSleepThread },
-	{ "sceKernelSleepThreadCB", sceKernelSleepThread },
+	{ "sceKernelSleepThreadCB", cb_sleep },
 	{ "sceKernelWakeupThread", sceKernelWakeupThread },
 	{ "sceKernelCancelWakeupThread", sceKernelCancelWakeupThread },
 	{ "sceKernelDelayThread", sceKernelDelayThread },
-	{ "sceKernelDelayThreadCB", sceKernelDelayThread },
+	{ "sceKernelDelayThreadCB", cb_delay },
 	{ "sceKernelDelaySysClockThread", sceKernelDelaySysClockThread },
-	{ "sceKernelDelaySysClockThreadCB", sceKernelDelaySysClockThread },
+	{ "sceKernelDelaySysClockThreadCB", cb_delay_sysclock },
 	{ "sceKernelWaitThreadEnd", sceKernelWaitThreadEnd },
-	{ "sceKernelWaitThreadEndCB", sceKernelWaitThreadEnd },
+	{ "sceKernelWaitThreadEndCB", cb_wait_thread_end },
 	{ "sceKernelSuspendDispatchThread", sceKernelSuspendDispatchThread },
 	{ "sceKernelResumeDispatchThread", sceKernelResumeDispatchThread },
 	{ "sceKernelGetSystemTimeLow", sceKernelGetSystemTimeLow },
@@ -1997,7 +2373,7 @@ static const HleFunction thread_man[] = {
 	{ "sceKernelDeleteSema", sceKernelDeleteSema },
 	{ "sceKernelSignalSema", sceKernelSignalSema },
 	{ "sceKernelWaitSema", wait_sema },
-	{ "sceKernelWaitSemaCB", wait_sema },
+	{ "sceKernelWaitSemaCB", cb_wait_sema },
 	{ "sceKernelPollSema", sceKernelPollSema },
 	{ "sceKernelReferSemaStatus", sceKernelReferSemaStatus },
 	{ "sceKernelCreateEventFlag", sceKernelCreateEventFlag },
@@ -2005,18 +2381,22 @@ static const HleFunction thread_man[] = {
 	{ "sceKernelSetEventFlag", sceKernelSetEventFlag },
 	{ "sceKernelClearEventFlag", sceKernelClearEventFlag },
 	{ "sceKernelWaitEventFlag", wait_evf },
-	{ "sceKernelWaitEventFlagCB", wait_evf },
+	{ "sceKernelWaitEventFlagCB", cb_wait_evf },
 	{ "sceKernelPollEventFlag", sceKernelPollEventFlag },
 	{ "sceKernelReferEventFlagStatus", sceKernelReferEventFlagStatus },
 	{ "sceKernelCreateLwMutex", sceKernelCreateLwMutex },
 	{ "sceKernelDeleteLwMutex", sceKernelDeleteLwMutex },
 	{ "sceKernelCreateCallback", sceKernelCreateCallback },
-	{ "sceKernelDeleteCallback", return_zero },
-	{ "sceKernelCheckCallback", return_zero },
+	{ "sceKernelDeleteCallback", sceKernelDeleteCallback },
+	{ "sceKernelCheckCallback", sceKernelCheckCallback },
+	{ "sceKernelNotifyCallback", sceKernelNotifyCallback },
+	{ "sceKernelCancelCallback", sceKernelCancelCallback },
+	{ "sceKernelGetCallbackCount", sceKernelGetCallbackCount },
+	{ "sceKernelReferCallbackStatus", sceKernelReferCallbackStatus },
 	{ "sceKernelCreateFpl", sceKernelCreateFpl },
 	{ "sceKernelDeleteFpl", sceKernelDeleteFpl },
 	{ "sceKernelAllocateFpl", sceKernelAllocateFpl },
-	{ "sceKernelAllocateFplCB", sceKernelAllocateFpl },
+	{ "sceKernelAllocateFplCB", cb_allocate_fpl },
 	{ "sceKernelTryAllocateFpl", sceKernelTryAllocateFpl },
 	{ "sceKernelFreeFpl", sceKernelFreeFpl },
 	{ "sceKernelCancelFpl", sceKernelCancelFpl },
@@ -2035,7 +2415,7 @@ static const HleFunction kernel_library[] = {
 	{ "sceKernelIsCpuIntrEnable", sceKernelIsCpuIntrEnable },
 	{ "sceKernelIsCpuIntrSuspended", sceKernelIsCpuIntrSuspended },
 	{ "sceKernelLockLwMutex", sceKernelLockLwMutex },
-	{ "sceKernelLockLwMutexCB", sceKernelLockLwMutex },
+	{ "sceKernelLockLwMutexCB", cb_lock_lwmutex },
 	{ "sceKernelTryLockLwMutex", sceKernelTryLockLwMutex },
 	{ "sceKernelUnlockLwMutex", sceKernelUnlockLwMutex },
 };
@@ -2071,7 +2451,7 @@ static const HleFunction stdio_user[] = {
 static const HleFunction loadexec_user[] = {
 	{ "sceKernelExitGame", sceKernelExitGame },
 	{ "sceKernelExitGameWithStatus", sceKernelExitGame },
-	{ "sceKernelRegisterExitCallback", return_zero },
+	{ "sceKernelRegisterExitCallback", sceKernelRegisterExitCallback },
 };
 
 

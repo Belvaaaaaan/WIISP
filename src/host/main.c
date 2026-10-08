@@ -25,6 +25,7 @@
 #include <string.h>
 #include <time.h>
 #include "frontend/app.h"
+#include "hle/hle.h"
 
 void *plat_alloc_big(size_t size){
 	return aligned_alloc(32, (size + 31) & ~(size_t)31);
@@ -79,6 +80,7 @@ int main(int argc, char **argv){
 		else if(!strcmp(argv[i], "--null-gpu")) app_set_null_renderer();
 		else if(!strcmp(argv[i], "--fast-math")) app_set_fast_math(1);
 		else if(!strcmp(argv[i], "--root") && i + 1 < argc) app_set_root(argv[++i]);
+		else if(!strcmp(argv[i], "--log") && i + 1 < argc) hle_set_log_file(argv[++i]);   /* como wiisp.log */
 		else path = argv[i];
 	}
 	if(!path){

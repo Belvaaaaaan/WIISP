@@ -35,7 +35,9 @@ como en una Memory Stick. Ahí mismo queda `wiisp.log`, el registro de la
 última sesión: funciones que faltan, fallos de CPU, mensajes del juego,
 partidas cargadas o guardadas y, cada minuto de juego emulado, estadísticas
 de rendimiento (líneas `[STATS]`: cuánto se usa la VFPU y qué instrucciones,
-cambios de hilo). Es lo más útil para reportar un problema.
+cambios de hilo). Si el juego se queda parado, también apunta las
+primeras llamadas al firmware y en qué está esperando cada hilo
+(`[DIAGNOSTICO]`). Es lo más útil para reportar un problema.
 
 Al cargar un juego escribe `imports.txt` junto al EBOOT: la lista de funciones
 del firmware que usa y cuáles ya implementa WIISP.
