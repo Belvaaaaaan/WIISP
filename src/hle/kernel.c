@@ -1536,7 +1536,7 @@ static void sceKernelReferSemaStatus(void){
 /* Event flags                                                        */
 /* ------------------------------------------------------------------ */
 
-#define MAX_EVFS 128
+#define MAX_EVFS 1024
 #define EVF_WAITAND      0x00
 #define EVF_WAITOR       0x01
 #define EVF_WAITCLEARALL 0x10
@@ -1577,14 +1577,16 @@ static int evf_has_waiters(int e){
 
 /* Al vencer la espera, outBits recibe los bits actuales */
 static void evf_timeout(Thread *t){
-	if(t->wait_c) mem_write32(t->wait_c, evfs[t->wait_index].bits);
+	if(t->wait_c && mem_valid(t->wait_c, 4)) mem_write32(t->wait_c, evfs[t->wait_index].bits);
 }
 
 static void sceKernelReferEventFlagStatus(void){
 	int e = find_evf(ARG(0));
 	u32 info = ARG(1);
 	if(e < 0){ RETURN(SCE_KERNEL_ERROR_UNKNOWN_EVFID); return; }
-	if(!mem_valid(info, 52)){ RETURN(SCE_KERNEL_ERROR_ILLEGAL_ADDR); return; }
+	if(!mem_valid(info, 52)){ RETURN(0xFFFFFFFFu); return; }
+	RETURN(0);
+	if(!mem_read32(info)) return;   /* size 0: no escribe nada */
 	mem_write32(info, 52);
 	memset(mem_ptr(info + 4, 32), 0, 32);
 	memcpy(mem_ptr(info + 4, 32), evfs[e].name, 32);
@@ -1599,6 +1601,7 @@ static void sceKernelCreateEventFlag(void){
 	u32 name = ARG(0), attr = ARG(1), bits = ARG(2);
 	int i;
 	if(!name){ RETURN(SCE_KERNEL_ERROR_ERROR); return; }
+	if((attr & 0x100) || attr >= 0x300){ RETURN(SCE_KERNEL_ERROR_ILLEGAL_ATTR); return; }
 	for(i = 0; i < MAX_EVFS && evfs[i].used; i++);
 	if(i == MAX_EVFS){ RETURN(SCE_KERNEL_ERROR_NO_MEMORY); return; }
 	memset(&evfs[i], 0, sizeof(evfs[i]));
@@ -1614,22 +1617,36 @@ static void sceKernelDeleteEventFlag(void){
 	if(e < 0){ RETURN(SCE_KERNEL_ERROR_UNKNOWN_EVFID); return; }
 	for(i = 0; i < MAX_THREADS; i++)
 		if(threads[i].used && threads[i].status == TH_WAITING &&
-		   threads[i].wait == W_EVF && threads[i].wait_index == e)
+		   threads[i].wait == W_EVF && threads[i].wait_index == e){
+			/* Los que esperaban reciben los bits actuales (PPSSPP) */
+			evf_timeout(&threads[i]);
 			wake(i, SCE_KERNEL_ERROR_WAIT_DELETE);
+		}
 	evfs[e].used = 0;
 	RETURN(0);
 }
 
 static void sceKernelSetEventFlag(void){
-	int e = find_evf(ARG(0)), i;
+	int e = find_evf(ARG(0)), i, last_set = 0;
+	u64 last = 0;
 	if(e < 0){ RETURN(SCE_KERNEL_ERROR_UNKNOWN_EVFID); return; }
 	evfs[e].bits |= ARG(1);
 	RETURN(0);
-	for(i = 0; i < MAX_THREADS; i++){
-		Thread *t = &threads[i];
-		if(t->used && t->status == TH_WAITING && t->wait == W_EVF && t->wait_index == e &&
-		   evf_try(e, t->wait_a, t->wait_b, t->wait_c))
-			wake(i, 0);
+	kernel_eat_cycles(430);
+	/* Por orden de llegada, como PPSSPP: con WAITCLEAR el primero puede
+	   llevarse los bits y el siguiente ya no los ve */
+	for(;;){
+		int best = -1;
+		for(i = 0; i < MAX_THREADS; i++){
+			Thread *t = &threads[i];
+			if(!t->used || t->status != TH_WAITING || t->wait != W_EVF || t->wait_index != e) continue;
+			if(t->wait_seq <= last && last_set) continue;
+			if(best < 0 || t->wait_seq < threads[best].wait_seq) best = i;
+		}
+		if(best < 0) break;
+		last = threads[best].wait_seq;
+		last_set = 1;
+		if(evf_try(e, threads[best].wait_a, threads[best].wait_b, threads[best].wait_c)) wake(best, 0);
 	}
 }
 
@@ -1655,6 +1672,7 @@ static void sceKernelClearEventFlag(void){
 	int e = find_evf(ARG(0));
 	if(e < 0){ RETURN(SCE_KERNEL_ERROR_UNKNOWN_EVFID); return; }
 	evfs[e].bits &= ARG(1);
+	kernel_eat_cycles(430);
 	RETURN(0);
 }
 
@@ -1662,27 +1680,34 @@ static void sceKernelClearEventFlag(void){
 static void wait_evf(void){
 	int e = find_evf(ARG(0));
 	u32 pattern = ARG(1), mode = ARG(2), out = ARG(3), timeout = ARG(4);
-	if(e < 0){ RETURN(SCE_KERNEL_ERROR_UNKNOWN_EVFID); return; }
-	if((mode & ~0x31u) || (mode & 0x30) == 0x30){ RETURN(SCE_KERNEL_ERROR_ILLEGAL_MODE); return; }
+	/* El orden de las comprobaciones es el de la PSP (PPSSPP) */
+	if(mode & ~0x31u){ RETURN(SCE_KERNEL_ERROR_ILLEGAL_MODE); return; }
 	if(!pattern){ RETURN(SCE_KERNEL_ERROR_EVF_ILPAT); return; }
-	if(!(evfs[e].attr & EVF_ATTR_MULTI) && evf_has_waiters(e)){ RETURN(SCE_KERNEL_ERROR_EVF_MULTI); return; }
+	if(!kernel_dispatch_enabled()){ RETURN(SCE_KERNEL_ERROR_CAN_NOT_WAIT); return; }
+	if(e < 0){ RETURN(SCE_KERNEL_ERROR_UNKNOWN_EVFID); return; }
+	kernel_eat_cycles(500);
 	if(evf_try(e, pattern, mode, out)){ RETURN(0); return; }
+	if(!(evfs[e].attr & EVF_ATTR_MULTI) && evf_has_waiters(e)){ RETURN(SCE_KERNEL_ERROR_EVF_MULTI); return; }
 	wait_current(W_EVF, e, timeout);
-	if(cur >= 0){
+	if(cur >= 0 && threads[cur].status == TH_WAITING){
 		threads[cur].wait_a = pattern;
 		threads[cur].wait_b = mode;
-		threads[cur].wait_c = out;
+		/* Con plazo 0 la PSP no escribe los bits */
+		threads[cur].wait_c = (timeout && mem_valid(timeout, 4) && mem_read32(timeout) == 0) ? 0 : out;
 	}
 }
 
 static void sceKernelPollEventFlag(void){
 	int e = find_evf(ARG(0));
 	u32 pattern = ARG(1), mode = ARG(2), out = ARG(3);
-	if(e < 0){ RETURN(SCE_KERNEL_ERROR_UNKNOWN_EVFID); return; }
+	/* El orden de las comprobaciones es el de la PSP (PPSSPP) */
 	if((mode & ~0x31u) || (mode & 0x30) == 0x30){ RETURN(SCE_KERNEL_ERROR_ILLEGAL_MODE); return; }
 	if(!pattern){ RETURN(SCE_KERNEL_ERROR_EVF_ILPAT); return; }
+	kernel_eat_cycles(360);
+	if(e < 0){ RETURN(SCE_KERNEL_ERROR_UNKNOWN_EVFID); return; }
 	if(evf_try(e, pattern, mode, out)){ RETURN(0); return; }
-	if(out) mem_write32(out, evfs[e].bits);
+	if(out && mem_valid(out, 4) && !(out & 3)) mem_write32(out, evfs[e].bits);
+	if(!(evfs[e].attr & EVF_ATTR_MULTI) && evf_has_waiters(e)){ RETURN(SCE_KERNEL_ERROR_EVF_MULTI); return; }
 	RETURN(SCE_KERNEL_ERROR_EVF_COND);
 }
 
