@@ -326,6 +326,7 @@ const NidName nid_names[] = {
 	{ 0x1F94AFD9, "_sce_pspnet_start_of_adhoc_module_in_if_ethersubr_core" },
 	{ 0x1FA4D135, "sceIdStorageWriteLeaf" },
 	{ 0x1FB15A32, "sceKernelSetEventFlag" },
+	{ 0x1FC64E09, "sceKernelLockLwMutexCB" },
 	{ 0x1FF89745, "sceNetAdhocctlJoinEnterGameMode" },
 	{ 0x20388C9E, "sceSysregSircsClkDisable" },
 	{ 0x203CEB0D, "sceRtcGetLastReincarnatedTime" },
@@ -596,6 +597,7 @@ const NidName nid_names[] = {
 	{ 0x36FD8AA9, "sceAudioRoutingSetMode" },
 	{ 0x37295ED8, "sceMpegRingbufferConstruct" },
 	{ 0x373EC933, "sceSysconBatteryGetElec" },
+	{ 0x37431849, "sceKernelTryLockLwMutex_600" },
 	{ 0x377F035F, "sceClkcGetBusGear" },
 	{ 0x37833CB8, "sceIdStorageGetFreeLeaves" },
 	{ 0x37A98AE9, "sce_paf_private_atol" },
@@ -814,6 +816,7 @@ const NidName nid_names[] = {
 	{ 0x4C06E472, "sceGeContinue" },
 	{ 0x4C0E0274, "strrchr" },
 	{ 0x4C0EE2FA, "sceSysconBatteryGetChargeTime" },
+	{ 0x4C145944, "sceKernelReferLwMutexStatusByID" },
 	{ 0x4C14BACA, "sceWlanDrv_lib_4C14BACA" },
 	{ 0x4C34F553, "sceUsbCamGetLensDirection" },
 	{ 0x4C3A362D, "sceKermit_driver_4C3A362D" },
@@ -2134,6 +2137,7 @@ const NidName nid_names[] = {
 	{ 0xC132E22F, "sceMpegQueryMemSize" },
 	{ 0xC1376222, "sceNandGetTotalBlocks" },
 	{ 0xC152080A, "sceCtrlPeekBufferNegative" },
+	{ 0xC1734599, "sceKernelReferLwMutexStatus" },
 	{ 0xC1B4213A, "sceKermitMsfs_driver_C1B4213A" },
 	{ 0xC1DA05D2, "sceSysregAudioClkoutClkEnable" },
 	{ 0xC1E2A540, "sceUsbbdUnregister" },
@@ -2840,4 +2844,4 @@ const NidName nid_names[] = {
 	{ 0xFFC36A14, "sceKernelReferThreadRunStatus" },
 };
 
-const u32 nid_names_count = 2828;
+const u32 nid_names_count = 2832;

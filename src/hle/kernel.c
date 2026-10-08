@@ -178,7 +178,23 @@ static void make_ready(int i){
 }
 
 /* Despierta un hilo en espera con el valor de retorno indicado */
+#define WAIT_TIMEOUT_LATENCY_US  18
+#define WAIT_TIMEOUT_DEADLINE_US 12
+#define SCE_KERNEL_ERROR_WAIT_CANCEL 0x800201A9u
+
+/* Una espera con plazo que acaba antes escribe lo que le quedaba, menos la
+   latencia del temporizador (PPSSPP WriteRemainingTimeout) */
+static void write_remaining_timeout(int i){
+	Thread *t = &threads[i];
+	u64 left;
+	if(t->status != TH_WAITING || !t->has_timeout || !t->timeout_addr || !mem_valid(t->timeout_addr, 4)) return;
+	left = t->wait_until > cpu_cycles ? t->wait_until - cpu_cycles : 0;
+	left = left > WAIT_TIMEOUT_LATENCY_US * CYCLES_PER_US ? left - WAIT_TIMEOUT_LATENCY_US * CYCLES_PER_US : 0;
+	mem_write32(t->timeout_addr, (u32)(left / CYCLES_PER_US));
+}
+
 static void wake(int i, u32 ret){
+	write_remaining_timeout(i);
 	thread_ctx(i)->r[R_V0] = ret;
 	threads[i].cb_wait = threads[i].cb_paused = 0;
 	make_ready(i);
@@ -211,8 +227,12 @@ static void wait_current(int type, int index, u32 timeout_addr){
 	t->timeout_addr = timeout_addr;
 	t->has_timeout = 0;
 	if(timeout_addr && mem_valid(timeout_addr, 4)){
+		/* Como la PSP (PPSSPP __KernelWaitTimeoutUs): al menos 205 us,
+		   más el margen y la latencia del temporizador */
+		u32 us = mem_read32(timeout_addr);
+		if(us < 205) us = 205;
 		t->has_timeout = 1;
-		t->wait_until = cpu_cycles + (u64)mem_read32(timeout_addr) * CYCLES_PER_US;
+		t->wait_until = cpu_cycles + (u64)(us + WAIT_TIMEOUT_DEADLINE_US + WAIT_TIMEOUT_LATENCY_US) * CYCLES_PER_US;
 	}
 	RETURN(0);
 	request_resched();
@@ -822,7 +842,7 @@ static void sceKernelAllocPartitionMemory(void){
 	if(name) mem_read_cstr(name, n, sizeof(n));
 	if(type >= 3){
 		align = addr;
-		if(!align || (align & (align - 1))){ RETURN(SCE_KERNEL_ERROR_ILLEGAL_ATTR); return; }
+		if(!align || (align & (align - 1))){ RETURN(0x800200E4u /* ILLEGAL_ALIGNMENT_SIZE */); return; }
 		if(align < 256) align = 256;
 	}
 	size = (size + 255) & ~255u;
@@ -1456,6 +1476,23 @@ static void sceKernelSignalSema(void){
 	sema_wake_waiters(s);
 }
 
+static void sceKernelCancelSema(void){
+	int s = find_sema(ARG(0)), i, woke = 0;
+	s32 n = (s32)ARG(1);
+	if(s < 0){ RETURN(SCE_KERNEL_ERROR_UNKNOWN_SEMID); return; }
+	if(n > semas[s].max){ RETURN(SCE_KERNEL_ERROR_ILLEGAL_COUNT); return; }
+	if(mem_valid(ARG(2), 4)) mem_write32(ARG(2), (u32)sema_waiters(s));
+	semas[s].count = n < 0 ? semas[s].init : n;
+	for(i = 0; i < MAX_THREADS; i++)
+		if(threads[i].used && threads[i].status == TH_WAITING &&
+		   threads[i].wait == W_SEMA && threads[i].wait_index == s){
+			wake(i, SCE_KERNEL_ERROR_WAIT_CANCEL);
+			woke = 1;
+		}
+	RETURN(0);
+	if(woke) request_resched();
+}
+
 static void wait_sema(void){
 	int s = find_sema(ARG(0));
 	s32 n = (s32)ARG(1);
@@ -1596,6 +1633,24 @@ static void sceKernelSetEventFlag(void){
 	}
 }
 
+static void sceKernelCancelEventFlag(void){
+	int e = find_evf(ARG(0)), i, n = 0;
+	if(e < 0){ RETURN(SCE_KERNEL_ERROR_UNKNOWN_EVFID); return; }
+	for(i = 0; i < MAX_THREADS; i++)
+		if(threads[i].used && threads[i].status == TH_WAITING && threads[i].wait == W_EVF && threads[i].wait_index == e) n++;
+	if(mem_valid(ARG(2), 4) && !(ARG(2) & 3)) mem_write32(ARG(2), (u32)n);
+	evfs[e].bits = ARG(1);
+	for(i = 0; i < MAX_THREADS; i++){
+		Thread *t = &threads[i];
+		if(!t->used || t->status != TH_WAITING || t->wait != W_EVF || t->wait_index != e) continue;
+		if(t->wait_c && mem_valid(t->wait_c, 4)) mem_write32(t->wait_c, evfs[e].bits);
+		wake(i, SCE_KERNEL_ERROR_WAIT_CANCEL);
+	}
+	kernel_eat_cycles(580);
+	RETURN(0);
+	if(n) request_resched();
+}
+
 static void sceKernelClearEventFlag(void){
 	int e = find_evf(ARG(0));
 	if(e < 0){ RETURN(SCE_KERNEL_ERROR_UNKNOWN_EVFID); return; }
@@ -1634,53 +1689,127 @@ static void sceKernelPollEventFlag(void){
 /* ------------------------------------------------------------------ */
 /* LwMutex (mutex ligero: su estado vive en memoria del juego)        */
 /* ------------------------------------------------------------------ */
-/* workarea: s32 count, SceUID owner, u32 attr, s32 waiters, SceUID uid */
+/* Como en PPSSPP (sceKernelMutex.cpp): cada uno es además un objeto del
+   kernel con UID. El workarea (32 bytes) guarda s32 lockLevel, SceUID
+   lockThread, u32 attr, s32 numWaitThreads (no se actualiza), SceUID uid
+   y 3 de relleno. Si el workarea se borra o se reutiliza, el UID ya no
+   existe y la llamada falla en vez de esperar para siempre. */
 
+#define MAX_LWMUTEXES 2048
+#define LWMUTEX_PRIORITY  0x100
 #define LWMUTEX_RECURSIVE 0x200
-
-static void sceKernelCreateLwMutex(void){
-	u32 wa = ARG(0), attr = ARG(2);
-	s32 init = (s32)ARG(3);
-	static int counter;
-	if(!mem_valid(wa, 32)){ RETURN(SCE_KERNEL_ERROR_ILLEGAL_ADDR); return; }
-	mem_write32(wa, (u32)init);
-	mem_write32(wa + 4, init > 0 && cur >= 0 ? thread_uid(cur) : 0);
-	mem_write32(wa + 8, attr);
-	mem_write32(wa + 12, 0);
-	mem_write32(wa + 16, make_uid(UID_LWMUTEX, counter++ & 0x7FFF));
-	RETURN(0);
-}
-
-static void sceKernelDeleteLwMutex(void){
-	if(mem_valid(ARG(0), 32)) mem_write32(ARG(0) + 16, 0);
-	RETURN(0);
-}
-
-/* Toma el lwmutex para el hilo actual: 1 si lo consigue, 0 si hay que
-   esperar; *err != 0 si la llamada es un error (como PPSSPP
-   sceKernelMutex.cpp: volver a tomar uno no recursivo propio es un error,
-   no una espera eterna) */
 #define LWMUTEX_ERROR_NO_SUCH        0x800201CAu
 #define LWMUTEX_ERROR_TRYLOCK_FAILED 0x800201CBu
 #define LWMUTEX_ERROR_NOT_LOCKED     0x800201CCu
 #define LWMUTEX_ERROR_LOCK_OVERFLOW  0x800201CDu
 #define LWMUTEX_ERROR_UNDERFLOW      0x800201CEu
 #define LWMUTEX_ERROR_ALREADY_LOCKED 0x800201CFu
+#define MUTEX_ERROR_TRYLOCK_FAILED   0x800201C4u
+#define SCE_KERNEL_ERROR_ACCESS_ERROR 0x8000020Du
+
+typedef struct {
+	int used;
+	char name[32];
+	u32 attr, uid, workarea;
+	s32 init;
+} LwMutex;
+static LwMutex lwmutexes[MAX_LWMUTEXES];
+static u32 lwmutex_gen;
+
+/* El UID lleva una generación (0-30, en los bits 11-15): el de uno
+   borrado no vale para el que ocupe su sitio */
+static int find_lwmutex(u32 uid){
+	int i = uid_index(uid, UID_LWMUTEX, 0xFFFF);
+	if(i < 0) return -1;
+	i &= 0x7FF;
+	return (i < MAX_LWMUTEXES && lwmutexes[i].used && lwmutexes[i].uid == uid) ? i : -1;
+}
+
+static void sceKernelCreateLwMutex(void){
+	u32 wa = ARG(0), name = ARG(1), attr = ARG(2);
+	s32 init = (s32)ARG(3);
+	int i;
+	if(!name){ RETURN(SCE_KERNEL_ERROR_ERROR); return; }
+	if(attr >= 0x400){ RETURN(SCE_KERNEL_ERROR_ILLEGAL_ATTR); return; }
+	if(init < 0 || (init > 1 && !(attr & LWMUTEX_RECURSIVE))){ RETURN(SCE_KERNEL_ERROR_ILLEGAL_COUNT); return; }
+	if(!mem_valid(wa, 32)){ RETURN(SCE_KERNEL_ERROR_ILLEGAL_ADDR); return; }
+	for(i = 0; i < MAX_LWMUTEXES && lwmutexes[i].used; i++);
+	if(i == MAX_LWMUTEXES){ RETURN(SCE_KERNEL_ERROR_NO_MEMORY); return; }
+	memset(&lwmutexes[i], 0, sizeof(lwmutexes[i]));
+	lwmutexes[i].used = 1;
+	mem_read_cstr(name, lwmutexes[i].name, sizeof(lwmutexes[i].name));
+	lwmutexes[i].attr = attr;
+	lwmutexes[i].workarea = wa;
+	lwmutexes[i].init = init;
+	lwmutexes[i].uid = make_uid(UID_LWMUTEX, (int)((lwmutex_gen++ % 31) << 11) | i);
+	memset(mem_ptr(wa, 32), 0, 32);
+	mem_write32(wa, (u32)init);
+	mem_write32(wa + 4, init && cur >= 0 ? thread_uid(cur) : 0);
+	mem_write32(wa + 8, attr);
+	mem_write32(wa + 16, lwmutexes[i].uid);
+	RETURN(0);
+}
+
+/* El hilo i deja de esperar al lwmutex: con ret = 0 se lo queda */
+static void lwmutex_hand_over(u32 wa, int i, u32 ret){
+	if(ret == 0){
+		mem_write32(wa, threads[i].wait_b);
+		mem_write32(wa + 4, thread_uid(i));
+	}
+	wake(i, ret);
+}
+
+/* El siguiente que espera al lwmutex m: por prioridad o por llegada */
+static int lwmutex_first_waiter(int m){
+	int i, best = -1;
+	for(i = 0; i < MAX_THREADS; i++){
+		Thread *t = &threads[i];
+		if(!t->used || t->status != TH_WAITING || t->wait != W_LWMUTEX || t->wait_index != m) continue;
+		if(best < 0 ||
+		   ((lwmutexes[m].attr & LWMUTEX_PRIORITY) ? t->prio < threads[best].prio : t->wait_seq < threads[best].wait_seq))
+			best = i;
+	}
+	return best;
+}
+
+static void sceKernelDeleteLwMutex(void){
+	u32 wa = ARG(0);
+	int m, i, woke = 0;
+	if(!wa || !mem_valid(wa, 32)){ RETURN(SCE_KERNEL_ERROR_ILLEGAL_ADDR); return; }
+	if((m = find_lwmutex(mem_read32(wa + 16))) < 0){ RETURN(LWMUTEX_ERROR_NO_SUCH); return; }
+	while((i = lwmutex_first_waiter(m)) >= 0){
+		lwmutex_hand_over(wa, i, SCE_KERNEL_ERROR_WAIT_DELETE);
+		woke = 1;
+	}
+	mem_write32(wa, 0);
+	mem_write32(wa + 4, 0xFFFFFFFFu);
+	mem_write32(wa + 16, 0xFFFFFFFFu);
+	lwmutexes[m].used = 0;
+	RETURN(0);
+	if(woke) request_resched();
+}
+
+/* Toma el lwmutex para el hilo actual: 1 si lo consigue, 0 si hay que
+   esperar; *err != 0 si la llamada es un error (volver a tomar uno no
+   recursivo propio es un error, no una espera eterna) */
 static int lwmutex_try(u32 wa, s32 n, u32 *err){
-	s32 count = (s32)mem_read32(wa);
+	s32 level = (s32)mem_read32(wa);
 	u32 owner = mem_read32(wa + 4), attr = mem_read32(wa + 8), me = cur >= 0 ? thread_uid(cur) : 0;
 	*err = 0;
-	if(n <= 0 || (n > 1 && !(attr & LWMUTEX_RECURSIVE))){ *err = SCE_KERNEL_ERROR_ILLEGAL_COUNT; return 0; }
-	if(count + n < 0){ *err = LWMUTEX_ERROR_LOCK_OVERFLOW; return 0; }
-	if(mem_read32(wa + 16) == 0xFFFFFFFFu){ *err = LWMUTEX_ERROR_NO_SUCH; return 0; }
-	if(count == 0){
+	if(n <= 0 || (n > 1 && !(attr & LWMUTEX_RECURSIVE))) *err = SCE_KERNEL_ERROR_ILLEGAL_COUNT;
+	else if(level + n < 0) *err = LWMUTEX_ERROR_LOCK_OVERFLOW;
+	else if(mem_read32(wa + 16) == 0xFFFFFFFFu) *err = LWMUTEX_ERROR_NO_SUCH;
+	if(*err) return 0;
+	if(level == 0){
+		/* Libre, pero si alguien lo tuvo: ¿sigue existiendo? */
+		if(owner != 0 && find_lwmutex(mem_read32(wa + 16)) < 0){ *err = LWMUTEX_ERROR_NO_SUCH; return 0; }
 		mem_write32(wa, (u32)n);
 		mem_write32(wa + 4, me);
 		return 1;
 	}
 	if(owner == me){
 		if(attr & LWMUTEX_RECURSIVE){
-			mem_write32(wa, (u32)(count + n));
+			mem_write32(wa, (u32)(level + n));
 			return 1;
 		}
 		*err = LWMUTEX_ERROR_ALREADY_LOCKED;
@@ -1689,53 +1818,90 @@ static int lwmutex_try(u32 wa, s32 n, u32 *err){
 }
 
 static void sceKernelLockLwMutex(void){
-	u32 wa = ARG(0);
+	u32 wa = ARG(0), err;
 	s32 n = (s32)ARG(1);
-	if(!mem_valid(wa, 32)){ RETURN(SCE_KERNEL_ERROR_ILLEGAL_ADDR); return; }
-	u32 err;
+	int m;
+	if(kernel_in_interrupt()){ RETURN(SCE_KERNEL_ERROR_ILLEGAL_CONTEXT); return; }
+	if(!kernel_dispatch_enabled()){ RETURN(SCE_KERNEL_ERROR_CAN_NOT_WAIT); return; }
+	if(!mem_valid(wa, 32)){ RETURN(SCE_KERNEL_ERROR_ACCESS_ERROR); return; }
+	kernel_eat_cycles(48);
 	if(lwmutex_try(wa, n, &err)){ RETURN(0); return; }
 	if(err){ RETURN(err); return; }
-	wait_current(W_LWMUTEX, 0, ARG(2));
-	if(cur >= 0){ threads[cur].wait_a = wa; threads[cur].wait_b = (u32)n; }
-	mem_write32(wa + 12, mem_read32(wa + 12) + 1);
+	if((m = find_lwmutex(mem_read32(wa + 16))) < 0){ RETURN(LWMUTEX_ERROR_NO_SUCH); return; }
+	wait_current(W_LWMUTEX, m, ARG(2));
+	if(cur >= 0) threads[cur].wait_b = (u32)n;
 }
 
 static void sceKernelTryLockLwMutex(void){
-	u32 wa = ARG(0);
-	if(!mem_valid(wa, 32)){ RETURN(SCE_KERNEL_ERROR_ILLEGAL_ADDR); return; }
-	u32 err;
+	u32 wa = ARG(0), err;
+	if(!mem_valid(wa, 32)){ RETURN(SCE_KERNEL_ERROR_ACCESS_ERROR); return; }
+	kernel_eat_cycles(24);
 	/* Sea cual sea el motivo, el mismo error (PPSSPP) */
-	RETURN(lwmutex_try(wa, (s32)ARG(1), &err) ? 0 : 0x800201C4u /* TRYLOCK_FAILED */);
+	RETURN(lwmutex_try(wa, (s32)ARG(1), &err) ? 0 : MUTEX_ERROR_TRYLOCK_FAILED);
+}
+
+static void sceKernelTryLockLwMutex_600(void){
+	u32 wa = ARG(0), err;
+	if(!mem_valid(wa, 32)){ RETURN(SCE_KERNEL_ERROR_ACCESS_ERROR); return; }
+	kernel_eat_cycles(24);
+	if(lwmutex_try(wa, (s32)ARG(1), &err)) RETURN(0);
+	else RETURN(err ? err : LWMUTEX_ERROR_TRYLOCK_FAILED);
 }
 
 static void sceKernelUnlockLwMutex(void){
 	u32 wa = ARG(0);
-	s32 n = (s32)ARG(1), count;
-	int i;
-	if(!mem_valid(wa, 32)){ RETURN(SCE_KERNEL_ERROR_ILLEGAL_ADDR); return; }
+	s32 n = (s32)ARG(1), level;
+	int m, i;
+	if(!mem_valid(wa, 32)){ RETURN(SCE_KERNEL_ERROR_ACCESS_ERROR); return; }
+	kernel_eat_cycles(28);
+	level = (s32)mem_read32(wa);
 	if(mem_read32(wa + 16) == 0xFFFFFFFFu){ RETURN(LWMUTEX_ERROR_NO_SUCH); return; }
 	if(n <= 0 || (n > 1 && !(mem_read32(wa + 8) & LWMUTEX_RECURSIVE))){ RETURN(SCE_KERNEL_ERROR_ILLEGAL_COUNT); return; }
-	count = (s32)mem_read32(wa);
-	if(count == 0 || mem_read32(wa + 4) != (cur >= 0 ? thread_uid(cur) : 0)){ RETURN(LWMUTEX_ERROR_NOT_LOCKED); return; }
-	if(count < n){ RETURN(LWMUTEX_ERROR_UNDERFLOW); return; }
-	count -= n;
-	mem_write32(wa, (u32)count);
+	if(level == 0 || mem_read32(wa + 4) != (cur >= 0 ? thread_uid(cur) : 0)){ RETURN(LWMUTEX_ERROR_NOT_LOCKED); return; }
+	if(level < n){ RETURN(LWMUTEX_ERROR_UNDERFLOW); return; }
+	level -= n;
+	mem_write32(wa, (u32)level);
 	RETURN(0);
-	if(count) return;
-	mem_write32(wa + 4, 0);
-	for(i = 0; i < MAX_THREADS; i++){
-		Thread *t = &threads[i];
-		if(t->used && t->status == TH_WAITING && t->wait == W_LWMUTEX && t->wait_a == wa){
-			int prev = cur;
-			cur = i; /* el dueño será el hilo despertado */
-			u32 err;
-			lwmutex_try(wa, (s32)t->wait_b, &err);
-			cur = prev;
-			mem_write32(wa + 12, mem_read32(wa + 12) - 1);
-			wake(i, 0);
-			break;
-		}
-	}
+	if(level) return;
+	/* Pasa al primero que espera; si no hay nadie (o ya no existe), libre */
+	m = find_lwmutex(mem_read32(wa + 16));
+	if(m >= 0 && (i = lwmutex_first_waiter(m)) >= 0){
+		lwmutex_hand_over(wa, i, 0);
+		request_resched();
+	} else
+		mem_write32(wa + 4, 0);
+}
+
+/* SceKernelLwMutexInfo: size, name[32], attr, uid, workarea, initCount,
+   currentCount, lockThread, numWaitThreads (64 bytes) */
+static u32 lwmutex_refer(u32 uid, u32 info){
+	int m = find_lwmutex(uid), i, waiting = 0;
+	u32 wa, owner;
+	if(m < 0) return LWMUTEX_ERROR_NO_SUCH;
+	if(!mem_valid(info, 64)) return 0xFFFFFFFFu;
+	if(!mem_read32(info)) return 0;
+	wa = lwmutexes[m].workarea;
+	owner = mem_read32(wa + 4);
+	for(i = 0; i < MAX_THREADS; i++)
+		if(threads[i].used && threads[i].status == TH_WAITING && threads[i].wait == W_LWMUTEX && threads[i].wait_index == m)
+			waiting++;
+	memset(mem_ptr(info, 64), 0, 64);
+	mem_write32(info, 64);
+	memcpy(mem_ptr(info + 4, 32), lwmutexes[m].name, strnlen(lwmutexes[m].name, 31));
+	mem_write32(info + 36, lwmutexes[m].attr);
+	mem_write32(info + 40, lwmutexes[m].uid);
+	mem_write32(info + 44, wa);
+	mem_write32(info + 48, (u32)lwmutexes[m].init);
+	mem_write32(info + 52, mem_read32(wa));
+	mem_write32(info + 56, owner ? owner : 0xFFFFFFFFu);
+	mem_write32(info + 60, (u32)waiting);
+	return 0;
+}
+
+static void sceKernelReferLwMutexStatusByID(void){ RETURN(lwmutex_refer(ARG(0), ARG(1))); }
+static void sceKernelReferLwMutexStatus(void){
+	if(!mem_valid(ARG(0), 32)){ RETURN(SCE_KERNEL_ERROR_ACCESS_ERROR); return; }
+	RETURN(lwmutex_refer(mem_read32(ARG(0) + 16), ARG(1)));
 }
 
 /* ------------------------------------------------------------------ */
@@ -1744,7 +1910,6 @@ static void sceKernelUnlockLwMutex(void){
 
 #define MAX_FPLS 64
 #define SCE_KERNEL_ERROR_UNKNOWN_FPLID 0x8002019Du
-#define SCE_KERNEL_ERROR_WAIT_CANCEL   0x800201A9u
 #define SCE_KERNEL_ERROR_ILLEGAL_FPL_BLOCK 0x800201B6u
 #define FPL_ATTR_PRIORITY 0x100
 #define FPL_ATTR_HIGHMEM  0x4000
@@ -1974,11 +2139,11 @@ static void recheck_wait(int i){
 			wake(i, threads[t->wait_index].exit_status);
 		break;
 	case W_LWMUTEX: {
-		u32 err;
-		if(lwmutex_try(t->wait_a, (s32)t->wait_b, &err)){
-			mem_write32(t->wait_a + 12, mem_read32(t->wait_a + 12) - 1);
-			wake(i, 0);
-		}
+		int m = t->wait_index;
+		u32 wa;
+		if(!lwmutexes[m].used){ wake(i, SCE_KERNEL_ERROR_WAIT_DELETE); break; }
+		wa = lwmutexes[m].workarea;
+		if(mem_read32(wa) == 0) lwmutex_hand_over(wa, i, 0);
 		break;
 	}
 	case W_FPL: {
@@ -2118,16 +2283,19 @@ static void resume_after_callbacks(void){
 /* Las variantes CB de las esperas: la espera empieza y, si hay callbacks
    pendientes, se ejecutan ya (con la espera en pausa), como PPSSPP
    (hleCheckCurrentCallbacks + __KernelForceCallbacks) */
-void kernel_cb_wait(void (*fn)(void)){
+static void cb_wait(void (*fn)(void), int only_if_waiting){
 	Thread *t;
 	int k;
 	fn();
 	t = current();
 	if(!t) return;
 	if(t->status == TH_WAITING) t->cb_wait = 1;
+	else if(only_if_waiting) return;
 	if(!can_run_callbacks() || (k = next_pending_callback(cur)) < 0) return;
 	start_callback(k);
 }
+
+void kernel_cb_wait(void (*fn)(void)){ cb_wait(fn, 0); }
 
 static void sceKernelCreateCallback(void){
 	u32 name = ARG(0), entry = ARG(1);
@@ -2217,7 +2385,8 @@ static void cb_wait_thread_end(void){ kernel_cb_wait(sceKernelWaitThreadEnd); }
 static void cb_wait_sema(void){ kernel_cb_wait(wait_sema); }
 static void cb_wait_evf(void){ kernel_cb_wait(wait_evf); }
 static void cb_allocate_fpl(void){ kernel_cb_wait(sceKernelAllocateFpl); }
-static void cb_lock_lwmutex(void){ kernel_cb_wait(sceKernelLockLwMutex); }
+/* Si lo toma sin esperar, los callbacks no se atienden (PPSSPP) */
+static void cb_lock_lwmutex(void){ cb_wait(sceKernelLockLwMutex, 1); }
 
 
 static void sceKernelStdin(void){ RETURN(0); }
@@ -2280,6 +2449,7 @@ void kernel_init(const PspModule *mod, const char *exec_path){
 	memset(threads, 0, sizeof(threads));
 	for(i = 0; i < MAX_FPLS; i++) free(fpls[i].taken);
 	memset(fpls, 0, sizeof(fpls));
+	memset(lwmutexes, 0, sizeof(lwmutexes));
 	memset(semas, 0, sizeof(semas));
 	memset(evfs, 0, sizeof(evfs));
 	memset(blocks, 0, sizeof(blocks));
@@ -2382,7 +2552,10 @@ void kernel_dump_state(void){
 				break;
 			case W_FPL: snprintf(det, sizeof(det), "fpl \"%s\"", fpls[t->wait_index].name); break;
 			case W_VBLANK: snprintf(det, sizeof(det), "vblank"); break;
-			case W_LWMUTEX: snprintf(det, sizeof(det), "lwmutex %08X", t->wait_a); break;
+			case W_LWMUTEX:
+				snprintf(det, sizeof(det), "lwmutex \"%s\" (%08X)", lwmutexes[t->wait_index].name,
+				         lwmutexes[t->wait_index].workarea);
+				break;
 			case W_GEDRAW: snprintf(det, sizeof(det), "GE drawsync"); break;
 			case W_GELIST: snprintf(det, sizeof(det), "GE lista %d", t->wait_index); break;
 			case W_MODULE: snprintf(det, sizeof(det), "module_start del hilo \"%s\"", threads[t->wait_index].name); break;
@@ -2478,6 +2651,7 @@ static const HleFunction thread_man[] = {
 	{ "sceKernelReferEventFlagStatus", sceKernelReferEventFlagStatus },
 	{ "sceKernelCreateLwMutex", sceKernelCreateLwMutex },
 	{ "sceKernelDeleteLwMutex", sceKernelDeleteLwMutex },
+	{ "sceKernelReferLwMutexStatusByID", sceKernelReferLwMutexStatusByID },
 	{ "sceKernelCreateCallback", sceKernelCreateCallback },
 	{ "sceKernelDeleteCallback", sceKernelDeleteCallback },
 	{ "sceKernelCheckCallback", sceKernelCheckCallback },
@@ -2492,6 +2666,8 @@ static const HleFunction thread_man[] = {
 	{ "sceKernelTryAllocateFpl", sceKernelTryAllocateFpl },
 	{ "sceKernelFreeFpl", sceKernelFreeFpl },
 	{ "sceKernelCancelFpl", sceKernelCancelFpl },
+	{ "sceKernelCancelSema", sceKernelCancelSema },
+	{ "sceKernelCancelEventFlag", sceKernelCancelEventFlag },
 	{ "sceKernelReferFplStatus", sceKernelReferFplStatus },
 	{ "sceKernelSuspendThread", sceKernelSuspendThread },
 	{ "sceKernelResumeThread", sceKernelResumeThread },
@@ -2509,6 +2685,8 @@ static const HleFunction kernel_library[] = {
 	{ "sceKernelLockLwMutex", sceKernelLockLwMutex },
 	{ "sceKernelLockLwMutexCB", cb_lock_lwmutex },
 	{ "sceKernelTryLockLwMutex", sceKernelTryLockLwMutex },
+	{ "sceKernelTryLockLwMutex_600", sceKernelTryLockLwMutex_600 },
+	{ "sceKernelReferLwMutexStatus", sceKernelReferLwMutexStatus },
 	{ "sceKernelUnlockLwMutex", sceKernelUnlockLwMutex },
 };
 

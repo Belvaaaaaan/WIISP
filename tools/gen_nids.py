@@ -188,6 +188,10 @@ EXTRA = {
     0xF8EF08A6: 'scePsmfPlayerGetCurrentStatus',
     0xFCBDB5AD: 'sceMpegAvcResourceInit',
     0x6AF9B50A: 'sceUmdCancelWaitDriveStat',
+    0x1FC64E09: 'sceKernelLockLwMutexCB',
+    0x37431849: 'sceKernelTryLockLwMutex_600',
+    0xC1734599: 'sceKernelReferLwMutexStatus',
+    0x4C145944: 'sceKernelReferLwMutexStatusByID',
 }
 for nid, name in EXTRA.items():
     # Los stubs dejan sin nombre algunos NID ("lib_NID"): ahí manda EXTRA
