@@ -46,7 +46,7 @@ static u32 str(const char *s){
 void test_io(void){
 	static u8 iso[1 << 17];
 	int n = gunzip(iso_gz, sizeof(iso_gz), iso, sizeof(iso)), ok;
-	u32 fd, i, lba, r;
+	u32 fd, i, lba;
 	FILE *f;
 	char lbn[64];
 
@@ -222,18 +222,18 @@ void test_io(void){
 	call("sceIoClose", fd, 0, 0, 0, 0, 0);
 	CHECK_EQ(call("sceIoRemove", str("ms0:/io_test.txt"), 0, 0, 0, 0, 0), 0);
 
-	/* sceUmd */
+	/* sceUmd: empieza activado (PPSSPP); desactivado ya no es legible */
 	CHECK_EQ(call("sceUmdCheckMedium", 0, 0, 0, 0, 0, 0), 1);
-	CHECK_EQ(call("sceUmdGetDriveStat", 0, 0, 0, 0, 0, 0), 0x12);
-	CHECK_EQ(call("sceUmdActivate", 1, str("disc0:"), 0, 0, 0, 0), 0);
 	CHECK_EQ(call("sceUmdGetDriveStat", 0, 0, 0, 0, 0, 0), 0x32);
+	CHECK_EQ(call("sceUmdDeactivate", 1, str("disc0:"), 0, 0, 0, 0), 0);
+	CHECK_EQ(call("sceUmdGetDriveStat", 0, 0, 0, 0, 0, 0), 0x12);
+	CHECK_EQ(call("sceUmdActivate", 1, str("disc1:"), 0, 0, 0, 0), 0x80010016u);
+	CHECK_EQ(call("sceUmdActivate", 1, str("disc0:"), 0, 0, 0, 0), 0);
 	mem_write32(RES, 8);
 	CHECK_EQ(call("sceUmdGetDiscInfo", RES, 0, 0, 0, 0, 0), 0);
 	CHECK_EQ(mem_read32(RES + 4), 0x10);
 
 	io_shutdown();
 	disc_close();
-	r = call("sceUmdCheckMedium", 0, 0, 0, 0, 0, 0);
-	CHECK_EQ(r, 0);
 	remove("build-pc/io.iso");
 }

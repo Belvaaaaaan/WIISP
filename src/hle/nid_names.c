@@ -1158,7 +1158,7 @@ const NidName nid_names[] = {
 	{ 0x6A7900E1, "strtoul" },
 	{ 0x6A8C3CD5, "sceAtracDecodeData" },
 	{ 0x6AD345D7, "sceKernelSetGPO" },
-	{ 0x6AF9B50A, "sceUmd_6AF9B50A" },
+	{ 0x6AF9B50A, "sceUmdCancelWaitDriveStat" },
 	{ 0x6B01D71B, "sceSysregAtaClkEnable" },
 	{ 0x6B1E90C7, "InputDevice_PspPad_Lock" },
 	{ 0x6B2371C2, "sceKernelDeleteModule" },

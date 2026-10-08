@@ -102,6 +102,8 @@ static u32 umd_callback;   /* sceUmdRegisterUMDCallBack: solo hay uno */
 
 /* Callbacks de inserción de la Memory Stick (sceIoDevctl): la tarjeta
    siempre está puesta (es la SD o el USB), así que se avisan al registrarlos */
+static u32 umd_recheck(u32 stat, int *done);
+
 #define MAX_MS_CALLBACKS 32
 static u32 ms_callbacks[2][MAX_MS_CALLBACKS];   /* [0] mscmhc0:, [1] fatms0: */
 
@@ -109,8 +111,9 @@ void io_init(const char *dir, int boot_from_disc){
 	io_shutdown();
 	snprintf(host_dir, sizeof(host_dir), "%s", dir && dir[0] ? dir : ".");
 	snprintf(cwd, sizeof(cwd), "%s", boot_from_disc ? "disc0:/PSP_GAME/USRDIR" : "ms0:/");
-	umd_activated = 0;
+	umd_activated = 1;
 	umd_callback = 0;
+	kernel_set_wait_recheck(KWAIT_UMD, umd_recheck);
 	memset(ms_callbacks, 0, sizeof(ms_callbacks));
 }
 
@@ -994,28 +997,56 @@ static void sceIoCancel(void){ RETURN(get_file(ARG(0)) ? SCE_KERNEL_ERROR_UNSUP 
 #define PSP_UMD_READY       0x10
 #define PSP_UMD_READABLE    0x20
 
+/* Como en PPSSPP (sceUmd.cpp): el disco está siempre puesto y listo, y el
+   UMD empieza activado. sceUmdActivate tarda 4 ms en dejarlo legible. */
+#define UMD_STAT_ALLOW_WAIT 0x3B   /* NOT_PRESENT|PRESENT|NOT_READY|READY|READABLE */
+#define UMD_ACTIVATE_US     4000
+#define SCE_KERNEL_ERROR_ILLEGAL_CONTEXT 0x80020064u
+#define SCE_KERNEL_ERROR_CAN_NOT_WAIT    0x800201A7u
+#define SCE_KERNEL_ERROR_WAIT_CANCEL     0x800201A9u
+
 static u32 umd_state(void){
-	u32 s;
-	if(!disc_is_open()) return PSP_UMD_NOT_PRESENT;
-	s = PSP_UMD_PRESENT | PSP_UMD_READY;
+	u32 s = PSP_UMD_PRESENT | PSP_UMD_READY;
 	if(umd_activated) s |= PSP_UMD_READABLE;
 	return s;
 }
 
-static void sceUmdCheckMedium(void){ RETURN(disc_is_open() ? 1 : 0); }
+/* Tras un cambio de estado despiertan los que esperaban alguno de sus bits */
+static void umd_stat_change(u64 activated){
+	umd_activated = activated != 0;
+	kernel_wake_object_mask(KWAIT_UMD, umd_state(), 0);
+}
+
+/* Tras los callbacks de una espera CB: sigue esperando si nada cambió */
+static u32 umd_recheck(u32 stat, int *done){
+	*done = (stat & umd_state()) != 0;
+	return 0;
+}
+
+static void sceUmdCheckMedium(void){ RETURN(1); }
 static void sceUmdActivate(void){
+	char name[8] = "";
+	u32 p = ARG(1);
 	if(ARG(0) < 1 || ARG(0) > 2){ RETURN(SCE_ERRNO_INVALID_ARGUMENT); return; }
-	umd_activated = 1;
-	/* Avisa al callback del UMD, como la PSP (PPSSPP sceUmd.cpp): listo
-	   solo si el juego declara versión de SDK */
+	if(p && mem_valid(p, 1)) mem_read_cstr(p, name, sizeof(name));
+	if(strcmp(name, "disc0:") || (p & 0x80000000u)){ RETURN(SCE_ERRNO_INVALID_ARGUMENT); return; }
+	/* Avisa al callback del UMD, como la PSP: listo solo si el juego
+	   declara versión de SDK */
 	if(umd_callback)
 		kernel_notify_callback(umd_callback, (s32)(PSP_UMD_PRESENT | PSP_UMD_READABLE |
 		                                           (kernel_sdk_version() ? PSP_UMD_READY : 0)));
+	/* El disco "arranca": no es legible en el acto */
+	kernel_unschedule_event(umd_stat_change, 1);
+	kernel_unschedule_event(umd_stat_change, 0);
+	kernel_schedule_event(cpu_cycles + (u64)UMD_ACTIVATE_US * CYCLES_PER_US, umd_stat_change, 1);
 	RETURN(0);
 }
 static void sceUmdDeactivate(void){
-	umd_activated = 0;
+	u32 mode = ARG(0), p = ARG(1);
+	if(mode > 18 || (mode == 2 && !p) || (p & 0x80000000u)){ RETURN(SCE_ERRNO_INVALID_ARGUMENT); return; }
 	if(umd_callback) kernel_notify_callback(umd_callback, (s32)(PSP_UMD_PRESENT | PSP_UMD_READY));
+	kernel_unschedule_event(umd_stat_change, 1);
+	umd_stat_change(0);
 	RETURN(0);
 }
 
@@ -1027,14 +1058,42 @@ static void sceUmdRegisterUMDCallBack(void){
 
 static void sceUmdUnRegisterUMDCallBack(void){
 	u32 cb = ARG(0);
-	if(!cb || cb != umd_callback){ RETURN(SCE_ERRNO_INVALID_ARGUMENT); return; }
+	if(cb != umd_callback){ RETURN(SCE_ERRNO_INVALID_ARGUMENT); return; }
 	umd_callback = 0;
 	RETURN(kernel_sdk_version() > 0x3000000 ? 0 : cb);
 }
 static void sceUmdGetDriveStat(void){ RETURN(umd_state()); }
-/* Las esperas acaban en el acto: el disco está siempre listo */
-static void sceUmdWaitDriveStat(void){ RETURN(0); }
-static void sceUmdWaitDriveStatCB(void){ kernel_cb_wait(sceUmdWaitDriveStat); }
+
+/* Las tres esperas del estado del disco. timeout = 0: sin límite (el
+   firmware espera un event flag de mediaman.prx). Devuelve 1 si el hilo
+   se quedó esperando. */
+static int umd_wait(u32 stat, u32 timeout, int with_timer, int cb){
+	if(!(stat & UMD_STAT_ALLOW_WAIT)){ RETURN(SCE_ERRNO_INVALID_ARGUMENT); return 0; }
+	if(!kernel_dispatch_enabled()){ RETURN(SCE_KERNEL_ERROR_CAN_NOT_WAIT); return 0; }
+	if(kernel_in_interrupt()){ RETURN(SCE_KERNEL_ERROR_ILLEGAL_CONTEXT); return 0; }
+	kernel_eat_cycles(520);
+	RETURN(0);
+	if(stat & umd_state()){
+		if(with_timer) kernel_reschedule();
+		return 0;
+	}
+	/* Medido en una PSP: el mínimo es 240 us (25 us para 1 sin CB) */
+	if(with_timer && timeout){
+		if(timeout <= 1 && !cb) timeout = 25;
+		else if(timeout <= 209) timeout = 240;
+		kernel_wait_object_timeout(KWAIT_UMD, stat, timeout);
+	} else
+		kernel_wait_object(KWAIT_UMD, stat);
+	return 1;
+}
+static void sceUmdWaitDriveStat(void){ umd_wait(ARG(0), 0, 0, 0); }
+static void sceUmdWaitDriveStatWithTimer(void){ umd_wait(ARG(0), ARG(1), 1, 0); }
+static void umd_wait_cb(void){ umd_wait(ARG(0), ARG(1), 1, 1); }
+static void sceUmdWaitDriveStatCB(void){ kernel_cb_wait(umd_wait_cb); }
+static void sceUmdCancelWaitDriveStat(void){
+	kernel_wake_object_mask(KWAIT_UMD, ~0u, SCE_KERNEL_ERROR_WAIT_CANCEL);
+	RETURN(0);
+}
 static void sceUmdGetDiscInfo(void){
 	u32 p = ARG(0);
 	if(!mem_valid(p, 8) || mem_read32(p) != 8){ RETURN(SCE_ERRNO_INVALID_ARGUMENT); return; }
@@ -1082,9 +1141,9 @@ static const HleFunction umd_user[] = {
 	{ "sceUmdDeactivate", sceUmdDeactivate },
 	{ "sceUmdGetDriveStat", sceUmdGetDriveStat },
 	{ "sceUmdWaitDriveStat", sceUmdWaitDriveStat },
-	{ "sceUmdWaitDriveStatWithTimer", sceUmdWaitDriveStat },
+	{ "sceUmdWaitDriveStatWithTimer", sceUmdWaitDriveStatWithTimer },
 	{ "sceUmdWaitDriveStatCB", sceUmdWaitDriveStatCB },
-	{ "sceUmdCancelWaitDriveStat", umd_zero },
+	{ "sceUmdCancelWaitDriveStat", sceUmdCancelWaitDriveStat },
 	{ "sceUmdGetDiscInfo", sceUmdGetDiscInfo },
 	{ "sceUmdRegisterUMDCallBack", sceUmdRegisterUMDCallBack },
 	{ "sceUmdUnRegisterUMDCallBack", sceUmdUnRegisterUMDCallBack },

@@ -187,7 +187,10 @@ threads/semaphores/priority
 threads/semaphores/semaphores
 threads/threads/threads
 threads/wakeup/wakeup
+umd/api/api
 umd/callbacks/umd
+umd/register
+umd/wait/wait
 utility/dialog/abort
 utility/dialog/htmlviewer
 utility/dialog/priority

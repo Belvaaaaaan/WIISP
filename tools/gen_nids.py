@@ -187,8 +187,12 @@ EXTRA = {
     0xF6837A1A: 'sceAtracSetMOutData',
     0xF8EF08A6: 'scePsmfPlayerGetCurrentStatus',
     0xFCBDB5AD: 'sceMpegAvcResourceInit',
+    0x6AF9B50A: 'sceUmdCancelWaitDriveStat',
 }
 for nid, name in EXTRA.items():
+    # Los stubs dejan sin nombre algunos NID ("lib_NID"): ahí manda EXTRA
+    if names.get(nid, '').endswith('_%08X' % nid):
+        names[nid] = name
     names.setdefault(nid, name)
 
 out = sys.stdout
