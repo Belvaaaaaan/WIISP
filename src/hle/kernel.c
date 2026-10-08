@@ -32,7 +32,7 @@
 /* UIDs                                                               */
 /* ------------------------------------------------------------------ */
 
-enum { UID_THREAD = 1, UID_SEMA, UID_EVF, UID_MEMBLOCK, UID_CALLBACK, UID_LWMUTEX, UID_FPL };
+enum { UID_THREAD = 1, UID_SEMA, UID_EVF, UID_MEMBLOCK, UID_CALLBACK, UID_LWMUTEX, UID_FPL, UID_MUTEX };
 
 /* UID = 0x04 tipo índice+1: positivo y fácil de reconocer en los logs */
 static inline u32 make_uid(int type, int index){ return 0x04000000u | ((u32)type << 16) | (u32)(index + 1); }
@@ -55,7 +55,7 @@ enum {
 enum {
 	W_NONE = 0, W_SLEEP = 1, W_DELAY = 2, W_SEMA = 3, W_EVF = 4, W_THREADEND = 9,
 	W_FPL = 10,
-	W_VBLANK = 100, W_LWMUTEX = 101, W_GEDRAW = 102, W_GELIST = 103,
+	W_VBLANK = 100, W_LWMUTEX = 101, W_MUTEX = 106, W_GEDRAW = 102, W_GELIST = 103,
 	W_MODULE = 104,     /* sceKernelStartModule: espera el fin de module_start */
 	W_HLE = 200         /* + tipo: esperas genéricas del HLE (kernel_wait_object) */
 };
@@ -275,6 +275,7 @@ static void schedule(void){
 }
 
 static void exit_thread(int i, u32 status, int del);
+static void mutex_thread_end(int i);
 static void evf_timeout(Thread *t);
 
 /* Despierta las esperas vencidas */
@@ -1027,6 +1028,7 @@ static void exit_thread(int i, u32 status, int del){
 	threads[i].status = TH_DORMANT;
 	threads[i].wait = W_NONE;
 	threads[i].exit_status = status;
+	mutex_thread_end(i);   /* los mutex que tenía se sueltan */
 	for(j = 0; j < MAX_THREADS; j++){
 		if(!threads[j].used || threads[j].status != TH_WAITING || threads[j].wait_index != i) continue;
 		if(threads[j].wait == W_THREADEND) wake(j, status);
@@ -1279,8 +1281,10 @@ static void sceKernelSleepThread(void){
 }
 
 static void sceKernelWakeupThread(void){
-	int i = find_thread(ARG(0));
+	int i = ARG(0) ? find_thread(ARG(0)) : -1;
 	if(i < 0){ RETURN(SCE_KERNEL_ERROR_UNKNOWN_THID); return; }
+	/* No se puede despertar a sí mismo (PPSSPP) */
+	if(i == cur){ RETURN(0x80020197u /* ILLEGAL_THID */); return; }
 	if(threads[i].status == TH_DORMANT){ RETURN(SCE_KERNEL_ERROR_DORMANT); return; }
 	if(threads[i].status == TH_WAITING && threads[i].wait == W_SLEEP) wake(i, 0);
 	else threads[i].wakeup_count++;
@@ -1930,6 +1934,203 @@ static void sceKernelReferLwMutexStatus(void){
 }
 
 /* ------------------------------------------------------------------ */
+/* Mutex (objetos del kernel)                                         */
+/* ------------------------------------------------------------------ */
+/* Como PPSSPP (sceKernelMutex.cpp). Al terminar un hilo, los mutex que
+   tenía se sueltan y pasan al siguiente que espera. */
+
+#define MAX_MUTEXES 1024
+#define MUTEX_ERROR_NO_SUCH          0x800201C3u
+#define MUTEX_ERROR_NOT_LOCKED       0x800201C5u
+#define MUTEX_ERROR_LOCK_OVERFLOW    0x800201C6u
+#define MUTEX_ERROR_UNLOCK_UNDERFLOW 0x800201C7u
+#define MUTEX_ERROR_ALREADY_LOCKED   0x800201C8u
+
+typedef struct {
+	int used;
+	char name[32];
+	u32 attr;
+	s32 init, level;
+	int owner;          /* hilo que lo tiene, o -1 */
+} Mutex;
+static Mutex mutexes[MAX_MUTEXES];
+
+static int find_mutex(u32 uid){
+	int i = uid_index(uid, UID_MUTEX, MAX_MUTEXES);
+	return (i >= 0 && mutexes[i].used) ? i : -1;
+}
+
+static int mutex_first_waiter(int m){
+	int i, best = -1;
+	for(i = 0; i < MAX_THREADS; i++){
+		Thread *t = &threads[i];
+		if(!t->used || t->status != TH_WAITING || t->wait != W_MUTEX || t->wait_index != m) continue;
+		if(best < 0 ||
+		   ((mutexes[m].attr & LWMUTEX_PRIORITY) ? t->prio < threads[best].prio : t->wait_seq < threads[best].wait_seq))
+			best = i;
+	}
+	return best;
+}
+
+static int mutex_waiters(int m){
+	int i, n = 0;
+	for(i = 0; i < MAX_THREADS; i++)
+		if(threads[i].used && threads[i].status == TH_WAITING && threads[i].wait == W_MUTEX && threads[i].wait_index == m) n++;
+	return n;
+}
+
+/* Libre: pasa al primero que espera (con lo que pidió), o queda sin dueño */
+static int mutex_release(int m){
+	int i = mutex_first_waiter(m);
+	if(i < 0){ mutexes[m].owner = -1; return 0; }
+	mutexes[m].owner = i;
+	mutexes[m].level = (s32)threads[i].wait_b;
+	wake(i, 0);
+	return 1;
+}
+
+static void mutex_thread_end(int i){
+	int m;
+	for(m = 0; m < MAX_MUTEXES; m++)
+		if(mutexes[m].used && mutexes[m].owner == i && mutexes[m].level){
+			mutexes[m].level = 0;
+			mutex_release(m);
+		}
+}
+
+/* ¿Se puede tomar? 1 sí, 0 hay que esperar; *err si es un error */
+static int mutex_check(int m, s32 n, u32 *err){
+	int recursive = (mutexes[m].attr & LWMUTEX_RECURSIVE) != 0;
+	*err = 0;
+	if(n <= 0 || (n > 1 && !recursive)) *err = SCE_KERNEL_ERROR_ILLEGAL_COUNT;
+	else if(n + mutexes[m].level < 0) *err = MUTEX_ERROR_LOCK_OVERFLOW;
+	else if(mutexes[m].owner == cur && mutexes[m].level){
+		if(recursive) return 1;
+		*err = MUTEX_ERROR_ALREADY_LOCKED;
+	} else if(mutexes[m].level == 0) return 1;
+	return 0;
+}
+
+static int mutex_lock(int m, s32 n, u32 *err){
+	if(!mutex_check(m, n, err)) return 0;
+	if(mutexes[m].level == 0) mutexes[m].level = n;
+	else mutexes[m].level += n;
+	mutexes[m].owner = cur;
+	return 1;
+}
+
+static void sceKernelCreateMutex(void){
+	u32 name = ARG(0), attr = ARG(1);
+	s32 init = (s32)ARG(2);
+	int i;
+	if(!name){ RETURN(SCE_KERNEL_ERROR_ERROR); return; }
+	if(attr & ~0xBFFu){ RETURN(SCE_KERNEL_ERROR_ILLEGAL_ATTR); return; }
+	if(init < 0 || (init > 1 && !(attr & LWMUTEX_RECURSIVE))){ RETURN(SCE_KERNEL_ERROR_ILLEGAL_COUNT); return; }
+	for(i = 0; i < MAX_MUTEXES && mutexes[i].used; i++);
+	if(i == MAX_MUTEXES){ RETURN(SCE_KERNEL_ERROR_NO_MEMORY); return; }
+	memset(&mutexes[i], 0, sizeof(mutexes[i]));
+	mutexes[i].used = 1;
+	mem_read_cstr(name, mutexes[i].name, sizeof(mutexes[i].name));
+	mutexes[i].attr = attr;
+	mutexes[i].init = mutexes[i].level = init;
+	mutexes[i].owner = init ? cur : -1;
+	RETURN(make_uid(UID_MUTEX, i));
+}
+
+static void sceKernelDeleteMutex(void){
+	int m = find_mutex(ARG(0)), i, woke = 0;
+	if(m < 0){ RETURN(MUTEX_ERROR_NO_SUCH); return; }
+	for(i = 0; i < MAX_THREADS; i++)
+		if(threads[i].used && threads[i].status == TH_WAITING && threads[i].wait == W_MUTEX && threads[i].wait_index == m){
+			wake(i, SCE_KERNEL_ERROR_WAIT_DELETE);
+			woke = 1;
+		}
+	mutexes[m].used = 0;
+	RETURN(0);
+	if(woke) request_resched();
+}
+
+static void lock_mutex(void){
+	u32 err;
+	s32 n = (s32)ARG(1);
+	int m;
+	if(ARG(0) == 0x80020001u && !ARG(2)){ RETURN(0); return; }   /* PPSSPP */
+	if((m = find_mutex(ARG(0))) < 0){ RETURN(MUTEX_ERROR_NO_SUCH); return; }
+	if(mutex_lock(m, n, &err)){ RETURN(0); return; }
+	if(err){ RETURN(err); return; }
+	wait_current(W_MUTEX, m, ARG(2));
+	if(cur >= 0) threads[cur].wait_b = (u32)n;
+}
+static void sceKernelLockMutex(void){ lock_mutex(); }
+/* Con error no se atienden callbacks; si no, sí, aunque lo tome sin
+   esperar (PPSSPP) */
+static void sceKernelLockMutexCB(void){
+	u32 err = 0;
+	int m = find_mutex(ARG(0));
+	if(m >= 0 && !mutex_check(m, (s32)ARG(1), &err) && err){ RETURN(err); return; }
+	kernel_cb_wait(lock_mutex);
+}
+
+static void sceKernelTryLockMutex(void){
+	u32 err;
+	int m = find_mutex(ARG(0));
+	if(m < 0){ RETURN(MUTEX_ERROR_NO_SUCH); return; }
+	if(mutex_lock(m, (s32)ARG(1), &err)) RETURN(0);
+	else RETURN(err ? err : MUTEX_ERROR_TRYLOCK_FAILED);
+}
+
+static void sceKernelUnlockMutex(void){
+	s32 n = (s32)ARG(1);
+	int m;
+	if(ARG(0) == 0x80020001u){ RETURN(0); return; }
+	if((m = find_mutex(ARG(0))) < 0){ RETURN(MUTEX_ERROR_NO_SUCH); return; }
+	if(n <= 0 || (n > 1 && !(mutexes[m].attr & LWMUTEX_RECURSIVE))){ RETURN(SCE_KERNEL_ERROR_ILLEGAL_COUNT); return; }
+	if(mutexes[m].level == 0 || mutexes[m].owner != cur){ RETURN(MUTEX_ERROR_NOT_LOCKED); return; }
+	if(mutexes[m].level < n){ RETURN(MUTEX_ERROR_UNLOCK_UNDERFLOW); return; }
+	mutexes[m].level -= n;
+	RETURN(0);
+	if(mutexes[m].level == 0 && mutex_release(m)) request_resched();
+}
+
+static void sceKernelCancelMutex(void){
+	int m = find_mutex(ARG(0)), i, woke = 0;
+	s32 n = (s32)ARG(1);
+	u32 err = 0;
+	if(m < 0){ RETURN(MUTEX_ERROR_NO_SUCH); return; }
+	if(n > 0 && !mutex_check(m, n, &err) && err &&
+	   err != MUTEX_ERROR_LOCK_OVERFLOW && err != MUTEX_ERROR_ALREADY_LOCKED){ RETURN(err); return; }
+	if(mem_valid(ARG(2), 4) && !(ARG(2) & 3)) mem_write32(ARG(2), (u32)mutex_waiters(m));
+	for(i = 0; i < MAX_THREADS; i++)
+		if(threads[i].used && threads[i].status == TH_WAITING && threads[i].wait == W_MUTEX && threads[i].wait_index == m){
+			wake(i, SCE_KERNEL_ERROR_WAIT_CANCEL);
+			woke = 1;
+		}
+	if(n <= 0){ mutexes[m].level = 0; mutexes[m].owner = -1; }
+	else { mutexes[m].level = n; mutexes[m].owner = cur; }
+	RETURN(0);
+	if(woke) request_resched();
+}
+
+/* SceKernelMutexInfo: size, name[32], attr, initCount, currentCount,
+   lockThread, numWaitThreads (56 bytes) */
+static void sceKernelReferMutexStatus(void){
+	int m = find_mutex(ARG(0));
+	u32 info = ARG(1);
+	if(m < 0){ RETURN(MUTEX_ERROR_NO_SUCH); return; }
+	if(!mem_valid(info, 56)){ RETURN(0xFFFFFFFFu); return; }
+	RETURN(0);
+	if(!mem_read32(info)) return;
+	memset(mem_ptr(info, 56), 0, 56);
+	mem_write32(info, 56);
+	memcpy(mem_ptr(info + 4, 32), mutexes[m].name, strnlen(mutexes[m].name, 31));
+	mem_write32(info + 36, mutexes[m].attr);
+	mem_write32(info + 40, (u32)mutexes[m].init);
+	mem_write32(info + 44, (u32)mutexes[m].level);
+	mem_write32(info + 48, mutexes[m].owner >= 0 && mutexes[m].level ? thread_uid(mutexes[m].owner) : 0xFFFFFFFFu);
+	mem_write32(info + 52, (u32)mutex_waiters(m));
+}
+
+/* ------------------------------------------------------------------ */
 /* Pools de bloques fijos (FPL)                                       */
 /* ------------------------------------------------------------------ */
 
@@ -2105,7 +2306,7 @@ static void sceKernelReferFplStatus(void){
    sceKernelCheckCallback; luego el hilo vuelve a su espera. Si el callback
    devuelve algo distinto de 0, se borra. Como en PPSSPP
    (sceKernelThread.cpp). */
-#define MAX_CALLBACKS 64
+#define MAX_CALLBACKS 1024
 #define SCE_KERNEL_ERROR_UNKNOWN_CBID 0x800201A1u
 #ifndef SCE_KERNEL_ERROR_ILLEGAL_ARGUMENT
 #define SCE_KERNEL_ERROR_ILLEGAL_ARGUMENT 0x800200D2u
@@ -2116,6 +2317,7 @@ typedef struct {
 	int thread;
 	u32 entry, common;
 	s32 notify_count, notify_arg;
+	u64 seq;            /* orden de creación: en ese orden se ejecutan */
 } Callback;
 static Callback callbacks[MAX_CALLBACKS];
 static u32 exit_callback;
@@ -2163,6 +2365,16 @@ static void recheck_wait(int i){
 		if(!threads[t->wait_index].used || threads[t->wait_index].status == TH_DORMANT)
 			wake(i, threads[t->wait_index].exit_status);
 		break;
+	case W_MUTEX: {
+		int m = t->wait_index;
+		if(!mutexes[m].used){ wake(i, SCE_KERNEL_ERROR_WAIT_DELETE); break; }
+		if(mutexes[m].level == 0){
+			mutexes[m].owner = i;
+			mutexes[m].level = (s32)t->wait_b;
+			wake(i, 0);
+		}
+		break;
+	}
 	case W_LWMUTEX: {
 		int m = t->wait_index;
 		u32 wa;
@@ -2191,10 +2403,12 @@ static void recheck_wait(int i){
 
 /* El siguiente callback notificado del hilo i, o -1 */
 static int next_pending_callback(int i){
-	int k;
+	int k, best = -1;
 	for(k = 0; k < MAX_CALLBACKS; k++)
-		if(callbacks[k].used && callbacks[k].thread == i && callbacks[k].notify_count > 0) return k;
-	return -1;
+		if(callbacks[k].used && callbacks[k].thread == i && callbacks[k].notify_count > 0 &&
+		   (best < 0 || callbacks[k].seq < callbacks[best].seq))
+			best = k;
+	return best;
 }
 
 /* Pone el hilo actual a ejecutar el callback k: a0 = veces notificado,
@@ -2335,6 +2549,7 @@ static void sceKernelCreateCallback(void){
 	callbacks[i].thread = cur;
 	callbacks[i].entry = entry;
 	callbacks[i].common = ARG(2);
+	callbacks[i].seq = ++seq;
 	RETURN(make_uid(UID_CALLBACK, i));
 }
 
@@ -2398,7 +2613,11 @@ static void sceKernelCheckCallback(void){
 }
 
 static void sceKernelRegisterExitCallback(void){
-	if(ARG(0) && find_callback(ARG(0)) < 0){ RETURN(SCE_KERNEL_ERROR_ILLEGAL_ARGUMENT); return; }
+	/* Un UID inválido (también 0) solo es error desde el SDK 3.95 (PPSSPP) */
+	if(find_callback(ARG(0)) < 0){
+		RETURN(sdk_version >= 0x3090500 ? SCE_KERNEL_ERROR_ILLEGAL_ARGUMENT : 0);
+		return;
+	}
 	exit_callback = ARG(0);
 	RETURN(0);
 }
@@ -2475,6 +2694,7 @@ void kernel_init(const PspModule *mod, const char *exec_path){
 	for(i = 0; i < MAX_FPLS; i++) free(fpls[i].taken);
 	memset(fpls, 0, sizeof(fpls));
 	memset(lwmutexes, 0, sizeof(lwmutexes));
+	memset(mutexes, 0, sizeof(mutexes));
 	memset(semas, 0, sizeof(semas));
 	memset(evfs, 0, sizeof(evfs));
 	memset(blocks, 0, sizeof(blocks));
@@ -2507,9 +2727,11 @@ void kernel_init(const PspModule *mod, const char *exec_path){
 	memcpy(mem_ptr(HLE_KERNEL_TRAMPOLINE + 0x10, 5), "root", 5);
 	cpu.r[R_A0] = HLE_KERNEL_TRAMPOLINE + 0x10;  /* nombre */
 	cpu.r[R_A1] = mod->entry;
-	cpu.r[R_A2] = 0x20;                          /* prioridad */
-	cpu.r[R_A3] = 0x40000;                       /* pila */
-	cpu.r[R_T0] = 0;                             /* atributos */
+	/* Prioridad 0x20, pila 0x40000 y modo usuario, salvo que el módulo
+	   pida otra cosa en module_start_thread_parameter (PPSSPP) */
+	cpu.r[R_A2] = mod->start_prio ? mod->start_prio : 0x20;
+	cpu.r[R_A3] = mod->start_stack ? mod->start_stack : 0x40000;
+	cpu.r[R_T0] = mod->start_attr & 0x0FFFFFFFu;
 	sceKernelCreateThread();
 	i = find_thread(cpu.r[R_V0]);
 	if(i < 0){
@@ -2577,6 +2799,7 @@ void kernel_dump_state(void){
 				break;
 			case W_FPL: snprintf(det, sizeof(det), "fpl \"%s\"", fpls[t->wait_index].name); break;
 			case W_VBLANK: snprintf(det, sizeof(det), "vblank"); break;
+			case W_MUTEX: snprintf(det, sizeof(det), "mutex \"%s\"", mutexes[t->wait_index].name); break;
 			case W_LWMUTEX:
 				snprintf(det, sizeof(det), "lwmutex \"%s\" (%08X)", lwmutexes[t->wait_index].name,
 				         lwmutexes[t->wait_index].workarea);
@@ -2675,6 +2898,14 @@ static const HleFunction thread_man[] = {
 	{ "sceKernelPollEventFlag", sceKernelPollEventFlag },
 	{ "sceKernelReferEventFlagStatus", sceKernelReferEventFlagStatus },
 	{ "sceKernelCreateLwMutex", sceKernelCreateLwMutex },
+	{ "sceKernelCreateMutex", sceKernelCreateMutex },
+	{ "sceKernelDeleteMutex", sceKernelDeleteMutex },
+	{ "sceKernelLockMutex", sceKernelLockMutex },
+	{ "sceKernelLockMutexCB", sceKernelLockMutexCB },
+	{ "sceKernelTryLockMutex", sceKernelTryLockMutex },
+	{ "sceKernelUnlockMutex", sceKernelUnlockMutex },
+	{ "sceKernelCancelMutex", sceKernelCancelMutex },
+	{ "sceKernelReferMutexStatus", sceKernelReferMutexStatus },
 	{ "sceKernelDeleteLwMutex", sceKernelDeleteLwMutex },
 	{ "sceKernelReferLwMutexStatusByID", sceKernelReferLwMutexStatusByID },
 	{ "sceKernelCreateCallback", sceKernelCreateCallback },

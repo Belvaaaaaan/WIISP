@@ -70,6 +70,9 @@ typedef struct {
 	u32  num_imports;  /* funciones importadas */
 	u32  num_var_imports; /* variables importadas (aún no soportadas) */
 	u32  sdk_version;  /* variable exportada module_sdk_version (0 si no hay) */
+	/* module_start_thread_parameter: prioridad, pila y atributos del hilo
+	   de module_start que pide el módulo (0 = los de siempre) */
+	u32  start_prio, start_stack, start_attr;
 	PspImport *imports;   /* el índice + syscall_base es el código del syscall */
 	u32  syscall_base;    /* primer código de syscall de sus imports */
 	u32  num_exports;

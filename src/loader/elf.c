@@ -283,9 +283,11 @@ static int patch_imports(u32 start, u32 end, PspModule *mod){
 /* Exportaciones: misma cabecera que las importaciones, pero la tabla de
    NIDs va seguida de la de direcciones (funciones y luego variables). Se
    guardan las funciones (para enlazar módulos entre sí y encontrar
-   module_start) y, de la biblioteca sin nombre ("syslib"), la variable
-   module_sdk_version, que algunos comportamientos del firmware consultan. */
+   module_start) y, de la biblioteca sin nombre ("syslib"), las variables
+   module_sdk_version, que algunos comportamientos del firmware consultan,
+   y module_start_thread_parameter (cómo crear el hilo de module_start). */
 #define NID_MODULE_SDK_VERSION 0x11B97506u
+#define NID_MODULE_START_THREAD_PARAMETER 0x0F7C276Cu
 
 static void add_export(PspModule *mod, const char *lib, u32 nid, u32 addr){
 	PspExport *x;
@@ -323,8 +325,15 @@ static void read_exports(u32 start, u32 end, PspModule *mod){
 		if(!name && total && mem_valid(table, total * 8)){
 			for(i = func_count; i < total; i++){
 				u32 var = mem_read32(table + (total + i) * 4);
-				if(mem_read32(table + i * 4) == NID_MODULE_SDK_VERSION && mem_valid(var, 4))
+				u32 vnid = mem_read32(table + i * 4);
+				if(vnid == NID_MODULE_SDK_VERSION && mem_valid(var, 4))
 					mod->sdk_version = mem_read32(var);
+				/* { tamaño (3), prioridad, pila, atributos } (PPSSPP) */
+				if(vnid == NID_MODULE_START_THREAD_PARAMETER && mem_valid(var, 16) && mem_read32(var)){
+					mod->start_prio = mem_read32(var + 4);
+					mod->start_stack = mem_read32(var + 8);
+					mod->start_attr = mem_read32(var + 12);
+				}
 			}
 		}
 		addr += size * 4;

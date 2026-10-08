@@ -195,14 +195,20 @@ static u32 module_export(const Module *m, u32 nid){
 /* Lanza module_start o module_stop en un hilo; quien llama espera.
    Devuelve 0, o un error ya puesto en v0 */
 static int run_entry(int i, u32 entry, u32 arglen, u32 argp, u32 status, u32 option){
-	u32 prio = 0x20, stack = 0x40000, attr = 0, tid;
+	/* Primero lo que pide el módulo (module_start_thread_parameter), y la
+	   opción de quien lo arranca manda sobre eso (PPSSPP) */
+	const PspModule *mod = &modules[i].mod;
+	u32 prio = mod->start_prio ? mod->start_prio : 0x20;
+	u32 stack = mod->start_stack ? mod->start_stack : 0x40000;
+	u32 attr = mod->start_attr, oattr = 0, tid;
 	if(option && mem_valid(option, 20) && mem_read32(option) >= 20){
 		if(mem_read32(option + 8)) stack = mem_read32(option + 8);
 		if(mem_read32(option + 12)) prio = mem_read32(option + 12);
-		attr = mem_read32(option + 16);
+		oattr = mem_read32(option + 16);
 	}
-	/* Solo VFPU, 0x2000 y 0x100000; ni usuario ni kernel (modules/startoptions) */
-	if(attr & ~0x00106000u){ RETURN(SCE_KERNEL_ERROR_ERROR); return -1; }
+	/* Solo VFPU, 0x2000 y 0x00F00000; ni usuario ni kernel (modules/startoptions) */
+	if(oattr & ~0x00F06000u){ RETURN(SCE_KERNEL_ERROR_ERROR); return -1; }
+	attr = (attr | oattr) & 0x0FFFFFFFu;
 	if(stack < 0x200){ RETURN(0x80020194u /* ILLEGAL_STACK_SIZE */); return -1; }
 	tid = kernel_create_thread(modules[i].name, entry, prio, stack, attr, modules[i].mod.gp);
 	if((s32)tid < 0 || kernel_start_thread(tid, arglen, argp)){
