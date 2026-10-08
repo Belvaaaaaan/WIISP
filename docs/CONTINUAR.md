@@ -139,16 +139,31 @@ otro hilo) da OK. No se repitió la pasada en PowerPC.
   64 callbacks; la PSP admite 1024+), `combos` (coste de notificar a un
   hilo mejor que duerme: 10-25 us).
 
+### v0.4.5 (misma sesión, sin el Wii a mano)
+
+- Paso 4 hecho: event flags por orden de llegada, errores, comprobaciones
+  y costes de PPSSPP (los 9 de threads/events pasan).
+- Mutex normales del kernel (los 11 de threads/mutex pasan).
+- Callbacks pendientes por orden de creación; hasta 1024.
+- Paso 5 (parcial): el hilo raíz y los module_start de los PRX usan
+  `module_start_thread_parameter` (prioridad, pila, atributos), como
+  PPSSPP. Los PRX del disco que PPSSPP finge ya se fingían en module.c.
+- Paso 7 (parcial): RegisterExitCallback según SDK, WakeupThread propio.
+- 266/266 pspautotests en x86 **y en PowerPC** (qemu), 361 unitarias.
+- Siguen fallando en threads/callbacks: `combos` (coste de notificar),
+  `exit` (`LoadExecForUser_362A956B`) y `waittypes` (faltan mailboxes,
+  message pipes, VPL...).
+
 ## Siguientes pasos, por prioridad
 
-1. **Mandar v0.4.4 al usuario** y pedir el nuevo `wiisp.log` (comprobar en
-   su primera línea que es la 0.4.4).
+1. **Mandar v0.4.5 al usuario** y pedir el nuevo `wiisp.log` (comprobar en
+   su primera línea que es la 0.4.5).
 
 2. Hecho (UMD).
 
 3. Hecho (LwMutex).
 
-4. **Event flags**: despertar en orden de llegada (`wait_seq`) o de
+4. Hecho (event flags). Antes decía: despertar en orden de llegada (`wait_seq`) o de
    prioridad, como PPSSPP, no en el orden de la tabla de hilos
    (`sceKernelSetEventFlag`). GTA usa un event flag `UmdStreamEventFlag`
    entre su hilo de lectura del UMD (prio 0x20) y el que pide los datos: si

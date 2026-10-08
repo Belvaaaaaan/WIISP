@@ -2,7 +2,7 @@
 <app version="1">
   <name>WIISP</name>
   <coder>Belvaaaaaan</coder>
-  <version>0.4.4</version>
+  <version>0.4.5</version>
   <short_description>Emulador de PSP para Wii</short_description>
   <long_description>Emulador de PSP en desarrollo. Carga EBOOT.PBP, ISO, CSO y ZSO desde la SD o un USB. CPU con FPU y VFPU (interprete), GE por la GPU del Wii, sceAudio/SAS/Atrac3+ (por ahora en silencio), videos omitidos y partidas en SAVEDATA. Deja wiisp.log en la carpeta de WIISP.</long_description>
   <ahb_access/>
