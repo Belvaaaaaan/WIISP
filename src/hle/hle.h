@@ -19,7 +19,7 @@
 
 /* Versión de WIISP (la misma que dist/apps/wiisp/meta.xml): sale en el
    menú y al principio de wiisp.log */
-#define WIISP_VERSION "0.4.5"
+#define WIISP_VERSION "0.4.6"
 
 typedef void (*HleFunc)(void);
 
@@ -46,11 +46,13 @@ static inline u32 hle_arg(int n){ return n < 4 ? cpu.r[R_A0 + n] : cpu.r[R_T0 + 
 #define HLE_SYSCALL_THREAD_RETURN   0xFFF00u  /* un hilo volvió de su función */
 #define HLE_SYSCALL_CALLBACK_RETURN 0xFFF01u  /* volvió una llamada de kernel_call_guest */
 #define HLE_SYSCALL_THREAD_CB_RETURN 0xFFF02u /* volvió un callback de un hilo */
+#define HLE_SYSCALL_GUEST_CALL_RETURN 0xFFF03u /* volvió una llamada de kernel_enqueue_call */
 
 /* Direcciones en la zona de kernel (no la usa el juego) */
 #define HLE_KERNEL_TRAMPOLINE  0x08000000u  /* syscall THREAD_RETURN; nop */
 #define HLE_CALLBACK_TRAMPOLINE 0x08000008u /* syscall CALLBACK_RETURN; nop */
 #define HLE_THREAD_CB_TRAMPOLINE 0x08000020u /* syscall THREAD_CB_RETURN; nop */
+#define HLE_GUEST_CALL_TRAMPOLINE 0x08000028u /* syscall GUEST_CALL_RETURN; nop */
 #define HLE_INTERRUPT_STACK_TOP 0x08010000u /* pila para las llamadas tipo interrupción */
 
 /* Errores del kernel de la PSP */
@@ -228,6 +230,21 @@ u32  kernel_call_guest_sp(u32 func, u32 sp, u32 a0, u32 a1, u32 a2);
 u32  kernel_module_gp(void);   /* gp del módulo principal */
 void kernel_callback_return(void);
 void kernel_thread_cb_return(void);   /* trampolín de los callbacks de hilo */
+
+/* Llama a una función del juego como código normal del hilo actual, justo
+   al volver del syscall que la pide (PPSSPP hleEnqueueCall). Puede esperar
+   (semáforos, event flags...) y mientras tanto corren los demás hilos; en
+   cambio kernel_call_guest la ejecuta en el acto y sin cambios de hilo.
+   Al volver la función, done(lo que devolvió, data) da el valor final del
+   syscall, o encadena otra llamada con kernel_enqueue_call (entonces lo
+   que devuelva no cuenta). data: KERNEL_CALL_DATA palabras para done.
+   Devuelve 0, o -1 si no se puede (en una interrupción, sin hilo o
+   demasiadas anidadas): entonces hay que usar kernel_call_guest. */
+#define KERNEL_CALL_DATA 6
+typedef u32 (*KernelCallDone)(u32 ret, u32 *data);
+int  kernel_enqueue_call(u32 func, u32 a0, u32 a1, u32 a2, KernelCallDone done, const u32 *data);
+void kernel_guest_call_return(void);  /* trampolín de kernel_enqueue_call */
+u32  kernel_enqueue_count(void);      /* llamadas encoladas desde el inicio */
 /* 1 mientras se atiende una interrupción o se ejecuta kernel_call_guest */
 int  kernel_in_interrupt(void);
 int  kernel_wait_vblank(void); /* bloquea el hilo actual hasta el vblank */

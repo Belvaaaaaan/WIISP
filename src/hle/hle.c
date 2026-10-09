@@ -98,7 +98,7 @@ static FILE *log_file;
    atasca, falla o lo detiene el usuario. */
 #define TRACE_MAX   8000
 #define RING_SIZE   96
-typedef struct { const char *name; u32 a[4], ret; s8 th; u32 ms; } CallRec;
+typedef struct { const char *name; u32 a[4], ret; s8 th; u8 guest; u32 ms; } CallRec;
 static CallRec ring[RING_SIZE];
 static u32 ring_pos, trace_count, trace_skipped;
 static CallRec trace_recent[6];
@@ -122,7 +122,9 @@ static void format_call(const CallRec *r, char *out, size_t cap){
 	n = snprintf(out, cap, "h%d %s(", r->th, r->name);
 	if(str[0]) n += snprintf(out + n, cap - (size_t)n, "%s, ", str);
 	else n += snprintf(out + n, cap - (size_t)n, "%08X, ", r->a[0]);
-	snprintf(out + n, cap - (size_t)n, "%08X, %08X, %08X) = %08X @%u ms", r->a[1], r->a[2], r->a[3], r->ret, r->ms);
+	/* guest: el valor lo dará la función del juego que llama (kernel_enqueue_call) */
+	if(r->guest) snprintf(out + n, cap - (size_t)n, "%08X, %08X, %08X) = (llama al juego) @%u ms", r->a[1], r->a[2], r->a[3], r->ms);
+	else snprintf(out + n, cap - (size_t)n, "%08X, %08X, %08X) = %08X @%u ms", r->a[1], r->a[2], r->a[3], r->ret, r->ms);
 }
 
 static void trace_call(const CallRec *r){
@@ -132,7 +134,8 @@ static void trace_call(const CallRec *r){
 	/* Un bucle que repite las mismas llamadas no llena el registro */
 	for(i = 0; i < 6; i++){
 		const CallRec *p = &trace_recent[i];
-		if(p->name == r->name && p->a[0] == r->a[0] && p->a[1] == r->a[1] && p->a[2] == r->a[2] && p->ret == r->ret){
+		if(p->name == r->name && p->a[0] == r->a[0] && p->a[1] == r->a[1] && p->a[2] == r->a[2] && p->ret == r->ret &&
+		   p->guest == r->guest){
 			trace_skipped++;
 			return;
 		}
@@ -177,6 +180,10 @@ void hle_syscall(u32 code){
 		kernel_thread_cb_return();
 		return;
 	}
+	if(code == HLE_SYSCALL_GUEST_CALL_RETURN){
+		kernel_guest_call_return();
+		return;
+	}
 	if(!module || code >= num_resolved){
 		cpu_fault("syscall desconocido", cpu.pc - 4, code);
 		return;
@@ -193,7 +200,11 @@ void hle_syscall(u32 code){
 		kernel_note_hle_call(r->name);
 		/* Avanza antes: la función puede llamar al juego, que llama al HLE */
 		ring_pos = (ring_pos + 1) % RING_SIZE;
-		resolved[code].func();
+		{
+			u32 enq = kernel_enqueue_count();
+			resolved[code].func();
+			r->guest = kernel_enqueue_count() != enq;
+		}
 		r->ret = cpu.r[R_V0];
 		if(log_file) trace_call(r);
 		if(trace) hle_log("      -> %08X\n", cpu.r[R_V0]);
@@ -427,6 +438,8 @@ int hle_init(PspModule *mod, const char *host_dir, const char *exec_name){
 	mem_write32(HLE_CALLBACK_TRAMPOLINE + 4, 0);
 	mem_write32(HLE_THREAD_CB_TRAMPOLINE, MIPS_SYSCALL(HLE_SYSCALL_THREAD_CB_RETURN));
 	mem_write32(HLE_THREAD_CB_TRAMPOLINE + 4, 0);
+	mem_write32(HLE_GUEST_CALL_TRAMPOLINE, MIPS_SYSCALL(HLE_SYSCALL_GUEST_CALL_RETURN));
+	mem_write32(HLE_GUEST_CALL_TRAMPOLINE + 4, 0);
 
 	io_init(host_dir, exec_name && !strncmp(exec_name, "disc0:", 6));
 	display_init();

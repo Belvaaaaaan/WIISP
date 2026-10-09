@@ -71,6 +71,15 @@ typedef struct {
 	int k;              /* callback que se está ejecutando */
 } CbFrame;
 
+/* Una llamada al juego como código del hilo (kernel_enqueue_call): el hilo
+   tal como estaba al volver del syscall y qué hacer cuando vuelva */
+#define MAX_GUEST_CALLS 3
+typedef struct {
+	CpuState cpu;
+	KernelCallDone done;
+	u32 data[KERNEL_CALL_DATA];
+} GuestCall;
+
 typedef struct {
 	int used;
 	char name[32];
@@ -97,6 +106,8 @@ typedef struct {
 	int cb_paused;  /* sacado de esa espera para ejecutar callbacks; la retoma */
 	int cb_depth;   /* callbacks en curso (cbf[0..cb_depth-1]) */
 	CbFrame cbf[MAX_CB_DEPTH];
+	int gc_depth;   /* llamadas al juego en curso (gcf[0..gc_depth-1]) */
+	GuestCall gcf[MAX_GUEST_CALLS];
 	int suspend_pending;  /* sceKernelSuspendThread mientras esperaba */
 } Thread;
 
@@ -1002,6 +1013,7 @@ static void start_thread(int i, u32 arglen, u32 argp){
 	t->wakeup_count = 0;
 	t->last_hle = NULL;
 	t->cb_wait = t->cb_paused = t->cb_depth = 0;
+	t->gc_depth = 0;
 	t->prio = t->init_prio;
 	make_ready(i);
 }
@@ -1103,6 +1115,89 @@ u32 kernel_call_guest_sp(u32 func, u32 sp, u32 a0, u32 a1, u32 a2){
 	cpu_stop_requested = 1; /* que el bucle principal revise eventos y cambios de hilo */
 	in_interrupt--;
 	return ret;
+}
+
+/* --- Llamadas al juego como código del hilo (PPSSPP hleEnqueueCall) --- */
+
+static u32 enqueue_count;
+
+u32 kernel_enqueue_count(void){ return enqueue_count; }
+
+static int enqueue_call(u32 func, u32 sp, u32 a0, u32 a1, u32 a2, KernelCallDone done, const u32 *data){
+	Thread *t = current();
+	GuestCall *f;
+	if(!t || kernel_in_interrupt() || t->gc_depth >= MAX_GUEST_CALLS || !func || !mem_valid(func, 4)) return -1;
+	f = &t->gcf[t->gc_depth++];
+	/* cpu está justo después del syscall: ahí se vuelve */
+	f->cpu = cpu;
+	f->done = done;
+	if(data) memcpy(f->data, data, sizeof(f->data));
+	else memset(f->data, 0, sizeof(f->data));
+	cpu.r[R_A0] = a0;
+	cpu.r[R_A1] = a1;
+	cpu.r[R_A2] = a2;
+	/* En la pila del hilo, por debajo de lo que esté usando */
+	cpu.r[R_SP] = sp ? sp : (f->cpu.r[R_SP] - 64) & ~15u;
+	cpu.r[R_RA] = HLE_GUEST_CALL_TRAMPOLINE;
+	cpu.pc = func;
+	cpu.npc = func + 4;
+	kernel_stat_guest_calls++;
+	enqueue_count++;
+	cpu_stop_requested = 1;
+	return 0;
+}
+
+int kernel_enqueue_call(u32 func, u32 a0, u32 a1, u32 a2, KernelCallDone done, const u32 *data){
+	return enqueue_call(func, 0, a0, a1, a2, done, data);
+}
+
+/* sceKernelExtendThreadStack(size, entry, arg): ejecuta entry(arg) con una
+   pila nueva de size bytes y devuelve lo que devuelva (PPSSPP). La libc
+   de muchos juegos (DBZ Tenkaichi Tag Team) arranca así. */
+static u32 extend_stack_done(u32 ret, u32 *d){
+	kernel_free(d[0]);
+	return ret;
+}
+
+static void sceKernelExtendThreadStack(void){
+	u32 size = ARG(0), entry = ARG(1), stack;
+	Thread *t = current();
+	u32 d[KERNEL_CALL_DATA] = { 0 };
+	if(size < 512){ RETURN(0x80020194u /* ILLEGAL_STACK_SIZE */); return; }
+	if(!t){ RETURN(0xFFFFFFFFu); return; }
+	stack = kernel_alloc(size, 1, "extended");
+	if(!stack){ RETURN(SCE_KERNEL_ERROR_NO_MEMORY); return; }
+	/* Como una pila de hilo: llena de 0xFF y el UID del hilo al principio */
+	memset(mem_ptr(stack, size), 0xFF, size);
+	mem_write32(stack, thread_uid(cur));
+	d[0] = stack;
+	if(enqueue_call(entry, (stack + size - 0x10) & ~15u, ARG(2), 0, 0, extend_stack_done, d)){
+		kernel_free(stack);
+		RETURN(SCE_KERNEL_ERROR_ILLEGAL_CONTEXT);
+	}
+}
+
+/* El trampolín: la función del juego volvió. El hilo sigue donde estaba
+   al volver del syscall, con lo que diga done como valor de retorno. */
+void kernel_guest_call_return(void){
+	Thread *t = current();
+	GuestCall f;
+	u32 ret, v1, result;
+	int depth;
+	if(!t || !t->gc_depth){
+		cpu_fault("vuelta de una llamada al juego sin llamada", cpu.pc - 4, 0);
+		return;
+	}
+	ret = cpu.r[R_V0];
+	v1 = cpu.r[R_V1];
+	f = t->gcf[--t->gc_depth];
+	depth = t->gc_depth;
+	cpu = f.cpu;
+	cpu.r[R_V1] = v1;   /* lo que dejó en v1 también llega (PPSSPP) */
+	result = f.done ? f.done(ret, f.data) : ret;
+	/* Si done encadenó otra llamada, el valor lo dará la última */
+	if(t->gc_depth == depth) cpu.r[R_V0] = result;
+	cpu_stop_requested = 1;
 }
 
 void kernel_thread_return(void){
@@ -2819,9 +2914,11 @@ void kernel_dump_state(void){
 				         (long long)((s64)(t->wait_until - cpu_cycles) / CYCLES_PER_US));
 			}
 		}
-		hle_log("[HILO] %d \"%s\" prio %u attr %08X %s%s%s pc %08X ra %08X ultima %s\n", i, t->name, t->prio,
+		hle_log("[HILO] %d \"%s\" prio %u attr %08X %s%s%s pc %08X ra %08X ultima %s%s%s\n", i, t->name, t->prio,
 		        t->attr, status_name(t->status), det[0] ? ": " : "", det, c->pc, c->r[R_RA],
-		        t->last_hle ? t->last_hle : "-");
+		        t->last_hle ? t->last_hle : "-",
+		        t->gc_depth ? " (dentro de una funcion del juego llamada por el HLE)" : "",
+		        t->cb_depth ? " (en un callback)" : "");
 	}
 	for(i = 0; i < PSP_NUM_INTR; i++)
 		for(j = 0; j < MAX_SUBINTR; j++)
@@ -2852,6 +2949,7 @@ static const HleFunction thread_man[] = {
 	{ "sceKernelExitThread", sceKernelExitThread },
 	{ "_sceKernelExitThread", sceKernelExitThread },
 	{ "sceKernelExitDeleteThread", sceKernelExitDeleteThread },
+	{ "sceKernelExtendThreadStack", sceKernelExtendThreadStack },
 	{ "sceKernelDeleteThread", sceKernelDeleteThread },
 	{ "sceKernelTerminateThread", sceKernelTerminateThread },
 	{ "sceKernelTerminateDeleteThread", sceKernelTerminateDeleteThread },
@@ -2932,7 +3030,15 @@ static const HleFunction thread_man[] = {
 	{ "sceKernelReferGlobalProfiler", return_zero },
 };
 
+/* Devuelve el destino (PPSSPP) */
+static void sceKernelMemset(void){
+	u32 addr = ARG(0), n = ARG(2);
+	if(n && mem_valid(addr, n)) memset(mem_ptr(addr, n), (int)(ARG(1) & 0xFF), n);
+	RETURN(addr);
+}
+
 static const HleFunction kernel_library[] = {
+	{ "sceKernelMemset", sceKernelMemset },
 	{ "sceKernelCpuSuspendIntr", sceKernelCpuSuspendIntr },
 	{ "sceKernelCpuResumeIntr", sceKernelCpuResumeIntr },
 	{ "sceKernelCpuResumeIntrWithSync", sceKernelCpuResumeIntr },

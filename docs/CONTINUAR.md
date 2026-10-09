@@ -200,10 +200,29 @@ con otra pila; también es una llamada al juego desde el HLE),
 `sceKernelMemset` (0xA089ECA4, debe devolver el destino). Sin nombre en
 nid_names.c los dos primeros.
 
+### v0.4.6: corregida la congelación del video de GTA
+
+- `kernel_enqueue_call` (kernel.c): llamadas al juego como código del hilo
+  (ver ARQUITECTURA.md 6.4). `sceMpegRingbufferPut` la usa (varias rondas
+  encadenadas si el ringbuffer da la vuelta, como `PostPutAction`); solo
+  desde una interrupción sigue con `kernel_call_guest_sp`. El registro
+  marca esas llamadas con "= (llama al juego)".
+- DBZ TTT: `sceKernelExtendThreadStack` (pila nueva y la misma vía),
+  `sceKernelMemset` (devuelve el destino) y
+  `sceKernelStopUnloadSelfModuleWithStatus`.
+- `tests/guest`: programas de PSP en C compilados con el gcc MIPS de
+  Ubuntu (`-mabi=eabi`, imports generados desde nid_names.c) y ejecutados
+  con el CLI. `mpeg_put.c` reproduce la lectura del video de GTA (con la
+  v0.4.5 el callback recibe 0x800201A7 y no lee nada); `extend_stack.c`.
+  Útil para reproducir lo que hagan los juegos sin tenerlos.
+- Pendiente de ver con el juego real: qué hace GTA después del video. El
+  video se "salta" leyendo el archivo entero por UmdStreamThread con los
+  tiempos de E/S de la PSP, así que puede tardar (pantalla con la consola).
+
 ## Siguientes pasos, por prioridad
 
-1. **Mandar v0.4.5 al usuario** y pedir el nuevo `wiisp.log` (comprobar en
-   su primera línea que es la 0.4.5).
+1. **Mandar v0.4.6 al usuario** y pedir el nuevo `wiisp.log` de GTA LCS
+   (y de DBZ TTT).
 
 2. Hecho (UMD).
 

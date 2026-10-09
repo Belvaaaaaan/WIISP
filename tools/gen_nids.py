@@ -188,6 +188,8 @@ EXTRA = {
     0xF8EF08A6: 'scePsmfPlayerGetCurrentStatus',
     0xFCBDB5AD: 'sceMpegAvcResourceInit',
     0x6AF9B50A: 'sceUmdCancelWaitDriveStat',
+    0xBC80EC7C: 'sceKernelExtendThreadStack',
+    0x8F2DF740: 'sceKernelStopUnloadSelfModuleWithStatus',
     0xB7D098C6: 'sceKernelCreateMutex',
     0xF8170FBE: 'sceKernelDeleteMutex',
     0x6B30100F: 'sceKernelUnlockMutex',

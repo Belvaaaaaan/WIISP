@@ -1,0 +1,12 @@
+RingbufferConstruct: 00000000
+Create: 00000000
+AvailableSize: 16
+  callback 1: 10 paquetes, arg 00001234, en el buffer +0
+  WaitEventFlag dentro del callback: 00000000 (lecturas 1)
+Put 10: 10
+  callback 2: 6 paquetes, arg 00001234, en el buffer +10
+  WaitEventFlag dentro del callback: 00000000 (lecturas 2)
+  callback 3: 4 paquetes, arg 00001234, en el buffer +0
+  WaitEventFlag dentro del callback: 00000000 (lecturas 3)
+Put 10 (da la vuelta): 10
+Fin del hilo lector: 00000000, 3 lecturas, 3 callbacks

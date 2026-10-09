@@ -298,6 +298,14 @@ porta entero: su consumo de memoria no cabe en el Wii.
   `sceKernelCheckCallback`. Si devuelven algo distinto de 0 se borran.
   Tras ejecutarlos, la espera sigue (o termina si su condición ya se
   cumplió).
+- Llamadas del HLE a funciones del juego (`kernel_enqueue_call`, como
+  `hleEnqueueCall` de PPSSPP): el callback de `sceMpegRingbufferPut` o la
+  función de `sceKernelExtendThreadStack` corren como código normal del
+  hilo que hizo el syscall, al volver de él, y vuelven por un trampolín
+  (`HLE_GUEST_CALL_TRAMPOLINE`); entonces una función de C decide el valor
+  final del syscall o encadena otra llamada. Así pueden esperar a otros
+  hilos (GTA lee sus videos así). `kernel_call_guest`, que las ejecuta en
+  el acto y sin cambios de hilo, queda para las interrupciones.
 - Diagnóstico en `wiisp.log`: las primeras 8000 llamadas al HLE con sus
   argumentos (`[LLAMADA]`), y si el juego se atasca (menos de 100
   instrucciones por frame durante 10 s), el estado de cada hilo, en qué

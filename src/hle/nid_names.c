@@ -1589,6 +1589,7 @@ const NidName nid_names[] = {
 	{ 0x8F185DF7, "sceGeEdramInit" },
 	{ 0x8F20C4C0, "sceKernelDeleteUID" },
 	{ 0x8F2BB012, "sceJpegGetOutputInfo" },
+	{ 0x8F2DF740, "sceKernelStopUnloadSelfModuleWithStatus" },
 	{ 0x8F450998, "sceMp3GetSamplingRate" },
 	{ 0x8F4F4E96, "sceSysregGetFuseConfig" },
 	{ 0x8F58BEDF, "sceNetAdhocMatchingCancelTargetWithOpt" },
@@ -2094,6 +2095,7 @@ const NidName nid_names[] = {
 	{ 0xBC6B6296, "sceNetplayDialogShutdownStart" },
 	{ 0xBC6FEBC5, "sceKernelReferSemaStatus" },
 	{ 0xBC75D85B, "sceFontGetFontList" },
+	{ 0xBC80EC7C, "sceKernelExtendThreadStack" },
 	{ 0xBD11B7C2, "__sceSasGetGrain" },
 	{ 0xBD123D9E, "sceKernelDelaySysClockThread" },
 	{ 0xBD2BDE07, "sceUmdUnRegisterUMDCallBack" },
@@ -2852,4 +2854,4 @@ const NidName nid_names[] = {
 	{ 0xFFC36A14, "sceKernelReferThreadRunStatus" },
 };
 
-const u32 nid_names_count = 2840;
+const u32 nid_names_count = 2842;

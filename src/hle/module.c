@@ -282,6 +282,7 @@ static const HleFunction modulemgr_user[] = {
 	{ "sceKernelGetModuleIdByAddress", sceKernelGetModuleIdByAddress },
 	{ "sceKernelSelfStopUnloadModule", sceKernelSelfStopUnloadModule },
 	{ "sceKernelStopUnloadSelfModule", sceKernelSelfStopUnloadModule },
+	{ "sceKernelStopUnloadSelfModuleWithStatus", sceKernelSelfStopUnloadModule },
 };
 
 const HleLibrary hle_module_libs[] = {

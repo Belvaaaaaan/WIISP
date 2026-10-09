@@ -107,6 +107,13 @@ python3 tests/autotests.py ../pspautotests --list tests/autotests_pass.txt  # lo
 python3 tests/autotests.py ../pspautotests threads/ -v                      # una carpeta, con diffs
 ```
 
+Programas de PSP propios para reproducir situaciones de juegos comerciales
+(`tests/guest`, en C, sin PSPSDK; necesitan `gcc-mipsel-linux-gnu`):
+
+```sh
+make -C tests/guest check            # compila y compara con los .expected
+```
+
 ### En Dolphin (backend GX sin la consola)
 
 El `.dol` tiene un modo de pruebas automáticas: si existe

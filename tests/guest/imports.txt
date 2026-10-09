@@ -1,0 +1,32 @@
+# Funciones del firmware que pueden usar los programas de tests/guest.
+# Biblioteca y nombre; el NID sale de src/hle/nid_names.c.
+ThreadManForUser sceKernelCreateThread
+ThreadManForUser sceKernelStartThread
+ThreadManForUser sceKernelExitDeleteThread
+ThreadManForUser sceKernelWaitThreadEnd
+ThreadManForUser sceKernelDelayThread
+ThreadManForUser sceKernelCreateSema
+ThreadManForUser sceKernelWaitSema
+ThreadManForUser sceKernelSignalSema
+ThreadManForUser sceKernelCreateEventFlag
+ThreadManForUser sceKernelSetEventFlag
+ThreadManForUser sceKernelWaitEventFlag
+ThreadManForUser sceKernelGetSystemTimeLow
+ThreadManForUser sceKernelCreateCallback
+ThreadManForUser sceKernelNotifyCallback
+ThreadManForUser sceKernelSleepThreadCB
+ThreadManForUser sceKernelWakeupThread
+IoFileMgrForUser sceIoWrite
+LoadExecForUser sceKernelExitGame
+sceMpeg sceMpegInit
+sceMpeg sceMpegFinish
+sceMpeg sceMpegQueryMemSize
+sceMpeg sceMpegRingbufferQueryMemSize
+sceMpeg sceMpegRingbufferConstruct
+sceMpeg sceMpegRingbufferDestruct
+sceMpeg sceMpegCreate
+sceMpeg sceMpegDelete
+sceMpeg sceMpegRingbufferPut
+sceMpeg sceMpegRingbufferAvailableSize
+ThreadManForUser sceKernelExtendThreadStack
+Kernel_Library sceKernelMemset

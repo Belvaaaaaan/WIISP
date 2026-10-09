@@ -323,11 +323,58 @@ static void sceMpegRingbufferAvailableSize(void){
 	RETURN(mem_read32(rb + RB_PACKETS) - mem_read32(rb + RB_AVAIL));
 }
 
-/* Llama al callback del juego para llenar el ringbuffer. Lo que mete se
-   da por consumido al instante (no hay decodificador). */
+/* Lo que metió el callback del juego en una ronda: se da por consumido al
+   instante (no hay decodificador). Devuelve 1 si hay que pedir más. */
+static int put_round_done(u32 rb, Mpeg *m, s32 got, s32 want, s32 *total){
+	if(got <= 0){
+		m->eof = 1;
+		if(got < 0 && *total == 0) *total = got;
+		return 0;
+	}
+	if(got > want) got = want;
+	mem_write32(rb + RB_READ, mem_read32(rb + RB_READ) + (u32)got);
+	mem_write32(rb + RB_WRITE_POS, mem_read32(rb + RB_WRITE_POS) + (u32)got);
+	m->bytes_put += (u32)got * PACKET;
+	*total += got;
+	return got == want;
+}
+
+/* Cuántos paquetes pide la siguiente ronda (hasta el final del buffer) */
+static s32 put_round_size(u32 rb, s32 num, u32 *dest){
+	s32 packets = (s32)mem_read32(rb + RB_PACKETS);
+	s32 pos = (s32)(mem_read32(rb + RB_WRITE_POS) % (u32)packets), want = num;
+	if(want > packets - pos) want = packets - pos;
+	*dest = mem_read32(rb + RB_DATA) + (u32)pos * PACKET;
+	return want;
+}
+
+/* data: ringbuffer, paquetes que faltan tras esta ronda, los de esta
+   ronda y el total metido hasta ahora */
+static u32 put_callback_done(u32 ret, u32 *d){
+	u32 rb = d[0], dest;
+	s32 left = (s32)d[1], want = (s32)d[2], total = (s32)d[3];
+	Mpeg *m = ctx_of_ringbuffer(rb);
+	if(!m) return total ? (u32)total : 0xFFFFFFFFu;
+	if(put_round_done(rb, m, (s32)ret, want, &total) && left > 0){
+		u32 next[KERNEL_CALL_DATA] = { rb, 0, 0, (u32)total, 0, 0 };
+		want = put_round_size(rb, left, &dest);
+		next[1] = (u32)(left - want);
+		next[2] = (u32)want;
+		if(!kernel_enqueue_call(mem_read32(rb + RB_CALLBACK), dest, (u32)want, mem_read32(rb + RB_CB_ARG),
+		                        put_callback_done, next))
+			return 0;   /* lo dará la siguiente ronda */
+	}
+	video_end(m);
+	return (u32)total;
+}
+
+/* Llama al callback del juego para llenar el ringbuffer. Como PPSSPP, el
+   callback corre como código normal del hilo al volver del syscall: suele
+   leer del UMD esperando a otro hilo (en GTA, WaitEventFlag a
+   UmdStreamThread), así que no puede ejecutarse dentro del syscall. */
 static void sceMpegRingbufferPut(void){
-	u32 rb = ARG(0);
-	s32 num = (s32)ARG(1), avail = (s32)ARG(2), packets, total = 0, cb, cb_arg, data;
+	u32 rb = ARG(0), dest;
+	s32 num = (s32)ARG(1), avail = (s32)ARG(2), packets, total = 0, cb, cb_arg, want;
 	Mpeg *m;
 	if(!mem_valid(rb, 48)){ RETURN(0xFFFFFFFFu); return; }
 	packets = (s32)mem_read32(rb + RB_PACKETS);
@@ -338,26 +385,21 @@ static void sceMpegRingbufferPut(void){
 	if(!m){ RETURN(0xFFFFFFFFu); return; }
 	cb = mem_read32(rb + RB_CALLBACK);
 	cb_arg = mem_read32(rb + RB_CB_ARG);
-	data = mem_read32(rb + RB_DATA);
 	if(!cb || packets <= 0){ RETURN(0); return; }
+	want = put_round_size(rb, num, &dest);
+	{
+		u32 d[KERNEL_CALL_DATA] = { rb, (u32)(num - want), (u32)want, 0, 0, 0 };
+		if(!kernel_enqueue_call(cb, dest, (u32)want, cb_arg, put_callback_done, d)) return;
+	}
+	/* Desde una interrupción no se puede: el callback corre en el acto */
 	while(num > 0){
-		s32 pos = (s32)(mem_read32(rb + RB_WRITE_POS) % (u32)packets), want = num, got;
+		s32 got;
 		/* En la pila del hilo que llama, por debajo de lo que esté usando */
 		u32 sp = (cpu.r[R_SP] - 0x200) & ~0xFu;
-		if(want > packets - pos) want = packets - pos;
-		got = (s32)kernel_call_guest_sp(cb, sp, data + (u32)pos * PACKET, (u32)want, cb_arg);
-		if(got <= 0){
-			m->eof = 1;
-			if(got < 0 && total == 0) total = got;
-			break;
-		}
-		if(got > want) got = want;
-		mem_write32(rb + RB_READ, mem_read32(rb + RB_READ) + (u32)got);
-		mem_write32(rb + RB_WRITE_POS, mem_read32(rb + RB_WRITE_POS) + (u32)got);
-		m->bytes_put += (u32)got * PACKET;
-		total += got;
-		num -= got;
-		if(got < want) break;
+		want = put_round_size(rb, num, &dest);
+		got = (s32)kernel_call_guest_sp(cb, sp, dest, (u32)want, cb_arg);
+		num -= got > 0 ? (got > want ? want : got) : 0;
+		if(!put_round_done(rb, m, got, want, &total)) break;
 	}
 	video_end(m);
 	RETURN((u32)total);
