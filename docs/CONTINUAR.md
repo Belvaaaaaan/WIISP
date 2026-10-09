@@ -182,8 +182,14 @@ video de introducción. El registro se corta a los 332 ms emulados, sin
 - Por qué se ve la consola: el juego fijó el framebuffer a 0
   (`sceDisplaySetFrameBuf(0, ...)`), y sin framebuffer
   `video_draw_psp_frame` no dibuja nada (tampoco el contador de FPS).
-- GTA LCS usa el mismo motor (UmdStreamThread, MPEG para la intro):
-  previsiblemente lo mismo. La captura antigua (todo ocioso, 0 llamadas)
+- **GTA LCS (ULUS10041) confirmado** con su wiisp.log (modo exacto, se
+  congela a los ~10 s reales, 290 ms emulados): idéntico. `MPEGreadThread`
+  (h6) hace `RingbufferAvailableSize`, `WaitSema(UmdStreamSema)`,
+  `SetEventFlag(UmdStreamEventFlag, 1)` dentro del callback de
+  `sceMpegRingbufferPut` y ahí se para. Fuera del video, la misma rutina
+  (h1, líneas 588-589 del registro) sigue con
+  `WaitEventFlag(UmdStreamEventFlag, 2, CLEAR)`, que espera a
+  UmdStreamThread (h3). La captura antigua (todo ocioso, 0 llamadas)
   era de una versión anterior y es otro síntoma.
 
 **Dragon Ball Z: Tenkaichi Tag Team (ULUS10537)**: la libc del juego
