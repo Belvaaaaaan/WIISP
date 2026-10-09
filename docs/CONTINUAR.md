@@ -154,6 +154,46 @@ otro hilo) da OK. No se repitió la pasada en PowerPC.
   `exit` (`LoadExecForUser_362A956B`) y `waittypes` (faltan mailboxes,
   message pipes, VPL...).
 
+### Diagnóstico del wiisp.log de la v0.4.5 (DBZ TTT y GTA VCS)
+
+**GTA: Vice City Stories (ULES00502)**: arranca bien (recorre el disco,
+carga sceATRAC3plus y sceMpeg, partidas, UmdStreamThread) y empieza el
+video de introducción. El registro se corta a los 332 ms emulados, sin
+`[DIAGNOSTICO]` ni `[STATS]`: el emulador entero se congela. Causa:
+
+- `MPEGreadThread` (h5) llama a `sceMpegRingbufferPut`, que llama a la
+  función de lectura del juego con `kernel_call_guest_sp` (mpeg.c:348).
+  Esa función corre en un **bucle anidado de `cpu_run` sin salida**
+  (kernel.c, `kernel_call_guest_sp`): mientras no vuelva, no hay cambios
+  de hilo, ni vblank, ni eventos, ni se lee el mando, ni avanza el frame.
+- La función de lectura del juego hace `WaitSema(UmdStreamSema)`,
+  `SetEventFlag(UmdStreamEventFlag, 1)` (las dos últimas líneas de h5) y
+  luego espera el bit 2 con `WaitEventFlag`, que pone `UmdStreamThread`
+  (h3) al terminar de leer. Dentro de la llamada anidada no se puede
+  esperar (`wait_current` da 0x800201A7) y h3 nunca corre: el juego se
+  queda en un bucle para siempre dentro del syscall.
+- PPSSPP (`sceMpeg.cpp`, `hleEnqueueCall` + `PostPutAction`) ejecuta ese
+  callback como código normal del hilo que llamó, después del syscall:
+  puede esperar y los demás hilos siguen. Es lo mismo que ya se hizo con
+  los callbacks de hilo (`HLE_THREAD_CB_TRAMPOLINE`).
+- Por qué el registro no muestra el final: la traza omite las llamadas que
+  repiten una de las 6 anteriores, y `fsync` solo se hace al escribir una
+  línea nueva; en libfat lo no sincronizado se pierde al apagar.
+- Por qué se ve la consola: el juego fijó el framebuffer a 0
+  (`sceDisplaySetFrameBuf(0, ...)`), y sin framebuffer
+  `video_draw_psp_frame` no dibuja nada (tampoco el contador de FPS).
+- GTA LCS usa el mismo motor (UmdStreamThread, MPEG para la intro):
+  previsiblemente lo mismo. La captura antigua (todo ocioso, 0 llamadas)
+  era de una versión anterior y es otro síntoma.
+
+**Dragon Ball Z: Tenkaichi Tag Team (ULUS10537)**: la libc del juego
+falla al iniciar y ejecuta `break`. Le faltan
+`sceKernelExtendThreadStack` (0xBC80EC7C: ejecuta una función del juego
+con otra pila; también es una llamada al juego desde el HLE),
+`sceKernelStopUnloadSelfModuleWithStatus` (0x8F2DF740) y
+`sceKernelMemset` (0xA089ECA4, debe devolver el destino). Sin nombre en
+nid_names.c los dos primeros.
+
 ## Siguientes pasos, por prioridad
 
 1. **Mandar v0.4.5 al usuario** y pedir el nuevo `wiisp.log` (comprobar en
