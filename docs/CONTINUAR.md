@@ -219,10 +219,32 @@ nid_names.c los dos primeros.
   video se "salta" leyendo el archivo entero por UmdStreamThread con los
   tiempos de E/S de la PSP, así que puede tardar (pantalla con la consola).
 
+### v0.4.7: el CLI para Windows y la traza fuera de la pantalla
+
+- wiisp.log de la v0.4.6 (GTA LCS, modo exacto, detenido con HOME a los
+  333 ms): **ya no se congela**. Lee el primer video (1,19 MB en rondas de
+  64 KB por UmdStreamThread), lo da por terminado, cierra sus hilos, salta
+  con `sceIoLseek` a 0x03358000 y empieza el segundo. Iba lentísimo en
+  tiempo real: 1,76 M instrucciones en todo el rato. Causa probable: cada
+  `[LLAMADA]` se escribía también en la consola del Wii (cada línea
+  desplaza la pantalla) y en el USB.
+- Ahora la traza `[LLAMADA]` va solo a wiisp.log (no a la pantalla ni a
+  stderr) y lo escrito se sincroniza también una vez por frame
+  (`log_tick`), para no perder el final si el juego deja de llamar al HLE.
+- CLI para Windows (`make -f Makefile.pc win`, paquete en dist/windows):
+  el usuario (Windows 11) ejecuta sus juegos en el PC, mucho más rápido
+  que en el Wii, y manda wiisp.log y capturas. Probado con Wine: ELF e ISO
+  con rutas de Windows y espacios, el .bat completo. Nuevas opciones:
+  `--capturas N`, BMP si el nombre acaba en .bmp, progreso cada 10 s
+  reales, Ctrl+C limpio. Las capturas PPM/BMP repiten los bits altos al
+  pasar de 16 a 24 bits (idénticas a las de pspautotests).
+- La carpeta de la ISO (ms0:/) se calcula también con rutas `\`.
+
 ## Siguientes pasos, por prioridad
 
-1. **Mandar v0.4.6 al usuario** y pedir el nuevo `wiisp.log` de GTA LCS
-   (y de DBZ TTT).
+1. **Que el usuario pruebe GTA LCS con el CLI de Windows** (y la v0.4.7 en
+   el Wii en modo rápido, dejándolo varios minutos) y mande wiisp.log y las
+   capturas: qué hace GTA después de los videos de introducción.
 
 2. Hecho (UMD).
 

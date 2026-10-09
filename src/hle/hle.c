@@ -11,6 +11,10 @@
 #include <string.h>
 #include <time.h>
 #include <unistd.h>
+#ifdef _WIN32
+#include <io.h>
+#define fsync _commit   /* el CLI para Windows */
+#endif
 #include "hle/hle.h"
 #include "hle/nid_names.h"
 #include "core/memory.h"
@@ -90,6 +94,7 @@ HleFunc hle_find(const char *lib, u32 nid, const char **name_out){
 /* ------------------------------------------------------------------ */
 
 static FILE *log_file;
+static void log_file_only(const char *fmt, ...) __attribute__((format(printf, 1, 2)));
 
 /* --- Diagnóstico: traza del arranque y últimas llamadas ------------------- */
 /* Las primeras llamadas al HLE van a wiisp.log con sus argumentos (y el
@@ -143,12 +148,12 @@ static void trace_call(const CallRec *r){
 	memmove(&trace_recent[1], &trace_recent[0], sizeof(trace_recent) - sizeof(trace_recent[0]));
 	trace_recent[0] = *r;
 	if(trace_skipped){
-		hle_log("[LLAMADA] (%u repetidas omitidas)\n", trace_skipped);
+		log_file_only("[LLAMADA] (%u repetidas omitidas)\n", trace_skipped);
 		trace_skipped = 0;
 	}
 	format_call(r, line, sizeof(line));
-	hle_log("[LLAMADA] %s\n", line);
-	if(++trace_count == TRACE_MAX) hle_log("[LLAMADA] fin de la traza del arranque (%u llamadas)\n", TRACE_MAX);
+	log_file_only("[LLAMADA] %s\n", line);
+	if(++trace_count == TRACE_MAX) log_file_only("[LLAMADA] fin de la traza del arranque (%u llamadas)\n", TRACE_MAX);
 }
 
 void hle_dump_state(const char *why){
@@ -266,27 +271,58 @@ void hle_log_sync(void){
 	}
 }
 
-void hle_log(const char *fmt, ...){
-	va_list ap;
-	va_start(ap, fmt);
-	vfprintf(stderr, fmt, ap);
-	va_end(ap);
+static time_t last_sync;
+static int unsynced;
+
+static void log_v(int to_screen, const char *fmt, va_list ap){
+	va_list ap2;
+	va_copy(ap2, ap);
+	if(to_screen) vfprintf(stderr, fmt, ap);
 	if(log_file && log_written < LOG_FILE_MAX){
-		int n;
-		va_start(ap, fmt);
-		n = vfprintf(log_file, fmt, ap);
-		va_end(ap);
+		int n = vfprintf(log_file, fmt, ap2);
 		if(n > 0) log_written += (u32)n;
 		if(log_written >= LOG_FILE_MAX) fputs("[registro recortado]\n", log_file);
 		fflush(log_file);
+		unsynced = 1;
 		{
-			static time_t last_sync;
 			time_t now = time(NULL);
 			if(now != last_sync || !strncmp(fmt, "[CPU]", 5)){
 				last_sync = now;
 				fsync(fileno(log_file));
+				unsynced = 0;
 			}
 		}
+	}
+	va_end(ap2);
+}
+
+void hle_log(const char *fmt, ...){
+	va_list ap;
+	va_start(ap, fmt);
+	log_v(1, fmt, ap);
+	va_end(ap);
+}
+
+/* Solo a wiisp.log: la traza de llamadas. En la pantalla del Wii cada línea
+   desplaza toda la consola y el emulador pasaba más tiempo escribiendo que
+   ejecutando el juego (GTA saltando sus videos). */
+static void log_file_only(const char *fmt, ...){
+	va_list ap;
+	va_start(ap, fmt);
+	log_v(0, fmt, ap);
+	va_end(ap);
+}
+
+/* Una vez por frame: lo escrito en el último segundo llega a la tarjeta
+   aunque el juego deje de llamar al HLE (si no, se perdía al apagar) */
+static void log_tick(void){
+	time_t now;
+	if(!log_file || !unsynced) return;
+	now = time(NULL);
+	if(now != last_sync){
+		last_sync = now;
+		fsync(fileno(log_file));
+		unsynced = 0;
 	}
 }
 
@@ -477,6 +513,7 @@ int hle_run_frame(void){
 	kernel_run_until((cpu_cycles / CYCLES_PER_FRAME + 1) * CYCLES_PER_FRAME);
 	if(!exited) kernel_vblank();
 	vfpu_stats_fold();
+	log_tick();
 	frame = cpu_cycles / CYCLES_PER_FRAME;
 	if(exited || !frame) return exited;
 	/* Cada minuto de juego emulado, por si la sesión acaba apagando */

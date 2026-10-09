@@ -107,6 +107,14 @@ python3 tests/autotests.py ../pspautotests --list tests/autotests_pass.txt  # lo
 python3 tests/autotests.py ../pspautotests threads/ -v                      # una carpeta, con diffs
 ```
 
+### En Windows
+
+`make -f Makefile.pc win` compila `build-win/wiisp-cli.exe` (con
+`gcc-mingw-w64-x86-64`, sin DLLs). Con `dist/windows/probar_juego.bat` y
+`dist/windows/LEEME.txt` forma el paquete para Windows: se arrastra la ISO
+encima del .bat y deja `wiisp.log` y capturas BMP (`--capturas N`: una cada
+N frames si la imagen cambió). Ctrl+C para limpiamente.
+
 Programas de PSP propios para reproducir situaciones de juegos comerciales
 (`tests/guest`, en C, sin PSPSDK; necesitan `gcc-mipsel-linux-gnu`):
 

@@ -14,6 +14,7 @@
  *                       (devctl de pspautotests), igual que en una PSP
  *     --null-gpu        no dibujar (para medir el resto: CPU y geometría)
  *     --fast-math       geometría con float normal, como con GX en el Wii
+ *     --capturas N      cada N frames, una captura (BMP) si la imagen cambió
  *     --root DIR        DIR hace de ms0:/ y el ejecutable está dentro (como
  *                       el --root de PPSSPP para pspautotests: "../x" funciona)
  *
@@ -24,11 +25,24 @@
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
+#include <signal.h>
 #include "frontend/app.h"
 #include "hle/hle.h"
 
 void *plat_alloc_big(size_t size){
+#ifdef _WIN32
+	return _aligned_malloc((size + 31) & ~(size_t)31, 32);
+#else
 	return aligned_alloc(32, (size + 31) & ~(size_t)31);
+#endif
+}
+
+/* Ctrl+C: parar como al llegar al límite (estado de los hilos en el
+   registro y captura final) en vez de cortar sin más */
+static volatile sig_atomic_t stop_requested;
+static void on_sigint(int sig){
+	(void)sig;
+	stop_requested = 1;
 }
 
 static void output(const char *text, unsigned len){
@@ -36,37 +50,80 @@ static void output(const char *text, unsigned len){
 	fflush(stdout);
 }
 
+#define X5(v) ((((v) & 31) << 3) | (((v) & 31) >> 2))
+#define X6(v) ((((v) & 63) << 2) | (((v) & 63) >> 4))
+#define X4(v) ((((v) & 15) << 4) | ((v) & 15))
+
 /* Convierte un píxel de la PSP (little-endian) a RGB de 8 bits */
 static void pixel_rgb(const unsigned char *p, unsigned format, unsigned char *rgb){
 	unsigned v = p[0] | (p[1] << 8);
 	switch(format){
-	case 0: rgb[0] = (v & 31) << 3; rgb[1] = ((v >> 5) & 63) << 2; rgb[2] = ((v >> 11) & 31) << 3; break;
-	case 1: rgb[0] = (v & 31) << 3; rgb[1] = ((v >> 5) & 31) << 3; rgb[2] = ((v >> 10) & 31) << 3; break;
-	case 2: rgb[0] = (v & 15) << 4; rgb[1] = ((v >> 4) & 15) << 4; rgb[2] = ((v >> 8) & 15) << 4; break;
+	/* Repitiendo los bits altos: 31 -> 255, no 248 (como la PSP) */
+	case 0: rgb[0] = X5(v); rgb[1] = X6(v >> 5); rgb[2] = X5(v >> 11); break;
+	case 1: rgb[0] = X5(v); rgb[1] = X5(v >> 5); rgb[2] = X5(v >> 10); break;
+	case 2: rgb[0] = X4(v); rgb[1] = X4(v >> 4); rgb[2] = X4(v >> 8); break;
 	default: rgb[0] = p[0]; rgb[1] = p[1]; rgb[2] = p[2]; break;
 	}
 }
 
+static void put_le32(unsigned char *p, unsigned v){
+	p[0] = (unsigned char)v; p[1] = (unsigned char)(v >> 8); p[2] = (unsigned char)(v >> 16); p[3] = (unsigned char)(v >> 24);
+}
+
+/* PPM, o BMP si el nombre acaba en .bmp (lo abre Windows sin más) */
 static int save_screenshot(const char *path){
 	unsigned stride, format, x, y;
 	const unsigned char *fb = app_get_framebuffer(&stride, &format);
+	size_t len = strlen(path);
+	int bmp = len > 4 && (!strcmp(path + len - 4, ".bmp") || !strcmp(path + len - 4, ".BMP"));
 	FILE *f;
-	if(!fb){ fprintf(stderr, "No hay framebuffer que guardar\n"); return -1; }
+	if(!fb){ fprintf(stderr, "[WIISP] no hay captura: el juego no mostraba ninguna imagen\n"); return -1; }
 	f = fopen(path, "wb");
 	if(!f) return -1;
-	fprintf(f, "P6\n%d %d\n255\n", APP_SCREEN_W, APP_SCREEN_H);
-	for(y = 0; y < APP_SCREEN_H; y++)
+	if(bmp){
+		unsigned char h[54];
+		unsigned size = APP_SCREEN_W * APP_SCREEN_H * 3;   /* 480 * 3: filas ya alineadas a 4 */
+		memset(h, 0, sizeof(h));
+		h[0] = 'B'; h[1] = 'M';
+		put_le32(h + 2, 54 + size);
+		put_le32(h + 10, 54);
+		put_le32(h + 14, 40);
+		put_le32(h + 18, APP_SCREEN_W);
+		put_le32(h + 22, APP_SCREEN_H);
+		h[26] = 1; h[28] = 24;
+		put_le32(h + 34, size);
+		fwrite(h, 1, sizeof(h), f);
+	} else
+		fprintf(f, "P6\n%d %d\n255\n", APP_SCREEN_W, APP_SCREEN_H);
+	for(y = 0; y < APP_SCREEN_H; y++){
+		unsigned row = bmp ? APP_SCREEN_H - 1 - y : y;   /* BMP: de abajo arriba, BGR */
 		for(x = 0; x < APP_SCREEN_W; x++){
-			unsigned char rgb[3];
-			pixel_rgb(fb + (y * stride + x) * (format == 3 ? 4 : 2), format, rgb);
-			fwrite(rgb, 1, 3, f);
+			unsigned char rgb[3], out[3];
+			pixel_rgb(fb + (row * stride + x) * (format == 3 ? 4 : 2), format, rgb);
+			if(bmp){ out[0] = rgb[2]; out[1] = rgb[1]; out[2] = rgb[0]; }
+			else memcpy(out, rgb, 3);
+			fwrite(out, 1, 3, f);
 		}
+	}
 	fclose(f);
 	return 0;
 }
 
+/* Para --capturas: un resumen del framebuffer visible, para no guardar
+   dos veces la misma imagen */
+static unsigned long long framebuffer_hash(void){
+	unsigned stride, format, y, x, bpp;
+	const unsigned char *fb = app_get_framebuffer(&stride, &format);
+	unsigned long long h = 1469598103934665603ull;
+	if(!fb) return 0;
+	bpp = format == 3 ? 4 : 2;
+	for(y = 0; y < APP_SCREEN_H; y++)
+		for(x = 0; x < APP_SCREEN_W * bpp; x++) h = (h ^ fb[y * stride * bpp + x]) * 1099511628211ull;
+	return h;
+}
+
 int main(int argc, char **argv){
-	int max_imports = 16, run = 0, frames = 1800, i, exited = 0;
+	int max_imports = 16, run = 0, frames = 1800, i, exited = 0, every = 0;
 	const char *path = NULL, *imports = NULL, *screenshot = NULL;
 
 	for(i = 1; i < argc; i++){
@@ -76,6 +133,7 @@ int main(int argc, char **argv){
 		else if(!strcmp(argv[i], "--frames") && i + 1 < argc) frames = atoi(argv[++i]);
 		else if(!strcmp(argv[i], "--imports") && i + 1 < argc) imports = argv[++i];
 		else if(!strcmp(argv[i], "--screenshot") && i + 1 < argc) screenshot = argv[++i];
+		else if(!strcmp(argv[i], "--capturas") && i + 1 < argc) every = atoi(argv[++i]);
 		else if(!strcmp(argv[i], "--bmp") && i + 1 < argc) app_set_screenshot_path(argv[++i]);
 		else if(!strcmp(argv[i], "--null-gpu")) app_set_null_renderer();
 		else if(!strcmp(argv[i], "--fast-math")) app_set_fast_math(1);
@@ -85,7 +143,8 @@ int main(int argc, char **argv){
 	}
 	if(!path){
 		fprintf(stderr, "uso: %s [--all] [--imports FILE] [--run] [--frames N] [--quiet]\n"
-		                "          [--screenshot FILE] EBOOT.PBP|archivo.elf|archivo.prx\n", argv[0]);
+		                "          [--screenshot FILE] [--capturas N] [--log FILE]\n"
+		                "          EBOOT.PBP|archivo.elf|archivo.prx|imagen.iso|imagen.cso\n", argv[0]);
 		return 2;
 	}
 	if(app_init()) return 1;
@@ -99,12 +158,35 @@ int main(int argc, char **argv){
 		unsigned run_frames;
 		unsigned long long instr;
 		double secs;
-		for(i = 0; i < frames && !exited; i++) exited = app_run_frame();
-		if(!exited) hle_dump_state("limite de frames alcanzado");   /* al --log */
+		unsigned long long last_hash = 0;
+		clock_t last_report = start;
+		signal(SIGINT, on_sigint);
+		for(i = 0; i < frames && !exited && !stop_requested; i++){
+			exited = app_run_frame();
+			if(every > 0 && (i + 1) % every == 0){
+				unsigned long long h = framebuffer_hash();
+				if(h && h != last_hash){
+					char name[64];
+					snprintf(name, sizeof(name), "captura_%06d.bmp", i + 1);
+					if(!save_screenshot(name)) fprintf(stderr, "[WIISP] %s\n", name);
+					last_hash = h;
+				}
+			}
+			/* Cada 10 s reales, por dónde va */
+			if(clock() - last_report >= 10 * CLOCKS_PER_SEC){
+				unsigned long long done;
+				app_get_stats(&run_frames, &done);
+				last_report = clock();
+				fprintf(stderr, "[WIISP] %.1f s de juego (frame %d), %.1f MIPS\n", i / 60.0, i,
+				        done / ((double)(last_report - start) / CLOCKS_PER_SEC) / 1e6);
+			}
+		}
+		if(stop_requested) hle_dump_state("detenido con Ctrl+C");
+		else if(!exited) hle_dump_state("limite de frames alcanzado");   /* al --log */
 		secs = (double)(clock() - start) / CLOCKS_PER_SEC;
 		app_get_stats(&run_frames, &instr);
 		fprintf(stderr, "[WIISP] %s tras %d frames (%.1f MIPS en este PC)\n",
-		        exited ? app_exit_reason() : "limite de frames alcanzado", i,
+		        exited ? app_exit_reason() : stop_requested ? "detenido con Ctrl+C" : "limite de frames alcanzado", i,
 		        secs > 0 ? instr / secs / 1e6 : 0.0);
 	}
 	if(screenshot) save_screenshot(screenshot);

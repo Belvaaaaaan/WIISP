@@ -4,6 +4,8 @@
 #   make -f Makefile.pc test       -> pruebas unitarias (con sanitizers)
 #   make -f Makefile.pc eboot      -> build-pc/EBOOT.PBP de prueba (sintético)
 #   make -f Makefile.pc cli-ppc    -> CLI para PowerPC (con qemu-ppc)
+#   make -f Makefile.pc win        -> build-win/wiisp-cli.exe para Windows
+#                                     (x86_64-w64-mingw32-gcc, sin DLLs)
 #   make -f Makefile.pc test-ppc   -> pruebas en PowerPC big-endian (como el
 #                                     Wii) con powerpc-linux-gnu-gcc + qemu-ppc
 
@@ -18,15 +20,23 @@ CLI_SRC  := $(CORE_SRC) src/frontend/app.c src/frontend/filelist.c src/host/main
 TEST_SRC := $(CORE_SRC) src/frontend/filelist.c $(wildcard tests/*.c)
 
 PPC_CC   ?= powerpc-linux-gnu-gcc
+WIN_CC   ?= x86_64-w64-mingw32-gcc
 QEMU_PPC ?= qemu-ppc
 
-.PHONY: all test test-ppc eboot cli-ppc clean
+.PHONY: all test test-ppc eboot cli-ppc win clean
 
 all: $(OUT)/wiisp-cli
 
 $(OUT)/wiisp-cli: $(CLI_SRC) $(wildcard src/*/*.h)
 	@mkdir -p $(OUT)
 	$(CC) $(CFLAGS) -o $@ $(CLI_SRC) -lm
+
+win: build-win/wiisp-cli.exe
+
+build-win/wiisp-cli.exe: $(CLI_SRC) $(wildcard src/*/*.h)
+	@mkdir -p build-win
+	$(WIN_CC) -O2 -std=gnu11 -fwrapv -Wall -Wextra -Wno-unused-parameter -Isrc -D__USE_MINGW_ANSI_STDIO=1 \
+		-static -o $@ $(CLI_SRC) -lm
 
 $(OUT)/tests: $(TEST_SRC) $(wildcard src/*/*.h tests/*.h)
 	@mkdir -p $(OUT)

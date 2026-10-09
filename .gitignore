@@ -3,3 +3,4 @@ build-pc/
 *.dol
 *.elf
 *.elf.map
+build-win/

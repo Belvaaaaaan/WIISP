@@ -1,0 +1,26 @@
+WIISP para Windows (version de PC del emulador, para pruebas)
+=============================================================
+
+Es el mismo emulador que en el Wii, pero en el PC: va mucho mas rapido y
+deja el mismo wiisp.log. No muestra ventana con imagen: guarda capturas.
+
+Como usarlo
+-----------
+1. Descomprime esta carpeta donde quieras (por ejemplo en el Escritorio).
+2. Arrastra la ISO (o CSO) del juego encima de "probar_juego.bat".
+3. Espera a que diga "Terminado". Cada 10 segundos escribe por donde va.
+   Si quieres pararlo antes, pulsa Ctrl+C (y luego "N" si pregunta
+   "Terminar el trabajo por lotes").
+4. Manda los archivos que quedan en esta carpeta:
+   - wiisp.log
+   - captura_XXXXXX.bmp (una cada 5 segundos de juego, solo si la imagen
+     cambio) y pantalla_final.bmp
+
+Notas
+-----
+- Windows puede avisar "Windows protegio su PC" porque el programa no esta
+  firmado: pulsa "Mas informacion" y "Ejecutar de todas formas".
+- Las partidas guardadas van a la carpeta PSP\SAVEDATA junto a la ISO.
+- Uso avanzado (desde una consola):
+    wiisp-cli.exe --run --frames 10800 --capturas 300 --log wiisp.log juego.iso
+  --frames: cuantos frames de juego (60 = 1 segundo).

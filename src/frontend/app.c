@@ -149,6 +149,10 @@ int app_load(const char *path, int max_imports, const char *imports_out){
 	/* La carpeta del ejecutable (o de la imagen) hace de ms0:/ y host0:/ */
 	snprintf(host_dir, sizeof(host_dir), "%s", path);
 	slash = strrchr(host_dir, '/');
+	{
+		char *bs = strrchr(host_dir, '\\');   /* rutas de Windows */
+		if(bs && (!slash || bs > slash)) slash = bs;
+	}
 	if(slash) host_dir[slash - host_dir] = 0;
 	else strcpy(host_dir, ".");
 	if(!disc_is_open()) snprintf(exec_path, sizeof(exec_path), "ms0:/PSP/GAME/WIISP/%s", slash ? slash + 1 : path);
