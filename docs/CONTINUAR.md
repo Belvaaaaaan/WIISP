@@ -240,6 +240,24 @@ nid_names.c los dos primeros.
   pasar de 16 a 24 bits (idénticas a las de pspautotests).
 - La carpeta de la ISO (ms0:/) se calcula también con rutas `\`.
 
+### v0.4.8: la memoria libre salía negativa
+
+- wiisp.log del CLI de Windows (v0.4.7, GTA LCS): pasa **todos los videos
+  de introducción**, descarga los módulos de video (StopModule /
+  UnloadModule) y al empezar a cargar el juego cae con un fallo de CPU
+  (escritura en 0x00000008, pc 08AA4274, threadmain). Causa:
+  `sceKernelMaxFreeMemSize` devolvía 0xFFFE0000; GTA creaba su montón
+  `StreamingHeap` con ese tamaño menos 0x80000, `CreateFpl` fallaba y la
+  reserva siguiente devolvía un puntero nulo.
+- Error en `find_gap` (kernel.c): al saltar un bloque ocupado y reiniciar
+  el recorrido no se reiniciaba `next`; con bloques pegados en cierto orden
+  de la tabla (pilas de hilos reservadas desde arriba) el hueco salía
+  negativo (-0x20000, la pila de threadmain). También afectaba a
+  TotalFreeMemSize y a las reservas desde arriba (fallaban sin motivo).
+  `tests/guest/memory.c` lo reproduce.
+- Sin capturas: el juego aún no había fijado ningún framebuffer
+  (`sceDisplaySetFrameBuf(0, ...)`).
+
 ## Siguientes pasos, por prioridad
 
 1. **Que el usuario pruebe GTA LCS con el CLI de Windows** (y la v0.4.7 en

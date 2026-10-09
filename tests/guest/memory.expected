@@ -1,0 +1,7 @@
+bloque 1 pegado debajo del anterior: si
+bloque 2 pegado debajo del anterior: si
+bloque 3 pegado debajo del anterior: si
+total libre: 192 KB menos (esperado 192)
+mayor hueco: bien
+mayor hueco < total: si
+reservar el mayor hueco: si

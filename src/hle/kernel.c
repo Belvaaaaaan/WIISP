@@ -802,7 +802,11 @@ static u32 find_gap(u32 size, u32 align, int from_high, u32 *largest, u32 *total
 			if(!blocks[i].used) continue;
 			if(blocks[i].addr <= pos && pos < blocks[i].addr + blocks[i].size){
 				pos = blocks[i].addr + blocks[i].size;
-				i = -1; /* reiniciar: pos cambió */
+				/* Reiniciar: pos cambió, y el "siguiente" visto hasta ahora
+				   puede haberse quedado atrás (bloques pegados): sin esto el
+				   hueco salía negativo (GTA LCS: 0xFFFE0000 libres) */
+				next = user_mem_end;
+				i = -1;
 				continue;
 			}
 			if(blocks[i].addr > pos && blocks[i].addr < next) next = blocks[i].addr;
