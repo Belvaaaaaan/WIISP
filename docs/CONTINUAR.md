@@ -258,6 +258,22 @@ nid_names.c los dos primeros.
 - Sin capturas: el juego aún no había fijado ningún framebuffer
   (`sceDisplaySetFrameBuf(0, ...)`).
 
+### v0.4.9: ¡GTA LCS arranca en el Wii! Desglose de tiempos
+
+- wiisp.log de la v0.4.8 en el Wii: GTA LCS pasa la introducción, carga y
+  corre (2 minutos de juego sin un error). Muy lento (0,3-0,5 FPS, 0,2
+  MIPS, 3 %), pero el usuario lo tenía en **modo exacto** (rasterizado por
+  software): con 0,2 MIPS la CPU emulada usaba menos del 5 % del tiempo.
+  Minuto 1 de juego: 1.762 M instrucciones (la carga); minuto 2: 225 M.
+- `[TIEMPOS]` cada 30 s reales (ver ARQUITECTURA.md 6.4). Ejemplo con la
+  demo cubevfpu en el CLI: modo exacto 98 % "rasterizar", ~90 imágenes/s;
+  con `--null-gpu`, 30.000 imágenes/s. En el Wii también cuenta texturas
+  decodificadas y framebuffers bajados/subidos de GX.
+- Siguiente: el usuario prueba en **modo rápido (GX)** y manda el registro;
+  según el reparto, atacar lo que más pese (OPTIMIZACION.md: frameskip,
+  caché de texturas con paletas nativas de GX, caché de vértices, T&L de
+  GX, reemplazo de funciones, dynarec).
+
 ## Siguientes pasos, por prioridad
 
 1. **Que el usuario pruebe GTA LCS con el CLI de Windows** (y la v0.4.7 en

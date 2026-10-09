@@ -20,6 +20,7 @@
 #include "core/memory.h"
 #include "gpu/ge.h"
 #include "cpu/vfpu.h"
+#include "core/prof.h"
 
 /* Todos los imports de todos los módulos cargados: el código del syscall
    de cada stub es su índice aquí */
@@ -160,6 +161,7 @@ void hle_dump_state(const char *why){
 	char line[256];
 	u32 i;
 	if(!module) return;
+	hle_profile_report("hasta aqui");
 	hle_log("[DIAGNOSTICO] %s\n", why);
 	kernel_dump_state();
 	hle_log("[DIAGNOSTICO] ultimas llamadas al HLE:\n");
@@ -207,7 +209,10 @@ void hle_syscall(u32 code){
 		ring_pos = (ring_pos + 1) % RING_SIZE;
 		{
 			u32 enq = kernel_enqueue_count();
+			int old = prof_switch(PROF_HLE);
+			hle_stat_syscalls++;
 			resolved[code].func();
+			prof_switch(old);
 			r->guest = kernel_enqueue_count() != enq;
 		}
 		r->ret = cpu.r[R_V0];
@@ -276,6 +281,7 @@ static int unsynced;
 
 static void log_v(int to_screen, const char *fmt, va_list ap){
 	va_list ap2;
+	int old = prof_switch(PROF_REGISTRO);
 	va_copy(ap2, ap);
 	if(to_screen) vfprintf(stderr, fmt, ap);
 	if(log_file && log_written < LOG_FILE_MAX){
@@ -294,6 +300,7 @@ static void log_v(int to_screen, const char *fmt, va_list ap){
 		}
 	}
 	va_end(ap2);
+	prof_switch(old);
 }
 
 void hle_log(const char *fmt, ...){
@@ -320,9 +327,11 @@ static void log_tick(void){
 	if(!log_file || !unsynced) return;
 	now = time(NULL);
 	if(now != last_sync){
+		int old = prof_switch(PROF_REGISTRO);
 		last_sync = now;
 		fsync(fileno(log_file));
 		unsynced = 0;
+		prof_switch(old);
 	}
 }
 
@@ -330,6 +339,87 @@ int hle_has_exited(void){ return exited; }
 const char *hle_exit_reason(void){ return exit_reason; }
 
 static u64 stats_base_instr, stats_logged_instr, stall_last_instr;
+
+/* --- Desglose del tiempo real ([TIEMPOS]) ------------------------------ */
+
+u64 hle_stat_syscalls, hle_stat_flips;
+static void (*profile_hook)(char *buf, size_t size);
+static struct {
+	int valid;
+	u64 clock, acc[PROF_N], instr, cycles, syscalls, flips, switches, guest_calls;
+	u32 vblanks;
+	GeStats ge;
+} prof_base;
+static u32 prof_vblanks;   /* hle_run_frame lleva la cuenta */
+
+void hle_set_profile_hook(void (*fn)(char *buf, size_t size)){ profile_hook = fn; }
+
+static void profile_snapshot(void){
+	prof_flush();
+	prof_base.valid = 1;
+	prof_base.clock = prof_last;
+	memcpy(prof_base.acc, prof_acc, sizeof(prof_acc));
+	prof_base.instr = cpu_executed;
+	prof_base.cycles = cpu_cycles;
+	prof_base.syscalls = hle_stat_syscalls;
+	prof_base.flips = hle_stat_flips;
+	prof_base.switches = kernel_stat_switches;
+	prof_base.guest_calls = kernel_stat_guest_calls;
+	prof_base.vblanks = prof_vblanks;
+	ge_get_stats(&prof_base.ge);
+}
+
+/* Tres líneas: velocidad, a dónde va el tiempo real y qué hizo el GE.
+   Sin acentos: también sale en la consola del Wii. */
+void hle_profile_report(const char *why){
+	static const char *const names[PROF_N] = {
+		"otros", "CPU", "syscalls", "GE", "rasterizar", "texturas", "framebuffers", "presentar", "esperar GX", "E/S",
+		"audio", "registro"
+	};
+	char line[512], extra[256];
+	u64 total, d[PROF_N];
+	double secs, game;
+	size_t len;
+	int i;
+	GeStats ge;
+	if(!prof_clock || !prof_hz || !prof_base.valid) return;
+	prof_flush();
+	total = prof_last - prof_base.clock;
+	if(!total || (why && total < prof_hz / 2)) return;   /* justo tras otro informe */
+	for(i = 0; i < PROF_N; i++) d[i] = prof_acc[i] - prof_base.acc[i];
+	secs = (double)total / (double)prof_hz;
+	game = (double)(cpu_cycles - prof_base.cycles) / (double)PSP_CPU_HZ;
+	ge_get_stats(&ge);
+	hle_log("[TIEMPOS] %s%s%.1f s reales: %.2f s de juego (%.1f%%), %u vblanks, %llu imagenes (%.2f/s), "
+	        "%.1f M instr (%.2f MIPS)\n", why ? why : "", why ? ", " : "", secs, game, 100.0 * game / secs,
+	        prof_vblanks - prof_base.vblanks, (unsigned long long)(hle_stat_flips - prof_base.flips),
+	        (double)(hle_stat_flips - prof_base.flips) / secs, (double)(cpu_executed - prof_base.instr) / 1e6,
+	        (double)(cpu_executed - prof_base.instr) / secs / 1e6);
+	len = (size_t)snprintf(line, sizeof(line), "[TIEMPOS]");
+	for(i = 0; i < PROF_N && len < sizeof(line) - 32; i++){
+		static const int order[PROF_N] = { PROF_CPU, PROF_HLE, PROF_GE, PROF_RASTER, PROF_TEXTURAS, PROF_FB,
+		                                   PROF_PRESENTAR, PROF_ESPERA_GX, PROF_ES, PROF_AUDIO, PROF_REGISTRO, PROF_OTRO };
+		int b = order[i];
+		len += (size_t)snprintf(line + len, sizeof(line) - len, " %s %.1f%%", names[b], 100.0 * (double)d[b] / (double)total);
+	}
+	hle_log("%s\n", line);
+	extra[0] = 0;
+	if(profile_hook) profile_hook(extra, sizeof(extra));
+	hle_log("[TIEMPOS] GE: %u listas, %u comandos, %u vertices, %u primitivas | %llu syscalls, %llu cambios de hilo, "
+	        "%llu llamadas al juego%s%s\n",
+	        ge.lists - prof_base.ge.lists, ge.commands - prof_base.ge.commands, ge.vertices - prof_base.ge.vertices,
+	        ge.primitives - prof_base.ge.primitives, (unsigned long long)(hle_stat_syscalls - prof_base.syscalls),
+	        (unsigned long long)(kernel_stat_switches - prof_base.switches),
+	        (unsigned long long)(kernel_stat_guest_calls - prof_base.guest_calls), extra[0] ? " | " : "", extra);
+	hle_log_sync();
+	profile_snapshot();
+}
+
+static void profile_tick(void){
+	if(!prof_clock || !prof_hz) return;
+	if(!prof_base.valid){ profile_snapshot(); return; }
+	if(prof_clock() - prof_base.clock >= (u64)HLE_PROFILE_SECONDS * prof_hz) hle_profile_report(NULL);
+}
 static int stats_final, stalled, stall_dumps;
 
 void hle_exit(const char *reason){
@@ -337,6 +427,7 @@ void hle_exit(const char *reason){
 		exited = 1;
 		exit_reason = reason;
 		if(log_file) hle_log("[WIISP] fin: %s\n", reason);
+		hle_profile_report("hasta el final");
 		hle_log_stats();
 		stats_final = 1;   /* las del programa terminado ya están */
 		hle_log_sync();
@@ -459,6 +550,7 @@ int hle_init(PspModule *mod, const char *host_dir, const char *exec_name){
 	stats_final = 0;
 	stall_last_instr = cpu_executed;
 	stalled = stall_dumps = 0;
+	prof_base.valid = 0;
 	memset(ring, 0, sizeof(ring));
 	memset(trace_recent, 0, sizeof(trace_recent));
 	ring_pos = trace_count = trace_skipped = 0;
@@ -514,6 +606,8 @@ int hle_run_frame(void){
 	if(!exited) kernel_vblank();
 	vfpu_stats_fold();
 	log_tick();
+	prof_vblanks++;
+	profile_tick();
 	frame = cpu_cycles / CYCLES_PER_FRAME;
 	if(exited || !frame) return exited;
 	/* Cada minuto de juego emulado, por si la sesión acaba apagando */

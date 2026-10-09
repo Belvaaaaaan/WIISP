@@ -107,6 +107,19 @@ python3 tests/autotests.py ../pspautotests --list tests/autotests_pass.txt  # lo
 python3 tests/autotests.py ../pspautotests threads/ -v                      # una carpeta, con diffs
 ```
 
+### Desglose de tiempos
+
+Cada 30 s reales, `wiisp.log` dice a dónde va el tiempo:
+
+```
+[TIEMPOS] 30.0 s reales: 0.90 s de juego (3.0%), 54 vblanks, 12 imagenes (0.40/s), 6.1 M instr (0.20 MIPS)
+[TIEMPOS] CPU 4.1% syscalls 0.8% GE 2.0% rasterizar 88.5% texturas 0.0% framebuffers 0.0% presentar 1.3% ...
+[TIEMPOS] GE: ... vertices, ... primitivas | ... syscalls | modo EXACTO (dibujo por software)
+```
+
+`CPU` es el intérprete; `rasterizar`, el dibujo por software (modo exacto);
+`texturas`, `framebuffers`, `presentar` y `esperar GX`, el backend GX.
+
 ### En Windows
 
 `make -f Makefile.pc win` compila `build-win/wiisp-cli.exe` (con

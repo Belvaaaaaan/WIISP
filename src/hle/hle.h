@@ -19,7 +19,7 @@
 
 /* Versión de WIISP (la misma que dist/apps/wiisp/meta.xml): sale en el
    menú y al principio de wiisp.log */
-#define WIISP_VERSION "0.4.8"
+#define WIISP_VERSION "0.4.9"
 
 typedef void (*HleFunc)(void);
 
@@ -142,6 +142,16 @@ void hle_dump_state(const char *why);
    variable de entorno WIISP_STATS. */
 void hle_log_stats(void);
 extern u64 kernel_stat_switches, kernel_stat_vfpu_loads, kernel_stat_guest_calls;
+
+/* Desglose del tiempo real ([TIEMPOS] en wiisp.log): cada 30 s reales
+   desde hle_run_frame y al parar. Hace falta un reloj (prof_set_clock en
+   core/prof.h). El frontend puede añadir sus datos (renderizador, GX). */
+#ifndef HLE_PROFILE_SECONDS
+#define HLE_PROFILE_SECONDS 30
+#endif
+extern u64 hle_stat_syscalls, hle_stat_flips;
+void hle_set_profile_hook(void (*fn)(char *buf, size_t size));
+void hle_profile_report(const char *why);
 
 /* Estado de salida */
 int  hle_has_exited(void);

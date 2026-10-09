@@ -28,6 +28,7 @@ typedef struct {
 	u32 primitives;
 	u32 vertices;
 	u64 pixels;
+	u32 lists;        /* veces que se procesó la cola de listas */
 	u64 host_ticks;   /* tiempo del anfitrión dentro del GE (si hay reloj) */
 } GeStats;
 void ge_get_stats(GeStats *out);

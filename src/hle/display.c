@@ -66,6 +66,7 @@ static void sceDisplaySetFrameBuf(void){
 		RETURN(0x80000107u); /* INVALID_ARGUMENT */
 		return;
 	}
+	if(addr && addr != fb.addr) hle_stat_flips++;   /* una imagen nueva (doble búfer) */
 	fb.addr = addr;
 	fb.stride = stride;
 	fb.format = format;

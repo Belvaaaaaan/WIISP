@@ -30,6 +30,7 @@
 #include "gpu/ge_internal.h"
 #include "gpu/ge_math.h"
 #include "core/memory.h"
+#include "core/prof.h"
 
 #define SSF 16  /* SCREEN_SCALE_FACTOR */
 
@@ -2049,8 +2050,13 @@ void ge_raster_triangle(const GeVertex *v0, const GeVertex *v1, const GeVertex *
 	if(!range_of(v, 3, &x1, &y1, &x2, &y2)) return;
 	ge_stats.primitives++;
 	if(ge_hw){ GE_PROF_T0; ge_hw->triangle(v0, v1, v2); GE_PROF_ADD(1); return; }
-	texture_snapshot();
-	draw_triangle(v0, v1, v2, x1, y1, x2, y2);
+	{
+		/* Rasterizado por software (modo exacto): se mide aparte */
+		int old = prof_switch(PROF_RASTER);
+		texture_snapshot();
+		draw_triangle(v0, v1, v2, x1, y1, x2, y2);
+		prof_switch(old);
+	}
 }
 
 void ge_raster_rect(const GeVertex *v0, const GeVertex *v1){
@@ -2059,8 +2065,12 @@ void ge_raster_rect(const GeVertex *v0, const GeVertex *v1){
 	if(!range_of(v, 2, &x1, &y1, &x2, &y2)) return;
 	ge_stats.primitives++;
 	if(ge_hw){ GE_PROF_T0; ge_hw->rect(v0, v1); GE_PROF_ADD(1); return; }
-	texture_snapshot();
-	draw_rectangle(v0, v1, x1, y1, x2, y2);
+	{
+		int old = prof_switch(PROF_RASTER);
+		texture_snapshot();
+		draw_rectangle(v0, v1, x1, y1, x2, y2);
+		prof_switch(old);
+	}
 }
 
 void ge_raster_clear_rect(const GeVertex *v0, const GeVertex *v1){
@@ -2069,7 +2079,11 @@ void ge_raster_clear_rect(const GeVertex *v0, const GeVertex *v1){
 	if(!range_of(v, 2, &x1, &y1, &x2, &y2)) return;
 	ge_stats.primitives++;
 	if(ge_hw){ ge_hw->clear_rect(v0, v1); return; }
-	clear_rectangle(v0, v1, x1, y1, x2, y2);
+	{
+		int old = prof_switch(PROF_RASTER);
+		clear_rectangle(v0, v1, x1, y1, x2, y2);
+		prof_switch(old);
+	}
 }
 
 void ge_raster_line(const GeVertex *v0, const GeVertex *v1){
@@ -2078,8 +2092,12 @@ void ge_raster_line(const GeVertex *v0, const GeVertex *v1){
 	if(!range_of(v, 2, &x1, &y1, &x2, &y2)) return;
 	ge_stats.primitives++;
 	if(ge_hw){ ge_hw->line(v0, v1); return; }
-	texture_snapshot();
-	draw_line(v0, v1, x1, y1, x2, y2);
+	{
+		int old = prof_switch(PROF_RASTER);
+		texture_snapshot();
+		draw_line(v0, v1, x1, y1, x2, y2);
+		prof_switch(old);
+	}
 }
 
 void ge_raster_point(const GeVertex *v0){
@@ -2088,6 +2106,10 @@ void ge_raster_point(const GeVertex *v0){
 	if(!range_of(v, 1, &x1, &y1, &x2, &y2)) return;
 	ge_stats.primitives++;
 	if(ge_hw){ ge_hw->point(v0); return; }
-	texture_snapshot();
-	draw_point(v0);
+	{
+		int old = prof_switch(PROF_RASTER);
+		texture_snapshot();
+		draw_point(v0);
+		prof_switch(old);
+	}
 }

@@ -16,6 +16,7 @@
 #include <stdlib.h>
 #include "hle/hle.h"
 #include "core/memory.h"
+#include "core/prof.h"
 
 #define NUM_CHANNELS 8
 #define HW_RATE 44100
@@ -164,7 +165,7 @@ static void mix_src(void){
 }
 
 static void mixer_tick(u64 userdata){
-	int i;
+	int i, old = prof_switch(PROF_AUDIO);
 	(void)userdata;
 	memset(mix, 0, sizeof(mix));
 	for(i = 0; i < NUM_CHANNELS; i++) mix_channel(i);
@@ -176,6 +177,7 @@ static void mixer_tick(u64 userdata){
 	}
 	if(any_playing()) kernel_schedule_event(cpu_cycles + block_cycles(), mixer_tick, 0);
 	else mixer_running = 0;
+	prof_switch(old);
 }
 
 void audio_init(void){

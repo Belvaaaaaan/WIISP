@@ -15,6 +15,7 @@
 #include <stdlib.h>
 #include "hle/hle.h"
 #include "core/memory.h"
+#include "core/prof.h"
 
 #define VOICES_MAX 32
 #define VOL_MAX 0x1000
@@ -344,7 +345,15 @@ static void mix_voice(Voice *v){
 	if(v->env.state == ST_OFF){ v->playing = 0; v->on = 0; }
 }
 
+static void sas_mix_body(u32 out_addr, u32 in_addr, int lvol, int rvol);
+
 static void sas_mix(u32 out_addr, u32 in_addr, int lvol, int rvol){
+	int old = prof_switch(PROF_AUDIO);
+	sas_mix_body(out_addr, in_addr, lvol, rvol);
+	prof_switch(old);
+}
+
+static void sas_mix_body(u32 out_addr, u32 in_addr, int lvol, int rvol){
 	int v, i, g = sas.grain;
 	u8 *out;
 	const u8 *in = NULL;

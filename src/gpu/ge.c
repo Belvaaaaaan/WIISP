@@ -22,6 +22,7 @@
 #include "gpu/ge_internal.h"
 #include "hle/hle.h"
 #include "core/memory.h"
+#include "core/prof.h"
 
 GeState ge;
 GeStats ge_stats;
@@ -656,10 +657,15 @@ static void process_dl_queue_body(void);
 
 static void process_dl_queue(void){
 	u64 t0;
-	if(!ge_host_clock){ process_dl_queue_body(); return; }
-	t0 = ge_host_clock();
-	process_dl_queue_body();
-	ge_stats.host_ticks += ge_host_clock() - t0;
+	int old = prof_switch(PROF_GE);
+	ge_stats.lists++;
+	if(!ge_host_clock) process_dl_queue_body();
+	else {
+		t0 = ge_host_clock();
+		process_dl_queue_body();
+		ge_stats.host_ticks += ge_host_clock() - t0;
+	}
+	prof_switch(old);
 }
 
 static void process_dl_queue_body(void){

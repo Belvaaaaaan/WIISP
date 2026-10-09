@@ -37,6 +37,7 @@
 #include "wii/gx_ge.h"
 #include "frontend/app.h"
 #include "hle/hle.h"
+#include "core/prof.h"
 #ifdef WIISP_PROF
 extern unsigned long long ge_prof[8];
 #endif
@@ -72,6 +73,19 @@ static int wait_accept(void){
 
 static u64 now_ms(void){ return ticks_to_millisecs(gettime()); }
 static unsigned long long host_clock(void){ return gettime(); }
+static u64 prof_ticks(void){ return gettime(); }
+
+/* Lo que añade el Wii al desglose de tiempos: el renderizador y, con GX,
+   cuántas texturas decodificó y cuántos framebuffers movió */
+static void profile_hook(char *buf, size_t size){
+	unsigned long long setup, state, present;
+	unsigned cnt[4];
+	gx_ge_profile(&setup, &state, &present, cnt);
+	if(gx_ge_enabled())
+		snprintf(buf, size, "modo rapido (GX): %u texturas decodificadas, %u bajadas y %u subidas de framebuffer, "
+		         "%u imagenes desde la VRAM", cnt[3], cnt[1], cnt[2], cnt[0]);
+	else snprintf(buf, size, "modo EXACTO (dibujo por software)");
+}
 
 static void run_program(void){
 	int exited = 0;
@@ -82,6 +96,9 @@ static void run_program(void){
 
 	gx_ge_enable(menu_renderer_gx());
 	app_set_output(program_output);
+	/* Desglose del tiempo real cada 30 s en wiisp.log ([TIEMPOS]) */
+	prof_set_clock(prof_ticks, (u64)TB_TIMER_CLOCK * 1000ull);
+	hle_set_profile_hook(profile_hook);
 	if(app_start()){
 		printf("Error: no se pudo iniciar el programa\n");
 		return;
@@ -109,7 +126,11 @@ static void run_program(void){
 			last_frames = frames;
 			last_instr = instr;
 		}
-		video_draw_psp_frame(overlay);
+		{
+			int old = prof_switch(PROF_PRESENTAR);
+			video_draw_psp_frame(overlay);
+			prof_switch(old);
+		}
 	}
 	gx_ge_reset();
 	video_show_console();
@@ -197,6 +218,7 @@ static int autotest(const char *appdir){
 			unsigned cnt[4];
 			FILE *st;
 			app_set_host_clock(host_clock);
+			prof_set_clock(NULL, 0);   /* las pruebas miden con lo suyo */
 			gx_ge_profile(&ps, &pst, &pp, cnt);
 			for(frames = 0; frames < max_frames && !exited; frames++){
 				exited = app_run_frame();

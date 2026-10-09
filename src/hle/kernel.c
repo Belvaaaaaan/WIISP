@@ -27,6 +27,7 @@
 #include "hle/hle.h"
 #include "core/memory.h"
 #include "cpu/vfpu.h"
+#include "core/prof.h"
 
 /* ------------------------------------------------------------------ */
 /* UIDs                                                               */
@@ -674,8 +675,11 @@ void kernel_run_until(u64 target){
 		{
 			u64 slice = limit > cpu_cycles ? limit - cpu_cycles : 1;
 			if(slice > 1000000) slice = 1000000;
+			int old;
 			cpu_stop_requested = 0;
+			old = prof_switch(PROF_CPU);
 			cpu_run((u32)slice);
+			prof_switch(old);
 		}
 	}
 }
@@ -1103,8 +1107,10 @@ u32 kernel_call_guest_sp(u32 func, u32 sp, u32 a0, u32 a1, u32 a2){
 	callback_done = 0;
 	/* Los cambios de hilo que pida la función esperan a que termine */
 	while(!callback_done && !hle_has_exited()){
+		int old = prof_switch(PROF_CPU);
 		cpu_stop_requested = 0;
 		cpu_run(100000);
+		prof_switch(old);
 	}
 	ret = cpu.r[R_V0];
 	cpu = saved;

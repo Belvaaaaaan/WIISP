@@ -298,6 +298,12 @@ porta entero: su consumo de memoria no cabe en el Wii.
   `sceKernelCheckCallback`. Si devuelven algo distinto de 0 se borran.
   Tras ejecutarlos, la espera sigue (o termina si su condición ya se
   cumplió).
+- Desglose del tiempo real (`core/prof.c`): cubetas exclusivas que suman el
+  100 % (CPU, syscalls, GE, rasterizar por software, texturas, framebuffers,
+  presentar, esperar a GX, E/S, audio, registro, otros). Se cambia de cubeta
+  solo en puntos gruesos (`prof_switch`), así que va siempre activo. Cada
+  30 s reales `hle.c` escribe tres líneas `[TIEMPOS]` en wiisp.log
+  (velocidad, reparto y contadores del GE/GX) y otra al parar.
 - Llamadas del HLE a funciones del juego (`kernel_enqueue_call`, como
   `hleEnqueueCall` de PPSSPP): el callback de `sceMpegRingbufferPut` o la
   función de `sceKernelExtendThreadStack` corren como código normal del

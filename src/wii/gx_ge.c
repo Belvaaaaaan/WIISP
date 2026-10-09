@@ -48,6 +48,7 @@
 #include "gpu/ge_math.h"
 #include "core/memory.h"
 #include "hle/hle.h"
+#include "core/prof.h"
 #undef u8
 #undef u16
 #undef u32
@@ -156,7 +157,15 @@ static void flush_deferred(void){
 }
 
 /* Espera a que la GPU acabe todo lo pendiente */
+static void wait_gpu_body(void);
+
 static void wait_gpu(void){
+	int old = prof_switch(PROF_ESPERA_GX);
+	wait_gpu_body();
+	prof_switch(old);
+}
+
+static void wait_gpu_body(void){
 	GX_DrawDone();
 	flush_deferred();
 }
@@ -245,7 +254,15 @@ static int visible_w(const Surface *s){
 }
 
 /* tex (GPU) -> VRAM, fila a fila y por formato */
+static void tex_to_vram_body(const Surface *s);
+
 static void tex_to_vram(const Surface *s){
+	int old = prof_switch(PROF_FB);
+	tex_to_vram_body(s);
+	prof_switch(old);
+}
+
+static void tex_to_vram_body(const Surface *s){
 	int x, y, w = visible_w(s), keep_a = s->amode == A_VRAM;
 	u32 ua = (u32)s->ualpha;
 	DCInvalidateRange(s->tex, (u32)(s->w * s->h * 4));
@@ -335,7 +352,15 @@ static inline core_u32 vram16_to_8888(int fmt, core_u32 v){
 }
 
 /* VRAM -> tex. Un alfa igual en todo el búfer se queda en ualpha. */
+static void vram_to_tex_body(Surface *s);
+
 static void vram_to_tex(Surface *s){
+	int old = prof_switch(PROF_FB);
+	vram_to_tex_body(s);
+	prof_switch(old);
+}
+
+static void vram_to_tex_body(Surface *s){
 	int x, y, w = visible_w(s), first_a = -1, uniform = 1, bpp = surf_bpp(s->fmt);
 	prof_uploads++;
 	memset(s->tex, 0, (size_t)(s->w * s->h * 4));
@@ -378,7 +403,15 @@ static void vram_to_tex(Surface *s){
 }
 
 /* EFB -> tex (sin esperar a la GPU) */
+static void efb_to_tex_body(Surface *s);
+
 static void efb_to_tex(Surface *s){
+	int old = prof_switch(PROF_FB);
+	efb_to_tex_body(s);
+	prof_switch(old);
+}
+
+static void efb_to_tex_body(Surface *s){
 	copy_filter_none();
 	GX_SetTexCopySrc(0, 0, (u16)s->w, (u16)s->h);
 	GX_SetTexCopyDst((u16)s->w, (u16)s->h, s->fmt == SURF_Z ? GX_TF_Z24X8 : GX_TF_RGBA8, GX_FALSE);
@@ -611,7 +644,15 @@ static void blit(const Surface *c, const Surface *z, int color, int alpha, float
 
 /* --- Restaurar el EFB ---------------------------------------------------------- */
 
+static void restore_color_body(void);
+
 static void restore_color(void){
+	int old = prof_switch(PROF_FB);
+	restore_color_body();
+	prof_switch(old);
+}
+
+static void restore_color_body(void){
 	Surface *s = cur_c;
 	if(s->state == VRAM_NEWER || !s->has_tex){
 		wait_gpu();
@@ -625,7 +666,15 @@ static void restore_color(void){
 	efb_c_newer = 0;
 }
 
+static void restore_depth_body(void);
+
 static void restore_depth(void){
+	int old = prof_switch(PROF_FB);
+	restore_depth_body();
+	prof_switch(old);
+}
+
+static void restore_depth_body(void){
 	Surface *s = cur_z;
 	if(s->state == VRAM_NEWER || !s->has_tex){
 		wait_gpu();
@@ -897,7 +946,16 @@ static int decode_texture(TexEntry *e, const GeRasterState *r){
 }
 
 /* Textura actual del GE (estado de ge_raster_begin) */
+static TexEntry *lookup_texture_body(const GeRasterState *r);
+
 static TexEntry *lookup_texture(const GeRasterState *r){
+	int old = prof_switch(PROF_TEXTURAS);
+	TexEntry *e = lookup_texture_body(r);
+	prof_switch(old);
+	return e;
+}
+
+static TexEntry *lookup_texture_body(const GeRasterState *r){
 	core_u32 addr = r->texaddr[0], fmt = (core_u32)r->texfmt | ((core_u32)r->swizzle << 8);
 	int ws = r->width0_shift, hs = r->height0_shift, w, h, bufw = r->texbufw[0], i;
 	core_u32 size, clutfmt = 0, clut_hash = 0, hash;

@@ -28,6 +28,10 @@
 #include <signal.h>
 #include "frontend/app.h"
 #include "hle/hle.h"
+#include "core/prof.h"
+#ifdef _WIN32
+#include <windows.h>
+#endif
 
 void *plat_alloc_big(size_t size){
 #ifdef _WIN32
@@ -35,6 +39,34 @@ void *plat_alloc_big(size_t size){
 #else
 	return aligned_alloc(32, (size + 31) & ~(size_t)31);
 #endif
+}
+
+/* Reloj para el desglose de tiempos ([TIEMPOS] en el registro) */
+static u64 prof_ticks(void){
+#ifdef _WIN32
+	LARGE_INTEGER c;
+	QueryPerformanceCounter(&c);
+	return (u64)c.QuadPart;
+#else
+	struct timespec ts;
+	clock_gettime(CLOCK_MONOTONIC, &ts);
+	return (u64)ts.tv_sec * 1000000000ull + (u64)ts.tv_nsec;
+#endif
+}
+
+static u64 prof_ticks_hz(void){
+#ifdef _WIN32
+	LARGE_INTEGER f;
+	QueryPerformanceFrequency(&f);
+	return (u64)f.QuadPart;
+#else
+	return 1000000000ull;
+#endif
+}
+
+static int null_gpu;
+static void profile_hook(char *buf, size_t size){
+	snprintf(buf, size, "%s", null_gpu ? "sin dibujar (--null-gpu)" : "modo EXACTO (dibujo por software, el del PC)");
 }
 
 /* Ctrl+C: parar como al llegar al límite (estado de los hilos en el
@@ -135,7 +167,7 @@ int main(int argc, char **argv){
 		else if(!strcmp(argv[i], "--screenshot") && i + 1 < argc) screenshot = argv[++i];
 		else if(!strcmp(argv[i], "--capturas") && i + 1 < argc) every = atoi(argv[++i]);
 		else if(!strcmp(argv[i], "--bmp") && i + 1 < argc) app_set_screenshot_path(argv[++i]);
-		else if(!strcmp(argv[i], "--null-gpu")) app_set_null_renderer();
+		else if(!strcmp(argv[i], "--null-gpu")){ app_set_null_renderer(); null_gpu = 1; }
 		else if(!strcmp(argv[i], "--fast-math")) app_set_fast_math(1);
 		else if(!strcmp(argv[i], "--root") && i + 1 < argc) app_set_root(argv[++i]);
 		else if(!strcmp(argv[i], "--log") && i + 1 < argc) hle_set_log_file(argv[++i]);   /* como wiisp.log */
@@ -152,6 +184,8 @@ int main(int argc, char **argv){
 	if(!run) return 0;
 
 	app_set_output(output);
+	prof_set_clock(prof_ticks, prof_ticks_hz());
+	hle_set_profile_hook(profile_hook);
 	if(app_start()) return 1;
 	{
 		clock_t start = clock();

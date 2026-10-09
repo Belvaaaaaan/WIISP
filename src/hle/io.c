@@ -43,6 +43,7 @@
 #include "hle/hle.h"
 #include "core/memory.h"
 #include "loader/disc.h"
+#include "core/prof.h"
 
 #define MAX_FILES 64
 #define SCE_KERNEL_ERROR_BADF 0x80020323u
@@ -454,7 +455,12 @@ static s64 read_fd(u32 fd, u32 buf, u32 size){
 	}
 	p = mem_ptr(buf, size);
 	if(!p && size) return (s32)SCE_KERNEL_ERROR_ILLEGAL_ADDR;
-	return (s64)fread(p, 1, size, o->f);
+	{
+		int old = prof_switch(PROF_ES);
+		s64 n = (s64)fread(p, 1, size, o->f);
+		prof_switch(old);
+		return n;
+	}
 }
 
 static void sceIoRead(void){
@@ -474,7 +480,12 @@ static s64 write_fd(u32 fd, u32 buf, u32 size){
 	o = get_file(fd);
 	if(!o || o->kind == F_FAILED) return (s32)SCE_KERNEL_ERROR_BADF;
 	if(o->kind != F_HOST) return (s32)SCE_ERRNO_READ_ONLY;
-	return (s64)fwrite(p, 1, size, o->f);
+	{
+		int old = prof_switch(PROF_ES);
+		s64 n = (s64)fwrite(p, 1, size, o->f);
+		prof_switch(old);
+		return n;
+	}
 }
 
 static void sceIoWrite(void){

@@ -17,6 +17,7 @@
 #include <ctype.h>
 #include "loader/disc.h"
 #include "loader/inflate.h"
+#include "core/prof.h"
 
 enum { FMT_NONE, FMT_ISO, FMT_CSO, FMT_ZSO };
 
@@ -32,8 +33,11 @@ static u32 cached_frame = 0xFFFFFFFFu;
 static DiscEntry root;
 
 static int file_read_at(u64 pos, void *out, u32 size){
-	if(fseek(file, (long)pos, SEEK_SET)) return 0;
-	return (int)fread(out, 1, size, file);
+	int n, old = prof_switch(PROF_ES);
+	if(fseek(file, (long)pos, SEEK_SET)) n = 0;
+	else n = (int)fread(out, 1, size, file);
+	prof_switch(old);
+	return n;
 }
 
 void disc_close(void){
