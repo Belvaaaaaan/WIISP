@@ -466,6 +466,18 @@ los vblanks que faltan) y `scePowerCheckWlanCoexistenceClock` (0xA85880D0,
 fallando por `sceDisplayIsVblank` (siempre 0) y sceDisplayWaitVblank
 dentro del vblank, que ya fallaban.
 
+### Carrito (para cuando el usuario vuelva a su Wii)
+
+1. Verificar en el Wii la 0.5.4+ (warping: TN/TS y MR/ME) con el registro.
+2. Skinning rápido en modo GX (aprobado): mezclar las matrices por peso en
+   float y una sola multiplicación; saltar pesos 0; prueba de invitado
+   con 1-8 huesos, pesos de 8/16 bits y float y morph, rápido contra
+   exacto con tolerancia. Modo exacto sin cambios.
+3. Después, por orden (ganancia estimada / riesgo en la conversación):
+   matrices solo al cambiar, color constante sin luces, luces solo para
+   los vértices de triángulos que se dibujan, paletas de GX (TLUT),
+   framebuffers en la GPU, reemplazo de funciones por hash, T&L por GX.
+
 ## Siguientes pasos, por prioridad
 
 1. **Que el usuario pruebe los controles de la v0.5.0** (sobre todo el
