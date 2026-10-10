@@ -24,6 +24,7 @@
 #include "gpu/ge_internal.h"
 #include "gpu/ge_math.h"
 #include "core/memory.h"
+#include "core/prof.h"
 
 /* --- Formato de vértice ---------------------------------------------------- */
 
@@ -784,6 +785,7 @@ typedef struct {
 } TState;
 
 static TState ts;
+static u32 ts_nlights;   /* luces encendidas (ge_stats) */
 
 static void to4x4(const float *m43, float *out){
 	int r, c;
@@ -810,8 +812,11 @@ static void compute_transform_state(const VFormat *f){
 	if(ts.enable_transform){
 		float world[16], view[16], worldview[16], vd[3];
 		int i;
-		if(ts.enable_lighting) lighting_compute_state(&ts.light, f->col != 0);
-		else ts.light.uses_world_normal = ts.uv_gen_mode == 2;
+		if(ts.enable_lighting){
+			int l;
+			lighting_compute_state(&ts.light, f->col != 0);
+			for(ts_nlights = 0, l = 0; l < 4; l++) ts_nlights += ts.light.lights[l].enabled != 0;
+		} else ts.light.uses_world_normal = ts.uv_gen_mode == 2;
 		/* El observador en el infinito por +z de vista, normalizado como el GE */
 		vd[0] = ge.view[2]; vd[1] = ge.view[5]; vd[2] = ge.view[8];
 		if(ge_normalize(vd) == 0.0f){ vd[0] = 0.0f; vd[1] = 0.0f; vd[2] = 1.0f; }
@@ -1022,6 +1027,8 @@ static void read_vertex(const VFormat *f, const DecVertex *d, GeClipVertex *out)
 
 		if(ts.enable_lighting){
 			GE_PROF_T0;
+			ge_stats.vertices_lit++;
+			ge_stats.lights += ts_nlights;
 			if(ge_fast_math) lighting_process_fast(v, pos, worldnormal, n_rsqrt, &ts.light);
 			else lighting_process(v, pos, worldnormal, n_rsqrt, &ts.light);
 			GE_PROF_ADD(4);
@@ -1152,6 +1159,7 @@ static void add_triangle_rect(const GeVertex *v0, const GeVertex *v1){
 }
 
 static void process_rect(const GeClipVertex *v0, const GeClipVertex *v1){
+	ge_stats.sprites++;
 	if(!ge_through()){
 		int split_fog;
 		if(outside_range(v0) || outside_range(v1)) return;
@@ -1260,6 +1268,7 @@ static void process_triangle(const GeClipVertex *v0, const GeClipVertex *v1, con
 
 	if(!ge_through()){
 		int depth_clip = ge.cmd[GE_DEPTHCLAMPENABLE] & 1;
+		ge_tri_flags |= GE_TRI_OUTSIDE;   /* hasta que pase los descartes */
 		if(outside_range_before_clip(v0, depth_clip) || outside_range_before_clip(v1, depth_clip) ||
 		   outside_range_before_clip(v2, depth_clip)) return;
 		/* Con w negativa en todos también se descarta */
@@ -1275,12 +1284,14 @@ static void process_triangle(const GeClipVertex *v0, const GeClipVertex *v1, con
 			if(!(v0->clip[3] > 0.0f && v1->clip[3] > 0.0f && v2->clip[3] > 0.0f)) return;
 			mask = 0;
 		}
+		ge_tri_flags &= ~GE_TRI_OUTSIDE;
 	}
 
 	if(mask == 0){
 		add_tri_flat(v0, v1, v2, provoking);
 		return;
 	}
+	ge_tri_flags |= GE_TRI_CLIPPED;
 
 	/* Recorte como el GE (gpu/probe exp43, exp44): con un vértice fuera (o),
 	   el cuadrilátero se parte desde el vértice anterior (p) en el orden
@@ -1318,12 +1329,16 @@ static void process_triangle(const GeClipVertex *v0, const GeClipVertex *v1, con
 
 enum { CULL_CW = 0, CULL_CCW = 1, CULL_OFF = 2 };
 
+int ge_tri_flags;
+
 static GeClipVertex data_[4];
 static int data_index_;
 static u32 prev_prim_ = GE_PRIM_POINTS;
 static int is_imm_draw;
 
 static void send_triangle(int cull, const GeClipVertex *v, int provoking, int reversed){
+	u32 drawn = ge_stats.primitives;
+	ge_tri_flags = 0;
 	if(cull == CULL_OFF){
 		process_triangle(&v[0], &v[1], &v[2], &v[provoking], reversed);
 		process_triangle(&v[2], &v[1], &v[0], &v[provoking], !reversed);
@@ -1332,6 +1347,11 @@ static void send_triangle(int cull, const GeClipVertex *v, int provoking, int re
 	} else {
 		process_triangle(&v[0], &v[1], &v[2], &v[provoking], reversed);
 	}
+	ge_stats.tris++;
+	if(ge_stats.primitives != drawn) ge_stats.tris_drawn++;
+	else if(ge_tri_flags & GE_TRI_OUTSIDE) ge_stats.tris_outside++;
+	else ge_stats.tris_back++;
+	if(ge_tri_flags & GE_TRI_CLIPPED) ge_stats.tris_clipped++;
 }
 
 /* Fuente de vértices de una llamada: memoria (con índices) o una lista ya
@@ -1361,17 +1381,24 @@ static u32 index_at(const VSource *s, int i){
 
 static void read_raw(const VSource *s, u32 index, GeClipVertex *out){
 	DecVertex d;
+	int phase = prof_ge_enter(GEF_LEER);
 	GE_PROF_T0;
 	if(s->list) d = s->list[index];
 	else if(s->zero) memset(&d, 0, sizeof(d));
 	else decode_vertex(s->f, mem_ptr_r(s->vaddr + index * s->f->size, s->f->size), &d);
 	GE_PROF_ADD(5);
+	prof_ge_phase = GEF_TRANSFORMAR;
 	read_vertex(s->f, &d, out);
 	ge_stats.vertices++;
+	if(s->f->through) ge_stats.vertices_through++;
+	else if(s->f->wt) ge_stats.vertices_skinned++;
+	else if(s->f->nmorph > 1) ge_stats.vertices_morph++;
 	GE_PROF_ADD(0);
+	prof_ge_leave(phase);
 }
 
 static void vsource_read(const VSource *s, int vtx, GeClipVertex *out){
+	ge_stats.vertex_reads++;
 	if(s->use_indices){
 		u32 idx = index_at(s, vtx);
 		if(s->use_cache){ *out = s->cache[idx - s->lower]; return; }
@@ -1415,7 +1442,15 @@ static void vsource_init(VSource *s, const VFormat *f, u32 vaddr, u32 iaddr, int
 	}
 }
 
+static void submit_primitive_body(const VSource *vr, u32 prim_type, int vertex_count);
+
 static void submit_primitive(const VSource *vr, u32 prim_type, int vertex_count){
+	int phase = prof_ge_enter(GEF_ENSAMBLAR);
+	submit_primitive_body(vr, prim_type, vertex_count);
+	prof_ge_leave(phase);
+}
+
+static void submit_primitive_body(const VSource *vr, u32 prim_type, int vertex_count){
 	int cull_on = (ge.cmd[GE_CULLFACEENABLE] & 1) && !(ge.cmd[GE_CLEARMODE] & 1);
 	int cull = cull_on ? ((ge.cmd[GE_CULL] & 1) ? CULL_CCW : CULL_CW) : CULL_OFF;
 	int vtx, i;
@@ -1573,11 +1608,18 @@ void ge_draw_prim(u32 prim, u32 count){
 
 	/* Sin formato de posición no se dibuja, pero se avanza */
 	if(f.pos){
+		int phase;
 		GE_PROF_T0;
 		load_morph_weights();
 		setup_uv_prescale(&f);
 		compute_transform_state(&f);
+		phase = prof_ge_enter(GEF_LEER);
 		vsource_init(&vr, &f, vaddr, iaddr, (int)count);
+		prof_ge_leave(phase);
+		ge_stats.draws++;
+		ge_stats.draws_prim[prim & 7]++;
+		if(vr.use_indices) ge_stats.draws_indexed++;
+		if(vr.use_cache) ge_stats.draws_reuse++;
 		GE_PROF_ADD(3);
 		submit_primitive(&vr, prim, (int)count);
 		GE_PROF_ADD(2);
@@ -2121,5 +2163,12 @@ advance:
 	else if(nu >= 4 && nv >= 4) ge.vaddr = vaddr + (u32)num_points * f.size;
 }
 
-void ge_draw_bezier(u32 arg){ submit_curve(arg, 0); }
-void ge_draw_spline(u32 arg){ submit_curve(arg, 1); }
+static void draw_curve(u32 arg, int is_spline){
+	int phase = prof_ge_enter(GEF_CURVAS);
+	ge_stats.curves++;
+	submit_curve(arg, is_spline);
+	prof_ge_leave(phase);
+}
+
+void ge_draw_bezier(u32 arg){ draw_curve(arg, 0); }
+void ge_draw_spline(u32 arg){ draw_curve(arg, 1); }

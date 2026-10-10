@@ -51,10 +51,14 @@ void video_draw_psp_frame(const char *overlay);
 int  menu_choose_file(char *out, int out_size);
 /* Recuerda la carpeta del último archivo ejecutado */
 void menu_remember(const char *file_path);
-/* Lee la configuración (carpeta y renderizador) de path */
+/* Lee la configuración (carpeta, renderizador y texturas) de path */
 void menu_set_config_path(const char *path);
 /* 1 = el GE dibuja con GX (rápido); 0 = por software (exacto, lento) */
 int  menu_renderer_gx(void);
 void menu_set_renderer_gx(int on);
+/* Con GX: 1 = las texturas que no cambian se comprueban espaciadas
+   (rápido); 0 = una vez por periodo, como PPSSPP (seguro) */
+int  menu_lazy_textures(void);
+void menu_set_lazy_textures(int on);
 
 #endif

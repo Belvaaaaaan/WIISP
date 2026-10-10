@@ -29,7 +29,7 @@ all: $(OUT)/wiisp-cli
 
 $(OUT)/wiisp-cli: $(CLI_SRC) $(wildcard src/*/*.h)
 	@mkdir -p $(OUT)
-	$(CC) $(CFLAGS) -o $@ $(CLI_SRC) -lm
+	$(CC) $(CFLAGS) -pthread -o $@ $(CLI_SRC) -lm
 
 win: build-win/wiisp-cli.exe
 
@@ -57,7 +57,7 @@ cli-ppc: $(OUT)/wiisp-cli-ppc
 
 $(OUT)/wiisp-cli-ppc: $(CLI_SRC) $(wildcard src/*/*.h)
 	@mkdir -p $(OUT)
-	$(PPC_CC) -O2 -std=gnu11 -fwrapv -Wall -Wextra -Wno-unused-parameter -Isrc -static -o $@ $(CLI_SRC) -lm
+	$(PPC_CC) -O2 -std=gnu11 -fwrapv -Wall -Wextra -Wno-unused-parameter -Isrc -static -pthread -o $@ $(CLI_SRC) -lm
 
 test-ppc: $(OUT)/tests-ppc
 	$(QEMU_PPC) ./$(OUT)/tests-ppc

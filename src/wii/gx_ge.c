@@ -30,6 +30,7 @@
  * SPDX-License-Identifier: GPL-2.0-or-later
 **/
 
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <malloc.h>
@@ -46,6 +47,7 @@
 #define s64 core_s64
 #include "gpu/ge_internal.h"
 #include "gpu/ge_math.h"
+#include "gpu/texcache.h"
 #include "core/memory.h"
 #include "hle/hle.h"
 #include "core/prof.h"
@@ -67,7 +69,6 @@
 #define VP 1024.0f            /* el viewport cubre 1024x1024 píxeles */
 #define MAX_SURF 16
 #define SURF_Z 4              /* formato de un búfer de profundidad */
-#define MAX_TEX 256
 #define TEX_BUDGET (12u << 20)
 #define MAX_TEX_SIZE 512
 
@@ -93,12 +94,9 @@ typedef struct {
 	int ualpha;
 } Surface;
 
+/* Una textura decodificada; cuándo vale la decide texcache.c (misma casilla) */
 typedef struct {
-	int used;
-	core_u32 addr, fmt, size, bufw, clutfmt, clut_hash, hash, mipkey;
-	int levels;                /* niveles de mipmap en data */
-	unsigned checked_frame, used_frame;
-	int w, h;
+	int w, h, levels;          /* niveles de mipmap en data */
 	u32 bytes;
 	u8 *data;
 	GXTexObj obj;
@@ -119,11 +117,15 @@ static int reads_dst_alpha;             /* la mezcla usa el alfa del destino */
 static int want_promote;
 static unsigned frame;
 
-static TexEntry texc[MAX_TEX];
-static TexEntry *cur_tex, *last_tex;
+static TexCache tcache;
+static TexEntry texc[TC_MAX];
+static TexEntry *cur_tex;
 static u32 tex_total;
-static int tex_flushed = 1;
-static core_u32 last_clut_gen;
+static int lazy_textures = 1;          /* espaciado de las comprobaciones */
+static core_u32 clut_memo_gen, clut_memo_hash;
+static int clut_memo_valid;
+static unsigned prof_clut_hashes;
+static TcStats tex_stats_base;
 static u8 empty_tex[64] __attribute__((aligned(32)));
 static GXTexObj empty_obj;
 
@@ -431,9 +433,15 @@ static void download(Surface *s){
 	if(s == cur_c && efb_c_newer){ efb_to_tex(s); efb_c_newer = 0; }
 	if(s == cur_z && efb_z_newer){ efb_to_tex(s); efb_z_newer = 0; }
 	if(s->has_tex){
+		core_u32 a, e;
 		wait_gpu();
 		tex_to_vram(s);
 		prof_downloads++;
+		/* Las texturas que estén ahí cambiaron (y empieza otro periodo,
+		   como en PPSSPP al leer un framebuffer) */
+		surf_range(s, &a, &e);
+		mem_note_write(PSP_VRAM_BASE + a, e - a);
+		ge_sync_domain++;
 	}
 	s->state = SYNCED;
 }
@@ -735,16 +743,6 @@ static void bind_depth(Surface *s){
 
 /* --- Caché de texturas -------------------------------------------------------- */
 
-static core_u32 hash_bytes(const u8 *p, u32 n, core_u32 h){
-	u32 i;
-	for(i = 0; i + 4 <= n; i += 4){
-		h ^= (core_u32)p[i] | ((core_u32)p[i + 1] << 8) | ((core_u32)p[i + 2] << 16) | ((core_u32)p[i + 3] << 24);
-		h = (h << 5 | h >> 27) * 0x9E3779B1u;
-	}
-	for(; i < n; i++) h = (h ^ p[i]) * 0x01000193u;
-	return h;
-}
-
 static u32 texture_bytes(int fmt, int bufw, int h){
 	switch(fmt){
 	case GE_TFMT_CLUT4: case GE_TFMT_DXT1: return (u32)(bufw * h) / 2;
@@ -765,35 +763,38 @@ static u32 available_bytes(core_u32 addr, u32 want){
 	return end - a < want ? end - a : want;
 }
 
-static void free_texture(TexEntry *e){
+static void free_texture(int i){
+	TexEntry *e = &texc[i];
 	if(e->data){
 		defer_free(e->data);
 		tex_total -= e->bytes;
 	}
-	if(e == last_tex) last_tex = NULL;
 	if(e == cur_tex) cur_tex = NULL;
 	memset(e, 0, sizeof(*e));
+	tc_free(&tcache, i);
 }
 
-static TexEntry *alloc_texture_slot(void){
+/* Casilla para una textura nueva: una libre o la usada hace más tiempo */
+static int alloc_texture_slot(TexCache *tc, void *ctx){
 	int i, oldest = -1;
-	for(i = 0; i < MAX_TEX; i++){
-		if(!texc[i].used) return &texc[i];
-		if(texc[i].used_frame != frame && (oldest < 0 || texc[i].used_frame < texc[oldest].used_frame)) oldest = i;
+	(void)ctx;
+	for(i = 0; i < TC_MAX; i++){
+		if(!tc->e[i].used) return i;
+		if(tc->e[i].used_frame != frame && (oldest < 0 || tc->e[i].used_frame < tc->e[oldest].used_frame)) oldest = i;
 	}
 	if(oldest < 0) oldest = 0;
-	free_texture(&texc[oldest]);
-	return &texc[oldest];
+	free_texture(oldest);
+	return oldest;
 }
 
 static void trim_textures(void){
 	while(tex_total > TEX_BUDGET){
 		int i, oldest = -1;
-		for(i = 0; i < MAX_TEX; i++)
-			if(texc[i].used && texc[i].used_frame != frame && &texc[i] != cur_tex &&
-			   (oldest < 0 || texc[i].used_frame < texc[oldest].used_frame)) oldest = i;
+		for(i = 0; i < TC_MAX; i++)
+			if(tcache.e[i].used && tcache.e[i].used_frame != frame && &texc[i] != cur_tex &&
+			   (oldest < 0 || tcache.e[i].used_frame < tcache.e[oldest].used_frame)) oldest = i;
 		if(oldest < 0) break;
-		free_texture(&texc[oldest]);
+		free_texture(oldest);
 	}
 }
 
@@ -920,6 +921,7 @@ static int decode_into(const GeRasterState *r, int level, u8 *data, int w, int h
 static u32 level_bytes(int w, int h){ return (u32)(round4(w) * round4(h) * 4); }
 
 static int decode_texture(TexEntry *e, const GeRasterState *r){
+	/* (e->w, e->h y e->levels ya puestos) */
 	int w = e->w, h = e->h, gxfmt = GX_TF_RGBA8, i;
 	u32 bytes = 0, off = 0;
 	u8 *data;
@@ -955,73 +957,97 @@ static TexEntry *lookup_texture(const GeRasterState *r){
 	return e;
 }
 
-static TexEntry *lookup_texture_body(const GeRasterState *r){
-	core_u32 addr = r->texaddr[0], fmt = (core_u32)r->texfmt | ((core_u32)r->swizzle << 8);
-	int ws = r->width0_shift, hs = r->height0_shift, w, h, bufw = r->texbufw[0], i;
-	core_u32 size, clutfmt = 0, clut_hash = 0, hash;
-	u32 want, avail;
-	const u8 *p;
-	TexEntry *e = NULL;
+/* Lo que decode_texture necesita al llamarla texcache.c */
+static struct {
+	const GeRasterState *r;
+	int w, h, levels;
+} want_tex;
 
-	int levels = 1;
-	core_u32 mipkey = 0;
+static int decode_slot(TexCache *tc, void *ctx, int idx){
+	TexEntry *e = &texc[idx];
+	(void)tc; (void)ctx;
+	memset(e, 0, sizeof(*e));
+	e->w = want_tex.w;
+	e->h = want_tex.h;
+	e->levels = want_tex.levels;
+	prof_decodes++;
+	if(!decode_texture(e, want_tex.r)){ memset(e, 0, sizeof(*e)); return 0; }
+	return 1;
+}
+
+/* ¿Hay un búfer dibujado por la GPU encima de esos bytes? Leerlos lo baja
+   antes a la VRAM (gancho de memory.c), así que hay que comprobar. */
+static int gpu_newer_range(void *ctx, core_u32 addr, core_u32 len){
+	core_u32 a = addr & PSP_ADDR_MASK, off;
+	int i;
+	(void)ctx;
+	if(a < PSP_VRAM_BASE || a >= PSP_VRAM_MIRROR_END || !len) return 0;
+	off = (a - PSP_VRAM_BASE) & (PSP_VRAM_SIZE - 1);
+	if(off >= mem_vram_watch_hi[0] || off + len <= mem_vram_watch_lo[0]) return 0;
+	for(i = 0; i < MAX_SURF; i++){
+		core_u32 sa, se;
+		if(!surf[i].used || surf[i].state != GPU_NEWER) continue;
+		surf_range(&surf[i], &sa, &se);
+		if(off < se && off + len > sa) return 1;
+	}
+	return 0;
+}
+
+/* La paleta se resume una vez por carga (LOADCLUT), no en cada dibujo */
+static core_u32 clut_hash_now(void){
+	if(!clut_memo_valid || clut_memo_gen != ge.clut_gen){
+		clut_memo_hash = tc_hash(ge.clut, ge.clut_bytes ? ge.clut_bytes : 1024, 0x12345u);
+		clut_memo_gen = ge.clut_gen;
+		clut_memo_valid = 1;
+		prof_clut_hashes++;
+	}
+	return clut_memo_hash;
+}
+
+static TexEntry *lookup_texture_body(const GeRasterState *r){
+	int ws = r->width0_shift, hs = r->height0_shift, w, h, i, idx;
+	u32 decodes = tcache.stats.decodes;
+	TcQuery q;
+
+	memset(&q, 0, sizeof(q));
 	if(ws > 9) ws = 9;
 	if(hs > 9) hs = 9;
 	w = 1 << ws;
 	h = 1 << hs;
-	size = (core_u32)w | ((core_u32)h << 16);
+	q.key.addr = r->texaddr[0];
+	q.key.fmt = (core_u32)r->texfmt | ((core_u32)r->swizzle << 8);
+	q.key.size = (core_u32)w | ((core_u32)h << 16);
+	q.key.bufw = (core_u32)r->texbufw[0];
+	q.key.levels = 1;
 	/* Mipmaps: los niveles que van a la mitad, como los quiere GX */
-	for(i = 1; i <= r->max_tex_level; i++){
+	for(i = 1; i <= r->max_tex_level && i < TC_LEVELS; i++){
 		int lw = w >> i ? w >> i : 1, lh = h >> i ? h >> i : 1;
 		if(!r->texvalid[i] || r->size_w[i] != lw || r->size_h[i] != lh) break;
-		levels = i + 1;
-		mipkey = (mipkey ^ r->texaddr[i] ^ ((core_u32)r->texbufw[i] << 20)) * 0x9E3779B1u;
+		q.key.levels = (core_u32)i + 1;
+		q.key.mipkey = (q.key.mipkey ^ r->texaddr[i] ^ ((core_u32)r->texbufw[i] << 20)) * 0x9E3779B1u;
 	}
 	if(r->texfmt >= GE_TFMT_CLUT4 && r->texfmt <= GE_TFMT_CLUT32){
-		clutfmt = r->clutformat;
-		clut_hash = hash_bytes(ge.clut, ge.clut_bytes ? ge.clut_bytes : 1024, 0x12345u);
+		q.key.clutfmt = r->clutformat;
+		q.key.clut_hash = clut_hash_now();
 	}
-
-	/* Misma textura que la anterior y nada la ha podido cambiar */
-	if(last_tex && !tex_flushed && last_clut_gen == ge.clut_gen && last_tex->addr == addr && last_tex->fmt == fmt &&
-	   last_tex->size == size && last_tex->bufw == (core_u32)bufw && last_tex->clutfmt == clutfmt &&
-	   last_tex->checked_frame == frame && last_tex->clut_hash == clut_hash && last_tex->levels == levels &&
-	   last_tex->mipkey == mipkey)
-		return last_tex;
-
-	hash = 0x811C9DC5u;
-	for(i = 0; i < levels; i++){
+	/* Bytes de cada nivel; sin puntero contiguo (espejos con swizzle), 0 */
+	for(i = 0; i < (int)q.key.levels; i++){
 		int lh = h >> i ? h >> i : 1;
-		want = texture_bytes(r->texfmt, r->texbufw[i], lh);
-		avail = available_bytes(r->texaddr[i], want);
-		p = avail ? mem_ptr_r(r->texaddr[i], avail) : NULL;
-		/* Sin puntero contiguo (espejos con swizzle): se decodifica cada cuadro */
-		hash = p ? hash_bytes(p, avail, hash) : hash ^ frame * 0x9E3779B1u;
+		u32 want = texture_bytes(r->texfmt, r->texbufw[i], lh);
+		q.lv_addr[i] = r->texaddr[i];
+		q.lv_len[i] = available_bytes(r->texaddr[i], want);
 	}
 
-	for(i = 0; i < MAX_TEX; i++){
-		TexEntry *t = &texc[i];
-		if(t->used && t->addr == addr && t->fmt == fmt && t->size == size && t->bufw == (core_u32)bufw &&
-		   t->clutfmt == clutfmt && t->clut_hash == clut_hash && t->hash == hash && t->levels == levels &&
-		   t->mipkey == mipkey){ e = t; break; }
-	}
-	if(!e){
-		e = alloc_texture_slot();
-		e->used = 1;
-		e->addr = addr; e->fmt = fmt; e->size = size; e->bufw = (core_u32)bufw;
-		e->clutfmt = clutfmt; e->clut_hash = clut_hash; e->hash = hash;
-		e->levels = levels; e->mipkey = mipkey;
-		e->w = w; e->h = h;
-		prof_decodes++;
-		if(!decode_texture(e, r)){ memset(e, 0, sizeof(*e)); return NULL; }
-		trim_textures();
-	}
-	e->checked_frame = frame;
-	e->used_frame = frame;
-	tex_flushed = 0;
-	last_clut_gen = ge.clut_gen;
-	last_tex = e;
-	return e;
+	want_tex.r = r;
+	want_tex.w = w;
+	want_tex.h = h;
+	want_tex.levels = (int)q.key.levels;
+	tcache.frame = frame;
+	tcache.backoff = lazy_textures;
+	idx = tc_lookup(&tcache, &q);
+	if(idx < 0) return NULL;
+	if(tcache.stats.decodes != decodes) trim_textures();
+	return &texc[idx];
 }
 
 /* La textura es un framebuffer que está en la GPU: se usa su copia sin
@@ -1419,9 +1445,11 @@ static void apply_gx(void){
 static int prepare_targets(int full){
 	if(targets_dirty){
 		u64 t0 = gettime();
+		int phase = prof_ge_enter(GEF_ESTADO);
 		setup_targets();
 		targets_dirty = 0;
 		gx_dirty = 1;
+		prof_ge_leave(phase);
 		prof_setup += gettime() - t0;
 	}
 	if(skip_draws) return 0;
@@ -1446,8 +1474,10 @@ static void prepare_state(void){
 	}
 	if(gx_dirty){
 		u64 t0 = gettime();
+		int phase = prof_ge_enter(GEF_ESTADO);
 		apply_gx();
 		gx_dirty = 0;
+		prof_ge_leave(phase);
 		prof_state += gettime() - t0;
 	}
 }
@@ -1564,9 +1594,11 @@ static void gx_clear_rect(const GeVertex *v0, const GeVertex *v1){
 	core_u32 mrgb = ge.cmd[GE_MASKRGB] & 0xFFFFFF, ma = ge.cmd[GE_MASKALPHA] & 0xFF;
 	if(v0->x == v1->x || v0->y == v1->y) return;
 	if(targets_dirty){
+		int phase = prof_ge_enter(GEF_ESTADO);
 		setup_targets();
 		targets_dirty = 0;
 		gx_dirty = 1;
+		prof_ge_leave(phase);
 	}
 	if(skip_draws) return;
 	{
@@ -1627,8 +1659,10 @@ static void gx_begin(void){
 	targets_dirty = 1;
 }
 
+/* TEXFLUSH vacía el caché de texturas del GE, pero no dice que la memoria
+   cambiara: el SDK lo manda cada vez que se elige una textura
+   (sceGuTexImage). Lo que cambia la memoria avisa por memory.c. */
 static void gx_tex_flush(void){
-	tex_flushed = 1;
 }
 
 static const GeHwRenderer gx_renderer = {
@@ -1656,6 +1690,23 @@ void gx_ge_profile(unsigned long long *setup, unsigned long long *state, unsigne
 	prof_vram_presents = prof_downloads = prof_uploads = prof_decodes = 0;
 }
 
+void gx_ge_set_lazy_textures(int on){ lazy_textures = on; }
+
+/* Sin acentos: también sale en la consola del Wii */
+void gx_ge_texture_report(char *buf, size_t size){
+	const TcStats *t = &tcache.stats, *b = &tex_stats_base;
+	u32 lookups = t->lookups - b->lookups, quick = t->quick - b->quick;
+	snprintf(buf, size, "texturas: %u elegidas (%.0f%% sin leerlas), %u comprobadas (%.1f MB), %u decodificadas, "
+	         "%u paletas; cambios: %u con aviso, %u sin aviso (%u por el vistazo), %d inestables%s",
+	         (unsigned)lookups, lookups ? 100.0 * quick / lookups : 0.0, (unsigned)(t->checks - b->checks),
+	         (double)(t->check_bytes - b->check_bytes) / (1024.0 * 1024.0), (unsigned)(t->decodes - b->decodes),
+	         prof_clut_hashes, (unsigned)(t->changes_notified - b->changes_notified),
+	         (unsigned)(t->changes_silent - b->changes_silent), (unsigned)(t->sample_misses - b->sample_misses),
+	         tc_unstable_count(&tcache), lazy_textures ? "" : " (sin espaciado)");
+	tex_stats_base = *t;
+	prof_clut_hashes = 0;
+}
+
 static int present_body(void *xfb, GXRModeObj *rm, int widescreen){
 	HleFramebuffer fb;
 	Surface *s = NULL;
@@ -1665,6 +1716,7 @@ static int present_body(void *xfb, GXRModeObj *rm, int widescreen){
 	hle_get_framebuffer(&fb);
 	if(!fb.addr || fb.stride == 0) return 0;
 	frame++;
+	ge_sync_domain++;
 	addr = fb.addr & PSP_ADDR_MASK;
 
 	if(enabled && addr >= PSP_VRAM_BASE && addr < PSP_VRAM_BASE + PSP_VRAM_SIZE){
@@ -1759,19 +1811,27 @@ void gx_ge_reset(void){
 	wait_gpu();
 	for(i = 0; i < MAX_SURF; i++)
 		if(surf[i].used){ free(surf[i].tex); memset(&surf[i], 0, sizeof(surf[i])); }
-	for(i = 0; i < MAX_TEX; i++)
-		if(texc[i].used){ free(texc[i].data); memset(&texc[i], 0, sizeof(texc[i])); }
+	for(i = 0; i < TC_MAX; i++)
+		if(texc[i].data){ free(texc[i].data); memset(&texc[i], 0, sizeof(texc[i])); }
+	tc_init(&tcache);
+	tcache.alloc = alloc_texture_slot;
+	tcache.decode = decode_slot;
+	tcache.gpu_newer = gpu_newer_range;
 	tex_total = 0;
+	clut_memo_valid = 0;
 	cur_c = cur_z = NULL;
 	cur_tex = NULL;
 	efb_c_newer = efb_z_newer = restored_c = restored_z = 0;
 	targets_dirty = gx_dirty = 1;
-	tex_flushed = 1;
 	recompute_watch();
 }
 
 void gx_ge_init(void){
 	Mtx id;
+	tc_init(&tcache);
+	tcache.alloc = alloc_texture_slot;
+	tcache.decode = decode_slot;
+	tcache.gpu_newer = gpu_newer_range;
 	memset(empty_tex, 0, sizeof(empty_tex));
 	DCFlushRange(empty_tex, sizeof(empty_tex));
 	GX_InitTexObj(&empty_obj, empty_tex, 4, 4, GX_TF_RGBA8, GX_REPEAT, GX_REPEAT, GX_FALSE);

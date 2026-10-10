@@ -357,7 +357,11 @@ static inline void step(void){
 		st32(addr & ~3u, mem, instr);
 		break;
 	}
-	case 0x2F: break;                                                  /* cache */
+	case 0x2F:                                                         /* cache */
+		/* Hit Writeback (Invalidate) D: el juego escribió esa línea de 64
+		   bytes con la CPU (avisa a las cachés de texturas) */
+		if(RT == 0x1A || RT == 0x1B) mem_note_write((R(RS) + IMM) & ~63u, 64);
+		break;
 	case 0x30: R(RT) = ld32(R(RS) + IMM, instr); cpu.llbit = 1; break; /* ll */
 	case 0x38:                                                         /* sc */
 		rs = R(RS);

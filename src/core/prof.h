@@ -43,7 +43,7 @@ extern u64 (*prof_clock)(void);
 extern u64 prof_hz;
 extern u64 prof_acc[PROF_N];
 extern u64 prof_last;
-extern int prof_cur;
+extern volatile int prof_cur;   /* volatile: lo lee el temporizador del muestreo */
 
 /* Reloj del anfitrión (ticks y ticks por segundo); sin él no se mide */
 void prof_set_clock(u64 (*clock)(void), u64 hz);
@@ -53,7 +53,7 @@ static inline int prof_switch(int b){
 	int old = prof_cur;
 	if(prof_clock){
 		u64 now = prof_clock();
-		prof_acc[prof_cur] += now - prof_last;
+		prof_acc[old] += now - prof_last;
 		prof_last = now;
 	}
 	prof_cur = b;
@@ -62,5 +62,40 @@ static inline int prof_switch(int b){
 
 /* Cuenta lo pendiente de la cubeta actual (antes de leer prof_acc) */
 void prof_flush(void);
+
+/* --- Qué hace el GE por dentro (muestreo) ---------------------------------
+   Medir con el reloj cada vértice costaría más que el propio vértice. En
+   su lugar, un temporizador del anfitrión llama a prof_sample() unas 1000
+   veces por segundo y apunta la cubeta actual y, dentro del GE, la fase en
+   marcha. Cambiar de fase solo escribe una variable:
+
+       int old = prof_ge_enter(GEF_LEER);
+       ...
+       prof_ge_leave(old);
+*/
+enum {
+	GEF_COMANDOS,     /* leer y aplicar comandos, preparar cada dibujo */
+	GEF_LEER,         /* decodificar vértices (formato, huesos, morph) */
+	GEF_TRANSFORMAR,  /* transformar, luces, uv y niebla */
+	GEF_ENSAMBLAR,    /* triángulos: descarte, recorte, pantalla */
+	GEF_ENVIAR,       /* mandar cada primitiva al renderizador (GX) */
+	GEF_ESTADO,       /* preparar búferes y estado de GX */
+	GEF_CURVAS,       /* teselar curvas (bezier/spline) */
+	GEF_N
+};
+
+extern volatile int prof_ge_phase;
+extern volatile u32 prof_samples[PROF_N], prof_ge_samples[GEF_N];
+
+static inline int prof_ge_enter(int f){
+	int old = prof_ge_phase;
+	prof_ge_phase = f;
+	return old;
+}
+
+static inline void prof_ge_leave(int old){ prof_ge_phase = old; }
+
+/* Desde el temporizador (interrupción o hilo aparte) */
+void prof_sample(void);
 
 #endif

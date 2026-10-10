@@ -2047,9 +2047,16 @@ void ge_raster_triangle(const GeVertex *v0, const GeVertex *v1, const GeVertex *
 	int x1, y1, x2, y2;
 	/* Solo los de orden antihorario y con área (gpu/probe exp118, exp132) */
 	if(d01x * d02y - d01y * d02x <= 0) return;
-	if(!range_of(v, 3, &x1, &y1, &x2, &y2)) return;
+	if(!range_of(v, 3, &x1, &y1, &x2, &y2)){ ge_tri_flags |= GE_TRI_OUTSIDE; return; }
 	ge_stats.primitives++;
-	if(ge_hw){ GE_PROF_T0; ge_hw->triangle(v0, v1, v2); GE_PROF_ADD(1); return; }
+	if(ge_hw){
+		int phase = prof_ge_enter(GEF_ENVIAR);
+		GE_PROF_T0;
+		ge_hw->triangle(v0, v1, v2);
+		GE_PROF_ADD(1);
+		prof_ge_leave(phase);
+		return;
+	}
 	{
 		/* Rasterizado por software (modo exacto): se mide aparte */
 		int old = prof_switch(PROF_RASTER);
@@ -2064,7 +2071,14 @@ void ge_raster_rect(const GeVertex *v0, const GeVertex *v1){
 	int x1, y1, x2, y2;
 	if(!range_of(v, 2, &x1, &y1, &x2, &y2)) return;
 	ge_stats.primitives++;
-	if(ge_hw){ GE_PROF_T0; ge_hw->rect(v0, v1); GE_PROF_ADD(1); return; }
+	if(ge_hw){
+		int phase = prof_ge_enter(GEF_ENVIAR);
+		GE_PROF_T0;
+		ge_hw->rect(v0, v1);
+		GE_PROF_ADD(1);
+		prof_ge_leave(phase);
+		return;
+	}
 	{
 		int old = prof_switch(PROF_RASTER);
 		texture_snapshot();
@@ -2078,7 +2092,7 @@ void ge_raster_clear_rect(const GeVertex *v0, const GeVertex *v1){
 	int x1, y1, x2, y2;
 	if(!range_of(v, 2, &x1, &y1, &x2, &y2)) return;
 	ge_stats.primitives++;
-	if(ge_hw){ ge_hw->clear_rect(v0, v1); return; }
+	if(ge_hw){ int phase = prof_ge_enter(GEF_ENVIAR); ge_hw->clear_rect(v0, v1); prof_ge_leave(phase); return; }
 	{
 		int old = prof_switch(PROF_RASTER);
 		clear_rectangle(v0, v1, x1, y1, x2, y2);
@@ -2091,7 +2105,7 @@ void ge_raster_line(const GeVertex *v0, const GeVertex *v1){
 	int x1, y1, x2, y2;
 	if(!range_of(v, 2, &x1, &y1, &x2, &y2)) return;
 	ge_stats.primitives++;
-	if(ge_hw){ ge_hw->line(v0, v1); return; }
+	if(ge_hw){ int phase = prof_ge_enter(GEF_ENVIAR); ge_hw->line(v0, v1); prof_ge_leave(phase); return; }
 	{
 		int old = prof_switch(PROF_RASTER);
 		texture_snapshot();
@@ -2105,7 +2119,7 @@ void ge_raster_point(const GeVertex *v0){
 	int x1, y1, x2, y2;
 	if(!range_of(v, 1, &x1, &y1, &x2, &y2)) return;
 	ge_stats.primitives++;
-	if(ge_hw){ ge_hw->point(v0); return; }
+	if(ge_hw){ int phase = prof_ge_enter(GEF_ENVIAR); ge_hw->point(v0); prof_ge_leave(phase); return; }
 	{
 		int old = prof_switch(PROF_RASTER);
 		texture_snapshot();

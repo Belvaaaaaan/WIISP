@@ -63,7 +63,7 @@ con su nombre original, y tus juegos como `.iso`, `.cso` o `.zso`.
 | Cruceta | moverse (izquierda/derecha: página) | cruceta de la PSP |
 | A | abrir carpeta / elegir | X (cruz) |
 | B | carpeta anterior | O (círculo) |
-| 1 / X | cambiar SD ↔ USB | cuadrado / triángulo |
+| 1 / X | cambiar SD ↔ USB; (al abrir un programa) texturas rápidas o seguras | cuadrado / triángulo |
 | HOME / START | salir al Homebrew Channel | HOME o Z+START: volver al menú |
 | 2 / Y | (al abrir un programa) renderizador GX o software | triángulo / cuadrado |
 
@@ -71,8 +71,10 @@ El botón de apagado de la consola o del Wiimote apaga el Wii de forma
 ordenada.
 
 En la pantalla previa a ejecutar se elige el renderizador con 2 (Wiimote) o
-Y (GameCube): **GX** (rápido) o **software** (exacto, lento). La elección se
-recuerda. En una tele 16:9 la imagen llena la pantalla; en 4:3 ocupa el ancho.
+Y (GameCube): **GX** (rápido) o **software** (exacto, lento). Con 1 o X, cómo
+comprueba GX si una textura cambió: **rápidas** (las que no cambian se
+vuelven a leer cada vez menos, hasta cada 16 cuadros) o **seguras** (una vez
+por sincronización con el GE, como PPSSPP). Las elecciones se recuerdan. En una tele 16:9 la imagen llena la pantalla; en 4:3 ocupa el ancho.
 
 Al abrir un programa, WIISP escribe junto a él su informe de imports
 (`imports.txt` para un `EBOOT.PBP`, `<nombre>.imports.txt` para el resto) y
@@ -112,13 +114,23 @@ python3 tests/autotests.py ../pspautotests threads/ -v                      # un
 Cada 30 s reales, `wiisp.log` dice a dónde va el tiempo:
 
 ```
-[TIEMPOS] 30.0 s reales: 0.90 s de juego (3.0%), 54 vblanks, 12 imagenes (0.40/s), 6.1 M instr (0.20 MIPS)
-[TIEMPOS] CPU 4.1% syscalls 0.8% GE 2.0% rasterizar 88.5% texturas 0.0% framebuffers 0.0% presentar 1.3% ...
-[TIEMPOS] GE: ... vertices, ... primitivas | ... syscalls | modo EXACTO (dibujo por software)
+[TIEMPOS] 30.0 s reales: 2.59 s de juego (8.6%), 155 vblanks, 0 imagenes (0.00/s), 61.2 M instr (2.04 MIPS)
+[TIEMPOS] CPU 17.7% syscalls 0.1% GE 63.6% rasterizar 0.0% texturas 11.4% framebuffers 6.0% ...
+[TIEMPOS] GE: 309 listas, 3934962 comandos, 7825220 vertices, 1845270 primitivas | ...
+[TIEMPOS] GE por dentro: comandos ...% leer vertices ...% transformar y luces ...% ... (30000 muestras)
+[TIEMPOS] Dibujo: ... llamadas (... por vblank; ...% con indices, ...% reutilizan vertices); ...% listas de triangulos ...
+[TIEMPOS] Vertices: ... pedidos, ... calculados (... por vblank): ...% con huesos, ...% con morph, ...% con luces ...
+[TIEMPOS] Triangulos: ... recibidos (... por vblank): ...% dibujados, ...% de espaldas o sin area, ...% fuera de pantalla ...
+[TIEMPOS] modo rapido (GX): 309 bajadas y 77 subidas de framebuffer, 0 imagenes desde la VRAM
+[TIEMPOS] texturas: ... elegidas (...% sin leerlas), ... comprobadas (... MB), ... decodificadas, ... paletas; cambios: ...
 ```
 
 `CPU` es el intérprete; `rasterizar`, el dibujo por software (modo exacto);
 `texturas`, `framebuffers`, `presentar` y `esperar GX`, el backend GX.
+"GE por dentro" reparte el tiempo del GE por fases (muestreo cada 1 ms).
+En la línea de texturas, "sin leerlas" son las veces que bastó la copia ya
+decodificada y "cambios sin aviso" los que solo se vieron al releerlas
+(ARQUITECTURA.md 7).
 
 ### En Windows
 

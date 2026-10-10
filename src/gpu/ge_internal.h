@@ -103,6 +103,11 @@ typedef struct {
 extern GeState ge;
 extern GeStats ge_stats;
 
+/* Qué le pasó al último triángulo (ge_stats): 1 fuera de la pantalla o de
+   la tijera, 2 recortado por el plano cercano */
+enum { GE_TRI_OUTSIDE = 1, GE_TRI_CLIPPED = 2 };
+extern int ge_tri_flags;
+
 /* Argumento de 24 bits de un comando como float (los 24 bits altos) */
 static inline float ge_f24(u32 arg){
 	u32 bits = arg << 8;

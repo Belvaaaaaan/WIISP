@@ -101,6 +101,25 @@ typedef void (*MemVramHook)(u32 off, u32 len, int write);
 extern MemVramHook mem_vram_hook;
 extern u32 mem_vram_watch_lo[2], mem_vram_watch_hi[2];
 
+/* Avisos de escritura para las cachés de texturas de un renderizador por
+   hardware: así sabe qué texturas pudieron cambiar sin volver a leerlas.
+   Avisan las escrituras "a granel" (lecturas de archivos, DMA,
+   transferencias del GE, memset del kernel, módulos y partidas cargados),
+   la CPU escribiendo en la VRAM y la caché de datos (sceKernelDcache* y la
+   instrucción cache): en la PSP, lo que la CPU escribe en la RAM no lo ve
+   el GE hasta que el juego vacía la caché de datos. Las escrituras normales
+   de la CPU en la RAM no avisan (serían demasiadas).
+
+   Cada página de 4 KB de la RAM y de la VRAM guarda el sello de su último
+   aviso. Quien comprueba una textura guarda mem_write_stamp_take(); la
+   textura cambió si alguna de sus páginas tiene un sello posterior. */
+void mem_note_write(u32 addr, u32 len);
+/* Sin rango (sceKernelDcacheWritebackAll): solo cuenta */
+void mem_note_write_all(void);
+extern u32 mem_write_all_hints;
+u32  mem_write_stamp_take(void);
+int  mem_written_since(u32 addr, u32 len, u32 stamp);
+
 /* Accesos sueltos. Una dirección inválida lee 0 e ignora la escritura
    (el intérprete/dynarec decidirá luego si eso es una excepción). */
 u8   mem_read8 (u32 addr);

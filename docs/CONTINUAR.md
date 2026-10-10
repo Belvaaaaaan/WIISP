@@ -274,11 +274,60 @@ nid_names.c los dos primeros.
   caché de texturas con paletas nativas de GX, caché de vértices, T&L de
   GX, reemplazo de funciones, dynarec).
 
+### v0.4.10: texturas sin releer en cada dibujo y el GE por dentro
+
+Registro de la v0.4.9 en el Wii, GTA LCS en modo rápido (GX), ~50 min
+reales, 100 s de juego sin errores. Reparto estable por cada 30 s reales:
+GE 61-66 %, CPU 17-18 %, texturas 10-12 %, framebuffers 5-7 %, esperar GX
+~1 %; ~8,5 % de velocidad (~5 vblanks/s). En la carga, CPU 84 % y E/S 11 %.
+Por vblank: ~41.000 vértices calculados, ~26.000 comandos, ~8.200
+triángulos dibujados (unos 2.100 ciclos del Wii por vértice). Un tramo con
+solo 67 texturas decodificadas gastó igual un 10,4 % en texturas: el coste
+era **comprobarlas**, no decodificarlas. GTA no cambia de framebuffer al
+mostrar (copia su imagen al de la pantalla), así que "imagenes" sale 0.
+
+Lo que cambia (ARQUITECTURA.md 7, "Cuándo se vuelve a leer una textura"):
+
+- Antes: cada llamada de dibujo que cambiaba de textura leía la textura
+  entera (hash), y la paleta (1 KB) en todas; `TEXFLUSH`, que el SDK manda
+  al elegir cada textura, anulaba el único atajo.
+- Ahora `gpu/texcache.c` (con pruebas en el PC): paleta una vez por carga;
+  cada textura como mucho una vez por periodo entre sincronizaciones
+  CPU-GE (como PPSSPP); espaciado de 1, 2, 4, 8 y 16 cuadros para las que
+  no cambian (botón 1/X en el Wii antes de ejecutar: "texturas
+  rapidas/seguras", en `wiisp.cfg`); avisos de escritura por páginas de
+  4 KB desde `core/memory.c`; vistazo de 8 palabras; texturas inestables.
+  Tabla hash en vez de recorrer las 256 entradas, y un hash con cargas de
+  32 bits.
+- `mem_valid` ya no pasa por los ganchos de la VRAM: antes, comprobar el
+  origen de una transferencia del GE lo marcaba como escrito por la CPU y
+  obligaba a subirlo otra vez a GX (posible ahorro en las "subidas" de
+  GTA, que copia su imagen con transferencias).
+- `[TIEMPOS]` con más líneas: "GE por dentro" (muestreo cada 1 ms por
+  fases), "Dibujo" (llamadas por vblank, con índices, reutilizan vértices,
+  tipos), "Vertices" (pedidos frente a calculados, huesos, morph, luces),
+  "Triangulos" (dibujados, de espaldas, fuera de pantalla, recortados) y
+  la caché de texturas.
+- `tests/guest/ge_draw.c`: 8 mallas con índices, luz y textura con paleta;
+  sirve para ver esas líneas en el CLI.
+
+**Qué mirar en el próximo registro de GTA**: cuánto bajan "texturas" y
+"subidas"; si hay "cambios sin aviso" o texturas raras en pantalla (si
+las hay, probar "texturas seguras" con 1/X y comparar); y el reparto de
+"GE por dentro" y "Dibujo"/"Vertices"/"Triangulos", que decide el siguiente
+paso: reutilizar vértices en más casos (respetando que la PSP arrastra uv
+y normal del vértice anterior cuando faltan, por eso hoy se leen en
+orden), enviar por lotes a GX, o no rehacer el estado de GX en cada
+llamada.
+
 ## Siguientes pasos, por prioridad
 
-1. **Que el usuario pruebe GTA LCS con el CLI de Windows** (y la v0.4.7 en
-   el Wii en modo rápido, dejándolo varios minutos) y mande wiisp.log y las
-   capturas: qué hace GTA después de los videos de introducción.
+1. **Que el usuario pruebe GTA LCS con la v0.4.10 en el Wii (modo rápido)**
+   y mande wiisp.log: con "GE por dentro" y los contadores de dibujo se
+   elige la siguiente optimización del GE (sin frameskip ni dynarec por
+   ahora, a petición del usuario). Pendiente aparte: DBZ TTT se para en
+   `sceKernelCheckThreadStack` (no implementada; devuelve 0 y su libc se
+   descarga sola). El usuario pidió no tocarlo todavía.
 
 2. Hecho (UMD).
 

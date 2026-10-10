@@ -30,5 +30,7 @@ void test_formats(void);
 void test_io(void);
 /* tests/test_vfpu.c: caminos rápidos de la VFPU contra el general */
 void test_vfpu(void);
+/* tests/test_texcache.c: avisos de escritura y caché de texturas */
+void test_texcache(void);
 
 #endif

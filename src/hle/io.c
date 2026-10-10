@@ -440,6 +440,7 @@ static s64 read_fd(u32 fd, u32 buf, u32 size){
 		p = mem_ptr(buf, n * DISC_SECTOR);
 		if(!p) return (s32)SCE_KERNEL_ERROR_ILLEGAL_ADDR;
 		n = disc_read((o->lba + o->pos) * (u64)DISC_SECTOR, n * DISC_SECTOR, p) / DISC_SECTOR;
+		mem_note_write(buf, n * DISC_SECTOR);
 		o->pos += n;
 		return n;
 	}
@@ -450,6 +451,7 @@ static s64 read_fd(u32 fd, u32 buf, u32 size){
 		p = mem_ptr(buf, n);
 		if(!p && n) return (s32)SCE_KERNEL_ERROR_ILLEGAL_ADDR;
 		n = disc_read((u64)o->lba * DISC_SECTOR + o->pos, n, p);
+		mem_note_write(buf, n);
 		o->pos += n;
 		return n;
 	}
@@ -459,6 +461,7 @@ static s64 read_fd(u32 fd, u32 buf, u32 size){
 		int old = prof_switch(PROF_ES);
 		s64 n = (s64)fread(p, 1, size, o->f);
 		prof_switch(old);
+		if(n > 0) mem_note_write(buf, (u32)n);
 		return n;
 	}
 }

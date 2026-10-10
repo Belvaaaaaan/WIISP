@@ -301,9 +301,14 @@ porta entero: su consumo de memoria no cabe en el Wii.
 - Desglose del tiempo real (`core/prof.c`): cubetas exclusivas que suman el
   100 % (CPU, syscalls, GE, rasterizar por software, texturas, framebuffers,
   presentar, esperar a GX, E/S, audio, registro, otros). Se cambia de cubeta
-  solo en puntos gruesos (`prof_switch`), así que va siempre activo. Cada
-  30 s reales `hle.c` escribe tres líneas `[TIEMPOS]` en wiisp.log
-  (velocidad, reparto y contadores del GE/GX) y otra al parar.
+  solo en puntos gruesos (`prof_switch`), así que va siempre activo. Dentro
+  del GE, un temporizador (alarma de 1 ms en el Wii, un hilo en el CLI)
+  muestrea la fase en marcha (`prof_ge_enter`: comandos, leer vértices,
+  transformar y luces, ensamblar triángulos, enviar a GX, preparar estado,
+  curvas); cambiar de fase solo escribe una variable. Cada 30 s reales
+  `hle.c` escribe en wiisp.log las líneas `[TIEMPOS]` (velocidad, reparto,
+  GE por dentro, llamadas de dibujo, vértices, triángulos y lo del
+  renderizador: framebuffers y caché de texturas) y otra vez al parar.
 - Llamadas del HLE a funciones del juego (`kernel_enqueue_call`, como
   `hleEnqueueCall` de PPSSPP): el callback de `sceMpegRingbufferPut` o la
   función de `sceKernelExtendThreadStack` corren como código normal del
@@ -370,12 +375,41 @@ rasterización (`src/gpu`):
 | Framebuffers en la VRAM | EFB de 640×528 | El que se dibuja vive en el EFB; los demás en texturas (copias del EFB). Color en RGB8 (exacto) mientras el alfa sea uniforme o siga en la VRAM; RGBA6 solo si hace falta alfa por píxel |
 | La CPU lee o escribe la VRAM | | Un gancho en `memory.c` baja de la GPU lo que se lee y marca lo escrito para subirlo antes de volver a dibujar |
 | Render a textura | `GX_CopyTex` | Si la textura es un framebuffer en la GPU, se usa su copia directamente |
-| Texturas swizzled, CLUT, DXT | RGBA8 / RGB565 | Caché por contenido (hash), mipmaps cuando los niveles van a la mitad |
+| Texturas swizzled, CLUT, DXT | RGBA8 / RGB565 | Caché por contenido (hash), mipmaps cuando los niveles van a la mitad. Cuándo volver a leerlas: `gpu/texcache.c` (abajo) |
 | 480×272 | XFB del televisor | Compuesto con GX: en 16:9 llena la pantalla, en 4:3 ocupa el ancho |
 
 Las diferencias con el hardware son de ±1 en los colores (la aritmética del
 TEV y de la mezcla de GX), el alfa de 6 bits cuando hace falta alfa por
 píxel, el stencil y los modos de mezcla que GX no tiene.
+
+**Cuándo se vuelve a leer una textura** (`gpu/texcache.c`, independiente
+de GX y con pruebas en `tests/test_texcache.c`). Leerla entera para saber
+si cambió cuesta casi lo que decodificarla, así que:
+
+1. La paleta se resume una vez por carga (`LOADCLUT`, `ge.clut_gen`), no
+   en cada dibujo.
+2. Cada textura se lee como mucho una vez por *periodo* entre
+   sincronizaciones de la CPU con el GE (`ge_sync_domain`: `sceGeDrawSync`,
+   `sceGeListSync`, fin de lista, presentar, bajar un framebuffer), como el
+   `textureSyncTimeDomain` de PPSSPP. `TEXFLUSH` no cuenta: el SDK lo manda
+   al elegir cada textura.
+3. Espaciado (activado por defecto; en el Wii, botón 1/X antes de ejecutar:
+   "texturas rapidas/seguras"): una textura que no cambia se vuelve a leer a
+   los 1, 2, 4, 8 y 16 cuadros, y luego cada 16 con un desfase.
+4. Redes de seguridad: los **avisos de escritura** de `core/memory.c`
+   (sello por página de 4 KB: lecturas de archivos, DMA, transferencias del
+   GE, `sceKernelMemset`, módulos y partidas cargados, la CPU en la VRAM,
+   `sceKernelDcacheWriteback*` y la instrucción `cache` 0x1A/0x1B; en la
+   PSP el GE no ve lo que la CPU escribe en la RAM hasta que se vacía la
+   caché de datos) obligan a comprobar en el acto. Si la GPU tiene más
+   nuevo un framebuffer encima de la textura, también (leerla lo baja). En
+   el espaciado, un vistazo a 8 palabras en cada uso. Una textura que cambió
+   sin aviso pasa a *inestable*: se lee en cada periodo hasta 60
+   comprobaciones seguidas sin cambios.
+
+Si el contenido vuelve a uno ya visto en la misma dirección, se reutiliza
+su copia decodificada. `mem_valid` solo comprueba rangos (no toca los
+ganchos de la VRAM ni avisa).
 
 ## 8. Plan por fases
 

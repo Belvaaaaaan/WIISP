@@ -76,15 +76,42 @@ static unsigned long long host_clock(void){ return gettime(); }
 static u64 prof_ticks(void){ return gettime(); }
 
 /* Lo que añade el Wii al desglose de tiempos: el renderizador y, con GX,
-   cuántas texturas decodificó y cuántos framebuffers movió */
+   cuántos framebuffers movió y qué hizo la caché de texturas */
 static void profile_hook(char *buf, size_t size){
 	unsigned long long setup, state, present;
 	unsigned cnt[4];
+	int len;
 	gx_ge_profile(&setup, &state, &present, cnt);
-	if(gx_ge_enabled())
-		snprintf(buf, size, "modo rapido (GX): %u texturas decodificadas, %u bajadas y %u subidas de framebuffer, "
-		         "%u imagenes desde la VRAM", cnt[3], cnt[1], cnt[2], cnt[0]);
-	else snprintf(buf, size, "modo EXACTO (dibujo por software)");
+	if(gx_ge_enabled()){
+		len = snprintf(buf, size, "modo rapido (GX): %u bajadas y %u subidas de framebuffer, %u imagenes desde la VRAM\n",
+		               cnt[1], cnt[2], cnt[0]);
+		if(len > 0 && (size_t)len < size) gx_ge_texture_report(buf + len, size - (size_t)len);
+	} else snprintf(buf, size, "modo EXACTO (dibujo por software)");
+}
+
+/* Muestreo del desglose ([TIEMPOS] GE por dentro): una alarma cada 1 ms
+   apunta qué estaba haciendo el emulador. Corre en una interrupción: solo
+   cuenta (sin coma flotante). */
+static syswd_t sample_alarm;
+static int sample_alarm_on;
+
+static void sample_cb(syswd_t alarm, void *arg){
+	(void)alarm;
+	(void)arg;
+	prof_sample();
+}
+
+static void sampler_start(void){
+	struct timespec tp = { 0, 1000000 };
+	if(sample_alarm_on || SYS_CreateAlarm(&sample_alarm) != 0) return;
+	SYS_SetPeriodicAlarm(sample_alarm, &tp, &tp, sample_cb, NULL);
+	sample_alarm_on = 1;
+}
+
+static void sampler_stop(void){
+	if(!sample_alarm_on) return;
+	SYS_RemoveAlarm(sample_alarm);
+	sample_alarm_on = 0;
 }
 
 static void run_program(void){
@@ -95,6 +122,7 @@ static void run_program(void){
 	char overlay[48] = "";
 
 	gx_ge_enable(menu_renderer_gx());
+	gx_ge_set_lazy_textures(menu_lazy_textures());
 	app_set_output(program_output);
 	/* Desglose del tiempo real cada 30 s en wiisp.log ([TIEMPOS]) */
 	prof_set_clock(prof_ticks, (u64)TB_TIMER_CLOCK * 1000ull);
@@ -103,6 +131,7 @@ static void run_program(void){
 		printf("Error: no se pudo iniciar el programa\n");
 		return;
 	}
+	sampler_start();
 	printf("\n--- Ejecutando (HOME o Z+START para volver) ---\n");
 	while(!exited){
 		Input in;
@@ -132,9 +161,11 @@ static void run_program(void){
 			prof_switch(old);
 		}
 	}
-	gx_ge_reset();
+	sampler_stop();
 	video_show_console();
+	/* Antes de olvidar las texturas: el informe final las cuenta */
 	if(!exited) hle_dump_state("detenido por el usuario");
+	gx_ge_reset();
 
 	app_get_stats(&frames, &instr);
 	elapsed = now_ms() - start;
@@ -152,16 +183,19 @@ static void open_file(const char *path){
 	app_imports_path(path, imports, sizeof(imports));
 	if(app_load(path, 8, imports) == 0){
 		menu_remember(path);
+		printf("A: ejecutar   B: volver al menu\n");
 		for(;;){
 			Input in;
-			printf("\rA: ejecutar   B: volver al menu   2/Y: renderizador %s  ",
-			       menu_renderer_gx() ? "GX (rapido)        " : "software (exacto)  ");
+			printf("\r2/Y: renderizador %s  1/X: texturas %s  ",
+			       menu_renderer_gx() ? "GX (rapido)      " : "software (exacto)",
+			       menu_lazy_textures() ? "rapidas" : "seguras");
 			fflush(stdout);
 			do {
 				VIDEO_WaitVSync();
 				input_read(&in);
-			} while(!(in.menu & (IN_ACCEPT | IN_BACK | IN_EXIT | IN_OPTION)));
+			} while(!(in.menu & (IN_ACCEPT | IN_BACK | IN_EXIT | IN_OPTION | IN_SWITCH)));
 			if(in.menu & IN_OPTION){ menu_set_renderer_gx(!menu_renderer_gx()); continue; }
+			if(in.menu & IN_SWITCH){ menu_set_lazy_textures(!menu_lazy_textures()); continue; }
 			printf("\n");
 			if(in.menu & IN_ACCEPT) break;
 			return;

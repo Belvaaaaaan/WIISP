@@ -26,12 +26,38 @@ void ge_shutdown(void);
 typedef struct {
 	u32 commands;
 	u32 primitives;
-	u32 vertices;
+	u32 vertices;     /* vértices calculados (decodificar + transformar) */
 	u64 pixels;
 	u32 lists;        /* veces que se procesó la cola de listas */
 	u64 host_ticks;   /* tiempo del anfitrión dentro del GE (si hay reloj) */
+
+	/* Detalle para [TIEMPOS] */
+	u32 draws;              /* llamadas de dibujo (PRIM) */
+	u32 draws_indexed;      /* con índices */
+	u32 draws_reuse;        /* con índices repetidos: cada vértice se calcula una vez */
+	u32 draws_prim[8];      /* por tipo de primitiva (GE_PRIM_*) */
+	u32 curves;             /* bezier y spline */
+	u32 vertex_reads;       /* vértices que pidieron las primitivas */
+	u32 vertices_skinned;   /* calculados con huesos */
+	u32 vertices_morph;
+	u32 vertices_through;   /* ya en coordenadas de pantalla (2D) */
+	u32 vertices_lit;       /* con luces */
+	u32 lights;             /* suma de luces encendidas de los iluminados */
+	u32 tris;               /* triángulos recibidos */
+	u32 tris_drawn;
+	u32 tris_back;          /* de espaldas o sin área */
+	u32 tris_outside;       /* fuera de la pantalla o de la tijera */
+	u32 tris_clipped;       /* cortados por el plano cercano */
+	u32 sprites;
 } GeStats;
 void ge_get_stats(GeStats *out);
+
+/* Sube cada vez que la CPU se sincroniza con el GE (sceGeDrawSync,
+   sceGeListSync, fin de una lista) y cuando un framebuffer de la GPU baja a
+   la memoria. Una textura no puede cambiar dentro de un mismo periodo sin
+   avisar (como textureSyncTimeDomain de PPSSPP): las cachés de texturas la
+   comprueban como mucho una vez por periodo. */
+extern u32 ge_sync_domain;
 
 /* Reloj del anfitrión para medir el GE (perfilado); NULL = sin medir */
 extern unsigned long long (*ge_host_clock)(void);

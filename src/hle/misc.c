@@ -188,6 +188,7 @@ static void dmac_copy(int try_only){
 		u32 i;
 		for(i = 0; i < size; i++) mem_write8(dst + i, mem_read8(src + i));
 	}
+	mem_note_write(dst, size);
 	RETURN(0);
 	if(size >= 272){
 		dmac_deadline = cpu_cycles + (u64)(size / 236) * CYCLES_PER_US;

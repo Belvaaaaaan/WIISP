@@ -8,6 +8,7 @@
 #ifndef WIISP_GX_GE_H
 #define WIISP_GX_GE_H
 
+#include <stddef.h>
 #include <gccore.h>
 
 /* Una vez, después de GX_Init */
@@ -29,6 +30,13 @@ int  gx_ge_present(void *xfb, GXRModeObj *rmode, int widescreen);
    a la VRAM, subidas desde la VRAM y texturas decodificadas */
 void gx_ge_profile(unsigned long long *setup, unsigned long long *state, unsigned long long *present,
                    unsigned *counts);
+
+/* Espaciado de las comprobaciones de texturas (gpu/texcache.h); activado
+   por defecto */
+void gx_ge_set_lazy_textures(int on);
+
+/* Qué hizo la caché de texturas desde la última llamada (una línea) */
+void gx_ge_texture_report(char *buf, size_t size);
 
 /* Copia a la VRAM emulada todo lo que solo está en la GPU */
 void gx_ge_sync_vram(void);

@@ -291,3 +291,11 @@ de vértices por frame, el siguiente salto ya no es pulir C sino cambiar de
 estructura: T&L por hardware de GX y decodificadores de vértices
 especializados por formato (§6).
 
+GTA LCS en el Wii (v0.4.9, modo rápido, octubre de 2026): GE 61-66 %, CPU
+17-18 %, texturas 10-12 %, framebuffers 5-7 %; ~8,5 % de velocidad. ~41.000
+vértices calculados y ~8.200 triángulos dibujados por vblank. Las texturas
+se iban en comprobarlas (hash en cada llamada de dibujo), no en
+decodificarlas: la v0.4.10 las comprueba una vez por periodo con
+espaciado y avisos de escritura (ARQUITECTURA.md 7) y mide el GE por
+fases para decidir entre reutilizar vértices, envío por lotes o estado de
+GX incremental.

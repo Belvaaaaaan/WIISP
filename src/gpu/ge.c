@@ -143,7 +143,11 @@ static void pop_dl_queue(void){
 }
 
 void ge_init(void){
+	u32 clut_gen = ge.clut_gen;
 	memset(&ge, 0, sizeof(ge));
+	/* Sigue subiendo entre programas: las cachés de paletas no confunden
+	   la de antes con la nueva */
+	ge.clut_gen = clut_gen + 1;
 	memset(dls, 0, sizeof(dls));
 	memset(callbacks, 0, sizeof(callbacks));
 	memset(&ge_stats, 0, sizeof(ge_stats));
@@ -192,7 +196,10 @@ static u32 vertex_cost(void){
 
 /* --- Esperas y eventos -------------------------------------------------- */
 
+u32 ge_sync_domain;
+
 static int trigger_wait(int type, int id){
+	ge_sync_domain++;
 	return kernel_wake_object(type == SYNC_DRAW ? KWAIT_GE_DRAW : KWAIT_GE_LIST, (u32)id, 0) > 0;
 }
 
@@ -399,7 +406,10 @@ static void do_transfer(u32 arg){
 				for(i = 0; i < line; i++) mem_write8(da + i, mem_read8(sa + i));
 			}
 		}
-	}
+	} else return;
+	/* Las texturas que estuvieran ahí cambian */
+	if(dst_wraps) mem_note_write(PSP_VRAM_BASE, PSP_VRAM_SIZE);
+	else mem_note_write(dst, dst_size);
 }
 
 /* La CLUT interna es de 1 KB por carga; lo que cae fuera de memoria válida
@@ -657,7 +667,7 @@ static void process_dl_queue_body(void);
 
 static void process_dl_queue(void){
 	u64 t0;
-	int old = prof_switch(PROF_GE);
+	int old = prof_switch(PROF_GE), phase = prof_ge_enter(GEF_COMANDOS);
 	ge_stats.lists++;
 	if(!ge_host_clock) process_dl_queue_body();
 	else {
@@ -665,6 +675,7 @@ static void process_dl_queue(void){
 		process_dl_queue_body();
 		ge_stats.host_ticks += ge_host_clock() - t0;
 	}
+	prof_ge_leave(phase);
 	prof_switch(old);
 }
 
@@ -978,6 +989,7 @@ static void sceGeListSync(void){
 	int mode = (int)ARG(1);
 	DisplayList *dl;
 	kernel_eat_cycles(220);
+	ge_sync_domain++;
 	if(id < 0 || id >= GE_MAX_LISTS){ RETURN(ERR_INVALID_ID); return; }
 	if(mode < 0 || mode > 1){ RETURN(ERR_INVALID_MODE); return; }
 	dl = &dls[id];
@@ -999,6 +1011,7 @@ static void sceGeListSync(void){
 static void sceGeDrawSync(void){
 	u32 mode = ARG(0);
 	kernel_eat_cycles(1240);
+	ge_sync_domain++;
 	RETURN(draw_sync((int)mode));
 }
 

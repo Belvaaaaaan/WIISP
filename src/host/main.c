@@ -31,6 +31,8 @@
 #include "core/prof.h"
 #ifdef _WIN32
 #include <windows.h>
+#else
+#include <pthread.h>
 #endif
 
 void *plat_alloc_big(size_t size){
@@ -63,6 +65,60 @@ static u64 prof_ticks_hz(void){
 	return 1000000000ull;
 #endif
 }
+
+/* Muestreo del desglose ([TIEMPOS] GE por dentro): un hilo aparte apunta
+   cada milisegundo qué está haciendo el emulador */
+static volatile int sampler_run;
+#ifdef _WIN32
+static HANDLE sampler_thread;
+
+static DWORD WINAPI sampler_main(LPVOID arg){
+	(void)arg;
+	while(sampler_run){
+		prof_sample();
+		Sleep(1);
+	}
+	return 0;
+}
+
+static void sampler_start(void){
+	sampler_run = 1;
+	sampler_thread = CreateThread(NULL, 0, sampler_main, NULL, 0, NULL);
+}
+
+static void sampler_stop(void){
+	if(!sampler_thread) return;
+	sampler_run = 0;
+	WaitForSingleObject(sampler_thread, INFINITE);
+	CloseHandle(sampler_thread);
+	sampler_thread = NULL;
+}
+#else
+static pthread_t sampler_thread;
+static int sampler_on;
+
+static void *sampler_main(void *arg){
+	struct timespec ts = { 0, 1000000 };
+	(void)arg;
+	while(sampler_run){
+		prof_sample();
+		nanosleep(&ts, NULL);
+	}
+	return NULL;
+}
+
+static void sampler_start(void){
+	sampler_run = 1;
+	sampler_on = pthread_create(&sampler_thread, NULL, sampler_main, NULL) == 0;
+}
+
+static void sampler_stop(void){
+	if(!sampler_on) return;
+	sampler_run = 0;
+	pthread_join(sampler_thread, NULL);
+	sampler_on = 0;
+}
+#endif
 
 static int null_gpu;
 static void profile_hook(char *buf, size_t size){
@@ -187,6 +243,7 @@ int main(int argc, char **argv){
 	prof_set_clock(prof_ticks, prof_ticks_hz());
 	hle_set_profile_hook(profile_hook);
 	if(app_start()) return 1;
+	sampler_start();
 	{
 		clock_t start = clock();
 		unsigned run_frames;
@@ -223,6 +280,7 @@ int main(int argc, char **argv){
 		        exited ? app_exit_reason() : stop_requested ? "detenido con Ctrl+C" : "limite de frames alcanzado", i,
 		        secs > 0 ? instr / secs / 1e6 : 0.0);
 	}
+	sampler_stop();
 	if(screenshot) save_screenshot(screenshot);
 	return 0;
 }

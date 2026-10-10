@@ -512,6 +512,7 @@ static long read_file(const char *path, u32 addr, u32 cap){
 	if(cap){
 		u8 *p = mem_ptr(addr, cap);
 		n = p ? (long)fread(p, 1, cap, f) : -1;
+		if(n > 0) mem_note_write(addr, (u32)n);
 	}
 	fclose(f);
 	return n;
@@ -1059,6 +1060,7 @@ static void sceUtilitySavedataUpdate(void){
 		if(!save.late_len) dlg_change(&dlg_save, ST_FINISHED, 0);
 	} else if(save.late_len){
 		memcpy(mem_ptr(save.late_addr, save.late_len), save.late, save.late_len);
+		mem_note_write(save.late_addr, save.late_len);
 		save.late_len = 0;
 		dlg_change(&dlg_save, ST_FINISHED, 0);
 	}

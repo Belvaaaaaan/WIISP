@@ -106,6 +106,7 @@ static int load_segments(Elf *e, u32 base, PspModule *mod){
 
 		memcpy(p, e->buf + offset, filesz);
 		memset(p + filesz, 0, memsz - filesz);
+		mem_note_write(dest, memsz);
 
 		if(dest < mod->load_start) mod->load_start = dest;
 		if(dest + memsz > mod->load_end) mod->load_end = dest + memsz;

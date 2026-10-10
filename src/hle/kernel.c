@@ -3043,7 +3043,10 @@ static const HleFunction thread_man[] = {
 /* Devuelve el destino (PPSSPP) */
 static void sceKernelMemset(void){
 	u32 addr = ARG(0), n = ARG(2);
-	if(n && mem_valid(addr, n)) memset(mem_ptr(addr, n), (int)(ARG(1) & 0xFF), n);
+	if(n && mem_valid(addr, n)){
+		memset(mem_ptr(addr, n), (int)(ARG(1) & 0xFF), n);
+		mem_note_write(addr, n);
+	}
 	RETURN(addr);
 }
 
@@ -3097,15 +3100,28 @@ static const HleFunction loadexec_user[] = {
 };
 
 
+/* La caché de datos no se emula, pero vaciarla avisa de que el juego
+   escribió esa memoria con la CPU (texturas que el GE leerá) */
+static void dcache_range(void){
+	u32 addr = ARG(0), size = ARG(1);
+	if(addr && (s32)size > 0) mem_note_write(addr, size);
+	RETURN(0);
+}
+
+static void dcache_all(void){
+	mem_note_write_all();
+	RETURN(0);
+}
+
 static const HleFunction utils_user[] = {
 	{ "sceKernelLibcTime", sceKernelLibcTime },
 	{ "sceKernelLibcClock", sceKernelLibcClock },
 	{ "sceKernelLibcGettimeofday", sceKernelLibcGettimeofday },
-	{ "sceKernelDcacheWritebackAll", return_zero },
-	{ "sceKernelDcacheWritebackInvalidateAll", return_zero },
-	{ "sceKernelDcacheWritebackRange", return_zero },
-	{ "sceKernelDcacheWritebackInvalidateRange", return_zero },
-	{ "sceKernelDcacheInvalidateRange", return_zero },
+	{ "sceKernelDcacheWritebackAll", dcache_all },
+	{ "sceKernelDcacheWritebackInvalidateAll", dcache_all },
+	{ "sceKernelDcacheWritebackRange", dcache_range },
+	{ "sceKernelDcacheWritebackInvalidateRange", dcache_range },
+	{ "sceKernelDcacheInvalidateRange", dcache_range },
 	{ "sceKernelIcacheInvalidateAll", return_zero },
 	{ "sceKernelIcacheInvalidateRange", return_zero },
 	{ "sceKernelGetGPI", sceKernelGetGPI },

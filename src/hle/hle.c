@@ -348,6 +348,7 @@ static struct {
 	int valid;
 	u64 clock, acc[PROF_N], instr, cycles, syscalls, flips, switches, guest_calls;
 	u32 vblanks;
+	u32 samples[PROF_N], ge_samples[GEF_N];
 	GeStats ge;
 } prof_base;
 static u32 prof_vblanks;   /* hle_run_frame lleva la cuenta */
@@ -366,17 +367,68 @@ static void profile_snapshot(void){
 	prof_base.switches = kernel_stat_switches;
 	prof_base.guest_calls = kernel_stat_guest_calls;
 	prof_base.vblanks = prof_vblanks;
+	memcpy(prof_base.samples, (const void *)prof_samples, sizeof(prof_base.samples));
+	memcpy(prof_base.ge_samples, (const void *)prof_ge_samples, sizeof(prof_base.ge_samples));
 	ge_get_stats(&prof_base.ge);
 }
 
-/* Tres líneas: velocidad, a dónde va el tiempo real y qué hizo el GE.
-   Sin acentos: también sale en la consola del Wii. */
+static double pct(u32 part, u32 whole){ return whole ? 100.0 * (double)part / (double)whole : 0.0; }
+
+/* Lo que hizo el GE: llamadas de dibujo, vértices y triángulos */
+static void profile_ge_lines(const GeStats *g, const GeStats *b, u32 vblanks){
+	static const char *const fnames[GEF_N] = {
+		"comandos", "leer vertices", "transformar y luces", "ensamblar triangulos", "enviar a GX",
+		"preparar estado", "curvas"
+	};
+	char line[512];
+	size_t len;
+	u32 st = 0, draws = g->draws - b->draws, verts = g->vertices - b->vertices, tris = g->tris - b->tris;
+	u32 lit = g->vertices_lit - b->vertices_lit;
+	double per = vblanks ? (double)vblanks : 1.0;
+	int i;
+
+	/* Muestras: cuánto del tiempo real se fue en cada fase del GE */
+	for(i = 0; i < PROF_N; i++) st += prof_samples[i] - prof_base.samples[i];
+	if(st){
+		len = (size_t)snprintf(line, sizeof(line), "[TIEMPOS] GE por dentro:");
+		for(i = 0; i < GEF_N && len < sizeof(line) - 48; i++)
+			len += (size_t)snprintf(line + len, sizeof(line) - len, " %s %.1f%%", fnames[i],
+			                        pct(prof_ge_samples[i] - prof_base.ge_samples[i], st));
+		if(len < sizeof(line) - 32) snprintf(line + len, sizeof(line) - len, " (%u muestras)", (unsigned)st);
+		hle_log("%s\n", line);
+	}
+	hle_log("[TIEMPOS] Dibujo: %u llamadas (%.0f por vblank; %.0f%% con indices, %.0f%% reutilizan vertices); "
+	        "%.0f%% listas de triangulos, %.0f%% tiras, %.0f%% abanicos, %.0f%% sprites, %.0f%% lineas y puntos; "
+	        "%u curvas\n",
+	        (unsigned)draws, draws / per, pct(g->draws_indexed - b->draws_indexed, draws),
+	        pct(g->draws_reuse - b->draws_reuse, draws),
+	        pct(g->draws_prim[3] - b->draws_prim[3], draws), pct(g->draws_prim[4] - b->draws_prim[4], draws),
+	        pct(g->draws_prim[5] - b->draws_prim[5], draws), pct(g->draws_prim[6] - b->draws_prim[6], draws),
+	        pct((g->draws_prim[0] - b->draws_prim[0]) + (g->draws_prim[1] - b->draws_prim[1]) +
+	            (g->draws_prim[2] - b->draws_prim[2]), draws),
+	        (unsigned)(g->curves - b->curves));
+	hle_log("[TIEMPOS] Vertices: %u pedidos, %u calculados (%.0f por vblank): %.0f%% con huesos, %.0f%% con morph, "
+	        "%.0f%% con luces (%.1f de media), %.0f%% en 2D\n",
+	        (unsigned)(g->vertex_reads - b->vertex_reads), (unsigned)verts, verts / per,
+	        pct(g->vertices_skinned - b->vertices_skinned, verts), pct(g->vertices_morph - b->vertices_morph, verts),
+	        pct(lit, verts), lit ? (double)(g->lights - b->lights) / (double)lit : 0.0,
+	        pct(g->vertices_through - b->vertices_through, verts));
+	hle_log("[TIEMPOS] Triangulos: %u recibidos (%.0f por vblank): %.0f%% dibujados, %.0f%% de espaldas o sin area, "
+	        "%.0f%% fuera de pantalla; %u recortados; %u sprites; %u primitivas dibujadas en total\n",
+	        (unsigned)tris, tris / per, pct(g->tris_drawn - b->tris_drawn, tris), pct(g->tris_back - b->tris_back, tris),
+	        pct(g->tris_outside - b->tris_outside, tris), (unsigned)(g->tris_clipped - b->tris_clipped),
+	        (unsigned)(g->sprites - b->sprites), (unsigned)(g->primitives - b->primitives));
+}
+
+/* Velocidad, a dónde va el tiempo real, el GE por dentro y qué dibujó, y lo
+   que añada el renderizador. Sin acentos: también sale en la consola del
+   Wii. */
 void hle_profile_report(const char *why){
 	static const char *const names[PROF_N] = {
 		"otros", "CPU", "syscalls", "GE", "rasterizar", "texturas", "framebuffers", "presentar", "esperar GX", "E/S",
 		"audio", "registro"
 	};
-	char line[512], extra[256];
+	char line[512], extra[512];
 	u64 total, d[PROF_N];
 	double secs, game;
 	size_t len;
@@ -403,14 +455,26 @@ void hle_profile_report(const char *why){
 		len += (size_t)snprintf(line + len, sizeof(line) - len, " %s %.1f%%", names[b], 100.0 * (double)d[b] / (double)total);
 	}
 	hle_log("%s\n", line);
-	extra[0] = 0;
-	if(profile_hook) profile_hook(extra, sizeof(extra));
 	hle_log("[TIEMPOS] GE: %u listas, %u comandos, %u vertices, %u primitivas | %llu syscalls, %llu cambios de hilo, "
-	        "%llu llamadas al juego%s%s\n",
+	        "%llu llamadas al juego\n",
 	        ge.lists - prof_base.ge.lists, ge.commands - prof_base.ge.commands, ge.vertices - prof_base.ge.vertices,
 	        ge.primitives - prof_base.ge.primitives, (unsigned long long)(hle_stat_syscalls - prof_base.syscalls),
 	        (unsigned long long)(kernel_stat_switches - prof_base.switches),
-	        (unsigned long long)(kernel_stat_guest_calls - prof_base.guest_calls), extra[0] ? " | " : "", extra);
+	        (unsigned long long)(kernel_stat_guest_calls - prof_base.guest_calls));
+	profile_ge_lines(&ge, &prof_base.ge, prof_vblanks - prof_base.vblanks);
+	/* Lo del renderizador (una línea por cada \n) */
+	extra[0] = 0;
+	if(profile_hook) profile_hook(extra, sizeof(extra));
+	{
+		char *p = extra;
+		while(*p){
+			char *nl = strchr(p, '\n');
+			if(nl) *nl = 0;
+			hle_log("[TIEMPOS] %s\n", p);
+			if(!nl) break;
+			p = nl + 1;
+		}
+	}
 	hle_log_sync();
 	profile_snapshot();
 }

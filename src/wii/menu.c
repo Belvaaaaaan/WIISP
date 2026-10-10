@@ -30,25 +30,28 @@ static const char *const devices[] = { "sd:/", "usb:/" };
 static char config_path[256];
 static char last_dir[FILELIST_PATH_LEN];
 static int renderer_gx = 1;
+static int lazy_textures = 1;
 
+/* wiisp.cfg: carpeta, renderizador y comprobación de texturas */
 static void save_config(void){
 	FILE *f;
 	if(!config_path[0]) return;
 	f = fopen(config_path, "w");
 	if(!f) return;
-	fprintf(f, "%s\n%s\n", last_dir, renderer_gx ? "gx" : "soft");
+	fprintf(f, "%s\n%s\n%s\n", last_dir, renderer_gx ? "gx" : "soft", lazy_textures ? "texturas-rapidas" : "texturas-seguras");
 	fclose(f);
 }
 
 void menu_set_config_path(const char *path){
 	FILE *f;
-	char line[16];
+	char line[32];
 	snprintf(config_path, sizeof(config_path), "%s", path);
 	f = fopen(config_path, "r");
 	if(!f) return;
 	if(fgets(last_dir, sizeof(last_dir), f)){
 		last_dir[strcspn(last_dir, "\r\n")] = 0;
 		if(fgets(line, sizeof(line), f)) renderer_gx = strncmp(line, "soft", 4) != 0;
+		if(fgets(line, sizeof(line), f)) lazy_textures = strncmp(line, "texturas-seguras", 16) != 0;
 	}
 	fclose(f);
 }
@@ -57,6 +60,13 @@ int menu_renderer_gx(void){ return renderer_gx; }
 
 void menu_set_renderer_gx(int on){
 	renderer_gx = on;
+	save_config();
+}
+
+int menu_lazy_textures(void){ return lazy_textures; }
+
+void menu_set_lazy_textures(int on){
+	lazy_textures = on;
 	save_config();
 }
 
