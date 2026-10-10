@@ -19,8 +19,9 @@ Como usarlo
 Controles
 ---------
 Con la ventana negra delante (haz clic en ella), W A S D mueven el stick
-analogico de la PSP: W arriba, S abajo, A izquierda, D derecha. Ojo: el PC
-dibuja con el renderizador exacto (por software), no con el GX del Wii.
+analogico de la PSP: W arriba, S abajo, A izquierda, D derecha. ENTER es
+START. Ojo: el PC dibuja con el renderizador exacto (por software), no con
+el GX del Wii.
 
 Notas
 -----

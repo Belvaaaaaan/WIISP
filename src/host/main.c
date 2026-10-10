@@ -20,7 +20,7 @@
  *                       el --root de PPSSPP para pspautotests: "../x" funciona)
  *
  * En Windows, con la consola en primer plano, W A S D mueven el stick
- * analógico de la PSP.
+ * analógico de la PSP y ENTER es START.
  *
  * SPDX-License-Identifier: GPL-2.0-or-later
 **/
@@ -126,24 +126,33 @@ static void sampler_stop(void){
 
 #ifdef _WIN32
 /* W A S D -> stick analógico (0-255, 128 en el centro, arriba 0); en
-   diagonal, sobre el círculo como la cruceta del Wiimote. Solo con la
-   consola en primer plano, para no leer lo que se escribe en otra ventana. */
+   diagonal, sobre el círculo como la cruceta del Wiimote. ENTER -> START.
+   Solo con la consola en primer plano, para no leer lo que se escribe en
+   otra ventana. */
 static void keyboard_input(void){
-	static int was_moving;
+	static int was_active;
 	HWND con = GetConsoleWindow();
-	int dx = 0, dy = 0, r, moving;
+	int dx = 0, dy = 0, r, active;
+	unsigned buttons = 0;
 	if(con && GetForegroundWindow() == con){
 		if(GetAsyncKeyState('A') & 0x8000) dx--;
 		if(GetAsyncKeyState('D') & 0x8000) dx++;
 		if(GetAsyncKeyState('W') & 0x8000) dy--;
 		if(GetAsyncKeyState('S') & 0x8000) dy++;
+		if(GetAsyncKeyState(VK_RETURN) & 0x8000) buttons |= APP_BTN_START;
 	}
-	moving = dx || dy;
-	if(!moving && !was_moving) return;
-	was_moving = moving;
+	active = dx || dy || buttons;
+	if(!active && !was_active) return;
+	was_active = active;
 	r = dx && dy ? 90 : 128;
 	dx = 128 + dx * r; dy = 128 + dy * r;
-	app_set_input(0, (unsigned char)(dx > 255 ? 255 : dx), (unsigned char)(dy > 255 ? 255 : dy));
+	app_set_input(buttons, (unsigned char)(dx > 255 ? 255 : dx), (unsigned char)(dy > 255 ? 255 : dy));
+}
+
+/* Las teclas pulsadas jugando también quedan en la entrada de la consola:
+   fuera, para que el "pause" del .bat no se salte con un ENTER viejo */
+static void keyboard_flush(void){
+	FlushConsoleInputBuffer(GetStdHandle(STD_INPUT_HANDLE));
 }
 #endif
 
@@ -312,6 +321,9 @@ int main(int argc, char **argv){
 		        secs > 0 ? instr / secs / 1e6 : 0.0);
 	}
 	sampler_stop();
+#ifdef _WIN32
+	keyboard_flush();
+#endif
 	if(screenshot) save_screenshot(screenshot);
 	return 0;
 }
