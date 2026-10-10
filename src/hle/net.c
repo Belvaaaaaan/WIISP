@@ -218,6 +218,7 @@ static const HleFunction power[] = {
 	{ "scePowerGetBatteryLifeTime", scePowerGetBatteryLifeTime },
 	{ "scePowerGetBatteryTemp", scePowerGetBatteryTemp },
 	{ "scePowerGetBatteryVolt", scePowerGetBatteryVolt },
+	{ "scePowerCheckWlanCoexistenceClock", return_one },   /* modelo: 1 = PSP-2000 (PPSSPP) */
 	{ "scePowerTick", return_zero },
 	{ "scePowerLock", return_zero },
 	{ "scePowerUnlock", return_zero },

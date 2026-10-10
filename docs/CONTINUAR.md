@@ -454,6 +454,18 @@ batería, avisos del UMD y HOME, apagado de pantalla) y el NID 0x469989AD
 de scePower (SetClockFrequency de SDK 6.3x). `sceUtilityLoadModule(0x108)`
 da 0x8002013C a propósito: necesita los módulos de red cargados (PPSSPP).
 
+### v0.5.6.x: arreglos para que arranque DBZ TTT
+
+El usuario pidió numerar así (0.5.6.1, 0.5.6.2...) mientras se arregla
+DBZ. 0.5.6.1, con el registro de la 0.5.6 (llegaba a 1,2 s con audio):
+faltaban `sceKernelMemcpy` (Kernel_Library 0x1839852A: no copiaba y el
+hilo 1 acababa saltando a 0x0004FF00), `sceDisplayWaitVblankStartMulti`
+(0x40F1469C) y su CB (0x77ED8B3A) (`kernel_wait_vblanks`: wait_b cuenta
+los vblanks que faltan) y `scePowerCheckWlanCoexistenceClock` (0xA85880D0,
+1 = PSP-2000). display/vblankmulti: la parte Multi coincide; sigue
+fallando por `sceDisplayIsVblank` (siempre 0) y sceDisplayWaitVblank
+dentro del vblank, que ya fallaban.
+
 ## Siguientes pasos, por prioridad
 
 1. **Que el usuario pruebe los controles de la v0.5.0** (sobre todo el

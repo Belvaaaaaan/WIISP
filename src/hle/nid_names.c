@@ -255,6 +255,7 @@ const NidName nid_names[] = {
 	{ 0x1811AD32, "scePaf_1811AD32" },
 	{ 0x18172C6A, "sceSysregMsifIoDisable" },
 	{ 0x18260574, "sceKernelReceiveMbx" },
+	{ 0x1839852A, "sceKernelMemcpy" },
 	{ 0x1858883D, "sceNetRand" },
 	{ 0x1890BE9C, "sceKernelSysMemMemSize" },
 	{ 0x18B78661, "sceNandVerifyEcc" },
@@ -697,6 +698,7 @@ const NidName nid_names[] = {
 	{ 0x40B21F4F, "scePaf_40B21F4F" },
 	{ 0x40C95283, "sce_paf_private_check_leak" },
 	{ 0x40D2F9F0, "sceHprmReadLatch" },
+	{ 0x40F1469C, "sceDisplayWaitVblankStartMulti" },
 	{ 0x40F8F435, "sceNetAdhocMatchingGetPoolMaxAlloc" },
 	{ 0x410B34AA, "sceNetInetConnect" },
 	{ 0x411106BA, "sceIoGetThreadCwd" },
@@ -1302,6 +1304,7 @@ const NidName nid_names[] = {
 	{ 0x779242A2, "sceRtcConvertLocalTimeToUTC" },
 	{ 0x77D981F5, "sce_paf_private_strrchr" },
 	{ 0x77DED992, "sceSysregKeyIoEnable" },
+	{ 0x77ED8B3A, "sceDisplayWaitVblankStartMultiCB" },
 	{ 0x77EE5319, "sceHttpLoadAuthList" },
 	{ 0x78054045, "scePaf_78054045" },
 	{ 0x780F88D1, "sceAtracGetAtracID" },
@@ -1863,6 +1866,7 @@ const NidName nid_names[] = {
 	{ 0xA82E3C19, "sce_paf_private_srand" },
 	{ 0xA834319D, "sceFontOpen" },
 	{ 0xA83F7113, "scePsmfGetAudioInfo" },
+	{ 0xA85880D0, "scePowerCheckWlanCoexistenceClock" },
 	{ 0xA8711520, "scePaf_A8711520" },
 	{ 0xA88E8D22, "sceCtrlSetIdleCancelKey" },
 	{ 0xA89157EE, "scePaf_A89157EE" },
@@ -2855,4 +2859,4 @@ const NidName nid_names[] = {
 	{ 0xFFC36A14, "sceKernelReferThreadRunStatus" },
 };
 
-const u32 nid_names_count = 2843;
+const u32 nid_names_count = 2847;

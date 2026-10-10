@@ -33,6 +33,7 @@ int sceKernelWakeupThread(SceUID th);
 int sceKernelExtendThreadStack(int size, int (*entry)(void *), void *arg);
 void *sceKernelMemset(void *dst, int c, u32 n);
 int sceKernelCheckThreadStack(void);
+void *sceKernelMemcpy(void *dst, const void *src, u32 n);
 SceUID sceKernelAllocPartitionMemory(int part, const char *name, int type, u32 size, void *addr);
 int sceKernelFreePartitionMemory(SceUID b);
 void *sceKernelGetBlockHeadAddr(SceUID b);

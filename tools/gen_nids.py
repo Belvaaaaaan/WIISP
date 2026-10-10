@@ -203,6 +203,10 @@ EXTRA = {
     0xC1734599: 'sceKernelReferLwMutexStatus',
     0x4C145944: 'sceKernelReferLwMutexStatusByID',
     0x469989AD: 'scePowerSetClockFrequency630',
+    0x1839852A: 'sceKernelMemcpy',
+    0x40F1469C: 'sceDisplayWaitVblankStartMulti',
+    0x77ED8B3A: 'sceDisplayWaitVblankStartMultiCB',
+    0xA85880D0: 'scePowerCheckWlanCoexistenceClock',
 }
 for nid, name in EXTRA.items():
     # Los stubs dejan sin nombre algunos NID ("lib_NID"): ahí manda EXTRA

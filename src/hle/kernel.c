@@ -736,8 +736,11 @@ void kernel_vblank(void){
 	int i;
 	cpu.llbit = 0; /* la interrupción de vblank rompe ll/sc */
 	for(i = 0; i < MAX_THREADS; i++)
-		if(threads[i].used && threads[i].status == TH_WAITING && threads[i].wait == W_VBLANK)
-			wake(i, threads[i].delay_ret);
+		if(threads[i].used && threads[i].status == TH_WAITING && threads[i].wait == W_VBLANK){
+			/* wait_b: vblanks que faltan (sceDisplayWaitVblankStartMulti) */
+			if(threads[i].wait_b > 1) threads[i].wait_b--;
+			else wake(i, threads[i].delay_ret);
+		}
 	kernel_trigger_interrupt(PSP_VBLANK_INTR, INTR_SUB_ALL);
 }
 
@@ -756,9 +759,16 @@ int kernel_wait_vblank(void){ return kernel_wait_vblank_ret(0); }
 /* Como kernel_wait_vblank, pero el syscall devuelve ret al despertar (si no,
    sceCtrlReadBufferPositive devolvía 0 muestras y el juego ignoraba el mando) */
 int kernel_wait_vblank_ret(u32 ret){
+	return kernel_wait_vblanks(1, ret);
+}
+
+int kernel_wait_vblanks(u32 n, u32 ret){
 	Thread *t = current();
 	wait_current(W_VBLANK, 0, 0);
-	if(t && t->status == TH_WAITING && t->wait == W_VBLANK) t->delay_ret = ret;
+	if(t && t->status == TH_WAITING && t->wait == W_VBLANK){
+		t->delay_ret = ret;
+		t->wait_b = n;
+	}
 	return 0;
 }
 
@@ -3353,8 +3363,27 @@ static void sceKernelMemset(void){
 	RETURN(addr);
 }
 
+/* Como PPSSPP: si se solapan, a trozos de 8 bytes hacia delante como la
+   PSP; devuelve el destino */
+static void sceKernelMemcpy(void){
+	u32 dst = ARG(0), src = ARG(1), size = ARG(2);
+	if(size && mem_valid(dst, size) && mem_valid(src, size)){
+		u8 *d = mem_ptr(dst, size);
+		const u8 *s = mem_ptr_r(src, size);
+		if(dst + size < src || src + size < dst) memcpy(d, s, size);
+		else {
+			u32 n;
+			for(n = size / 8; n > 0; n--){ memmove(d, s, 8); d += 8; s += 8; }
+			for(n = size % 8; n > 0; n--) *d++ = *s++;
+		}
+		mem_note_write(dst, size);
+	}
+	RETURN(dst);
+}
+
 static const HleFunction kernel_library[] = {
 	{ "sceKernelMemset", sceKernelMemset },
+	{ "sceKernelMemcpy", sceKernelMemcpy },
 	{ "sceKernelCpuSuspendIntr", sceKernelCpuSuspendIntr },
 	{ "sceKernelCpuResumeIntr", sceKernelCpuResumeIntr },
 	{ "sceKernelCpuResumeIntrWithSync", sceKernelCpuResumeIntr },

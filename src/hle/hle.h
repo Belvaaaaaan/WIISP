@@ -19,7 +19,7 @@
 
 /* Versión de WIISP (la misma que dist/apps/wiisp/meta.xml): sale en el
    menú y al principio de wiisp.log */
-#define WIISP_VERSION "0.5.6"
+#define WIISP_VERSION "0.5.6.1"
 
 typedef void (*HleFunc)(void);
 
@@ -266,6 +266,7 @@ u32  kernel_enqueue_count(void);      /* llamadas encoladas desde el inicio */
 int  kernel_in_interrupt(void);
 int  kernel_wait_vblank(void); /* bloquea el hilo actual hasta el vblank */
 int  kernel_wait_vblank_ret(u32 ret); /* igual, y el syscall devuelve ret al despertar */
+int  kernel_wait_vblanks(u32 n, u32 ret); /* n vblanks */
 /* Bloquea el hilo actual hasta el ciclo indicado (si no es una interrupción) */
 void kernel_wait_until(u64 cycle);
 /* El syscall "tarda" us microsegundos: el hilo espera (hleDelayResult) */

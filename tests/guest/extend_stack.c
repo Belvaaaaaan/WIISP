@@ -3,8 +3,8 @@
  * sceKernelExtendThreadStack (la libc de DBZ Tenkaichi Tag Team arranca
  * así): la función corre con otra pila, puede esperar y lo que devuelve
  * llega a quien llamó. sceKernelCheckThreadStack (Kernel_Library) mide la
- * pila en uso: la extendida dentro. También sceKernelMemset, que devuelve
- * el destino.
+ * pila en uso: la extendida dentro. También sceKernelMemset y
+ * sceKernelMemcpy, que devuelven el destino (Memcpy, aunque se solapen).
  *
  * SPDX-License-Identifier: GPL-2.0-or-later
 **/
@@ -35,5 +35,11 @@ int main(int args, void *argp){
 	r = sceKernelCheckThreadStack();
 	printf("CheckThreadStack al volver: %s\n", r > 0x4000 && r <= 0x100000 ? "en la pila del hilo" : "NO");
 	printf("Memset devuelve el destino: %s\n", sceKernelMemset(buf, 'x', 4) == buf && buf[3] == 'x' && !buf[4] ? "si" : "NO");
+	sceKernelMemset(buf, 0, sizeof(buf));
+	buf[0] = 'a'; buf[1] = 'b'; buf[2] = 'c';
+	r = sceKernelMemcpy(buf + 8, buf, 3) == buf + 8 && buf[8] == 'a' && buf[10] == 'c' && !buf[11];
+	/* Solapado hacia delante: como memmove de 8 en 8 */
+	sceKernelMemcpy(buf + 1, buf, 3);
+	printf("Memcpy devuelve el destino y copia: %s (solapado: %c%c%c%c)\n", r ? "si" : "NO", buf[0], buf[1], buf[2], buf[3]);
 	return 0;
 }

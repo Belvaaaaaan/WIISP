@@ -6,3 +6,4 @@ ExtendThreadStack: 00001239
 pila de 100 bytes: 80020194
 CheckThreadStack al volver: en la pila del hilo
 Memset devuelve el destino: si
+Memcpy devuelve el destino y copia: si (solapado: aaaa)

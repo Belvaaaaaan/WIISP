@@ -127,6 +127,17 @@ static void sceDisplayGetFrameBuf(void){
 static void sceDisplayWaitVblank(void){ kernel_wait_vblank(); }
 static void sceDisplayWaitVblankCB(void){ kernel_cb_wait(sceDisplayWaitVblank); }
 
+/* n vblanks (PPSSPP): n <= 0 no vale; no se puede esperar sin dispatch ni
+   dentro de una interrupción */
+static void sceDisplayWaitVblankStartMulti(void){
+	s32 n = (s32)ARG(0);
+	if(n <= 0){ RETURN(0x800001FEu /* INVALID_VALUE */); return; }
+	if(!kernel_dispatch_enabled()){ RETURN(0x800201A7u /* CAN_NOT_WAIT */); return; }
+	if(kernel_in_interrupt()){ RETURN(0x80020064u /* ILLEGAL_CONTEXT */); return; }
+	kernel_wait_vblanks((u32)n, 0);
+}
+static void sceDisplayWaitVblankStartMultiCB(void){ kernel_cb_wait(sceDisplayWaitVblankStartMulti); }
+
 static void sceDisplayGetVcount(void){ RETURN((u32)(cpu_cycles / CYCLES_PER_FRAME)); }
 static void sceDisplayIsVblank(void){ RETURN(0); }
 static void sceDisplayGetFramePerSec(void){ union { float f; u32 u; } v = { 59.9400599f }; RETURN(v.u); }
@@ -192,6 +203,8 @@ static const HleFunction display[] = {
 	{ "sceDisplayWaitVblankCB", sceDisplayWaitVblankCB },
 	{ "sceDisplayWaitVblankStart", sceDisplayWaitVblank },
 	{ "sceDisplayWaitVblankStartCB", sceDisplayWaitVblankCB },
+	{ "sceDisplayWaitVblankStartMulti", sceDisplayWaitVblankStartMulti },
+	{ "sceDisplayWaitVblankStartMultiCB", sceDisplayWaitVblankStartMultiCB },
 	{ "sceDisplayGetVcount", sceDisplayGetVcount },
 	{ "sceDisplayIsVblank", sceDisplayIsVblank },
 	{ "sceDisplayGetFramePerSec", sceDisplayGetFramePerSec },
