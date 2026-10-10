@@ -381,6 +381,19 @@ el fallo está en otra parte (por ejemplo, el estado del juego).
 El registro tenía 2 MB en total y se cortaba en el segundo juego de la
 sesión: ahora son 2 MB por programa (8 MB en total).
 
+### v0.5.2: la causa real de que GTA ignorara el mando
+
+El registro de la v0.5.1 mostraba que GTA leía bien los botones (START, X,
+el stick...) y aun así no reaccionaba. `sceCtrlReadBufferPositive` espera
+al siguiente vblank, y al despertar el núcleo ponía v0 = 0
+(`wake(i, 0)` en `kernel_vblank`): el juego recibía "0 muestras leídas" y
+tiraba los datos. La traza decía "= 1" porque se escribe antes de la
+espera. Ahora la espera del vblank conserva su valor de retorno
+(`kernel_wait_vblank_ret`) y la lectura sigue a PPSSPP (`__CtrlReadBuffer`):
+con muestras sin leer devuelve en el acto cuántas copió; si no, espera y
+devuelve 1; más de 64 da 0x80000104. `tests/guest/ctrl_read.c` lo
+reproduce (antes daba 0 siempre).
+
 ## Siguientes pasos, por prioridad
 
 1. **Que el usuario pruebe los controles de la v0.5.0** (sobre todo el

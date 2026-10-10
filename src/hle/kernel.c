@@ -96,7 +96,7 @@ typedef struct {
 	u64 wait_seq;       /* orden de llegada a la espera */
 	int has_timeout;
 	u64 wait_until;     /* ciclo en el que vence */
-	u32 delay_ret;      /* v0 al despertar de W_DELAY */
+	u32 delay_ret;      /* v0 al despertar de W_DELAY y W_VBLANK */
 	u32 timeout_addr;   /* puntero a u32 con microsegundos, o 0 */
 	u32 wait_a, wait_b, wait_c; /* datos de la espera (cuenta, patrón...) */
 
@@ -736,7 +736,7 @@ void kernel_vblank(void){
 	cpu.llbit = 0; /* la interrupción de vblank rompe ll/sc */
 	for(i = 0; i < MAX_THREADS; i++)
 		if(threads[i].used && threads[i].status == TH_WAITING && threads[i].wait == W_VBLANK)
-			wake(i, 0);
+			wake(i, threads[i].delay_ret);
 	kernel_trigger_interrupt(PSP_VBLANK_INTR, INTR_SUB_ALL);
 }
 
@@ -750,8 +750,14 @@ void kernel_wait_until(u64 cycle){
 	cpu.r[R_V0] = v0;
 }
 
-int kernel_wait_vblank(void){
+int kernel_wait_vblank(void){ return kernel_wait_vblank_ret(0); }
+
+/* Como kernel_wait_vblank, pero el syscall devuelve ret al despertar (si no,
+   sceCtrlReadBufferPositive devolvía 0 muestras y el juego ignoraba el mando) */
+int kernel_wait_vblank_ret(u32 ret){
+	Thread *t = current();
 	wait_current(W_VBLANK, 0, 0);
+	if(t && t->status == TH_WAITING && t->wait == W_VBLANK) t->delay_ret = ret;
 	return 0;
 }
 

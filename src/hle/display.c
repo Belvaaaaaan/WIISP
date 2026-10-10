@@ -20,6 +20,8 @@ static u8 input_lx = 128, input_ly = 128;
 static u32 ctrl_cycle, ctrl_mode;
 static u32 read_buttons;    /* lo último que leyó el juego ([MANDO]) */
 static int read_stick, read_logs;
+static u32 ctrl_unread;     /* muestras (vblanks) sin leer, como PPSSPP */
+static int ctrl_consumed;   /* la del próximo vblank ya se entregó */
 
 void display_init(void){
 	memset(&fb, 0, sizeof(fb));
@@ -28,6 +30,8 @@ void display_init(void){
 	display_height = 272;
 	ctrl_cycle = ctrl_mode = 0;
 	input_latched = 0;
+	ctrl_unread = 0;
+	ctrl_consumed = 0;
 	read_buttons = 0;
 	read_stick = 0;
 	read_logs = 0;
@@ -156,13 +160,27 @@ static void sceCtrlPeekBufferPositive(void){
 	RETURN(n);
 }
 
+/* Cada vblank hay una muestra nueva del mando */
+void display_vblank(void){
+	if(ctrl_consumed){ ctrl_consumed = 0; return; }
+	if(ctrl_unread < 64) ctrl_unread++;
+}
+
+/* Como PPSSPP (__CtrlReadBuffer): con muestras sin leer devuelve en el acto
+   cuántas copió; si no, espera a la del siguiente vblank y devuelve 1. El
+   valor tiene que sobrevivir a la espera: antes el hilo despertaba con 0 y
+   juegos como GTA tiraban los botones ("0 muestras"). */
 static void sceCtrlReadBufferPositive(void){
-	/* La lectura bloquea hasta la siguiente muestra (cada vblank) */
-	u32 n = ARG(1), i;
-	for(i = 0; i < n; i++) display_fill_ctrl(ARG(0) + i * 16);
+	u32 n = ARG(1), i, got;
+	if(n > 64){ RETURN(0x80000104u); return; }
+	got = ctrl_unread ? (ctrl_unread < n ? ctrl_unread : n) : (n ? 1 : 0);
+	for(i = 0; i < got; i++) display_fill_ctrl(ARG(0) + i * 16);
 	display_ctrl_read_done();
-	kernel_wait_vblank();
-	RETURN(n);
+	RETURN(got);
+	if(ctrl_unread || !got || kernel_in_interrupt() || !kernel_dispatch_enabled()){ ctrl_unread = 0; return; }
+	kernel_wait_vblank_ret(got);
+	ctrl_unread = 0;
+	ctrl_consumed = 1;   /* la muestra de ese vblank es la que se acaba de dar */
 }
 
 static const HleFunction display[] = {

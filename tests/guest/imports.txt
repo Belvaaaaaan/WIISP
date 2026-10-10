@@ -41,3 +41,5 @@ sceDisplay sceDisplaySetFrameBuf
 sceDisplay sceDisplayWaitVblankStart
 UtilsForUser sceKernelDcacheWritebackRange
 UtilsForUser sceKernelDcacheWritebackAll
+sceCtrl sceCtrlReadBufferPositive
+sceCtrl sceCtrlSetSamplingMode

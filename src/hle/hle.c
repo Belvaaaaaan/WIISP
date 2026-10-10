@@ -680,7 +680,10 @@ int hle_run_frame(void){
 	u64 frame;
 	if(exited) return 1;
 	kernel_run_until((cpu_cycles / CYCLES_PER_FRAME + 1) * CYCLES_PER_FRAME);
-	if(!exited) kernel_vblank();
+	if(!exited){
+		display_vblank();
+		kernel_vblank();
+	}
 	vfpu_stats_fold();
 	log_tick();
 	prof_vblanks++;

@@ -19,7 +19,7 @@
 
 /* Versión de WIISP (la misma que dist/apps/wiisp/meta.xml): sale en el
    menú y al principio de wiisp.log */
-#define WIISP_VERSION "0.5.1"
+#define WIISP_VERSION "0.5.2"
 
 typedef void (*HleFunc)(void);
 
@@ -265,6 +265,7 @@ u32  kernel_enqueue_count(void);      /* llamadas encoladas desde el inicio */
 /* 1 mientras se atiende una interrupción o se ejecuta kernel_call_guest */
 int  kernel_in_interrupt(void);
 int  kernel_wait_vblank(void); /* bloquea el hilo actual hasta el vblank */
+int  kernel_wait_vblank_ret(u32 ret); /* igual, y el syscall devuelve ret al despertar */
 /* Bloquea el hilo actual hasta el ciclo indicado (si no es una interrupción) */
 void kernel_wait_until(u64 cycle);
 /* El syscall "tarda" us microsegundos: el hilo espera (hleDelayResult) */
@@ -356,5 +357,7 @@ void power_init(void);   /* net.c: ranuras de callbacks de energía */
 void display_fill_ctrl(u32 addr);
 /* Tras una lectura del mando del juego (olvida lo retenido, [MANDO]) */
 void display_ctrl_read_done(void);
+/* Cada vblank (muestra nueva del mando) */
+void display_vblank(void);
 
 #endif
