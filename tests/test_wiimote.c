@@ -92,10 +92,20 @@ static void test_wiimote_b(void){
 	CHECK_EQ(step(WM_B | WM_2, 7300), APP_BTN_START);
 	CHECK_EQ(step(0, 7400), 0);
 
-	/* Los demás botones siguen igual con B */
-	CHECK_EQ(step(WM_B | WM_A | WM_PLUS, 8000), APP_BTN_SQUARE | APP_BTN_RTRIGGER);
-	CHECK_EQ(step(WM_B | WM_A | WM_PLUS, 8000 + WM_COMBO_MS), APP_BTN_SQUARE | APP_BTN_RTRIGGER | APP_BTN_TRIANGLE);
+	/* L y R siguen igual con B */
+	CHECK_EQ(step(WM_B | WM_PLUS, 8000), APP_BTN_RTRIGGER);
+	CHECK_EQ(step(WM_B | WM_PLUS, 8000 + WM_COMBO_MS), APP_BTN_RTRIGGER | APP_BTN_TRIANGLE);
 	CHECK_EQ(step(0, 8500), 0);
+
+	/* B + A: cambia el turbo una vez, sin cuadrado ni triángulo */
+	CHECK_EQ(step(WM_B, 9000), 0);
+	CHECK_EQ(step(WM_B | WM_A, 9050), 0); CHECK(wo.turbo_toggle);
+	CHECK_EQ(step(WM_B | WM_A, 9100), 0); CHECK(!wo.turbo_toggle);
+	CHECK_EQ(step(0, 9200), 0); CHECK(!wo.turbo_toggle);
+	/* A antes que B: cuadrado y triángulo, sin turbo */
+	CHECK_EQ(step(WM_A, 9300), APP_BTN_SQUARE);
+	CHECK_EQ(step(WM_A | WM_B, 9310), APP_BTN_SQUARE | APP_BTN_TRIANGLE); CHECK(!wo.turbo_toggle);
+	CHECK_EQ(step(0, 9400), 0);
 
 	/* El reloj puede dar la vuelta */
 	CHECK_EQ(step(WM_B, 0xFFFFFFF0u), 0);

@@ -297,6 +297,9 @@ static void null_two(const GeVertex *a, const GeVertex *b){ (void)a; (void)b; }
 static void null_one(const GeVertex *a){ (void)a; }
 static const GeHwRenderer null_renderer = { null_begin, null_tri, null_two, null_two, null_two, null_one, null_begin };
 
+void app_set_turbo(int on){ ge_turbo = on; }
+int  app_turbo(void){ return ge_turbo; }
+
 void app_set_null_renderer(void){ ge_hw = &null_renderer; ge_fast_math = 1; }
 
 void app_set_fast_math(int on){ ge_fast_math = on; }

@@ -81,7 +81,6 @@ void wm_step(WiimoteMap *m, unsigned held, unsigned now_ms, WiimoteOut *out){
 		out->stick = dx || dy;
 	}
 
-	if(held & WM_A) b |= APP_BTN_SQUARE;
 	if(held & WM_MINUS) b |= APP_BTN_LTRIGGER;
 	if(held & WM_PLUS) b |= APP_BTN_RTRIGGER;
 
@@ -90,10 +89,15 @@ void wm_step(WiimoteMap *m, unsigned held, unsigned now_ms, WiimoteOut *out){
 	if(b_held && !(prev & WM_B)){
 		m->b_since = now_ms;
 		m->b_combo = 0;
-		m->b_mod = !(prev & (WM_1 | WM_2));
+		m->b_mod = !(prev & (WM_1 | WM_2 | WM_A));
 		m->b_tri = !m->b_mod;
 	}
 	if(b_held){
+		if(m->b_mod && (held & WM_A) && !(prev & WM_A)){
+			out->turbo_toggle = 1;
+			m->b_combo = 1;
+			m->b_tri = 0;
+		}
 		if(m->b_mod && (held & (WM_1 | WM_2))){
 			m->b_combo = 1;
 			m->b_tri = 0;
@@ -108,6 +112,7 @@ void wm_step(WiimoteMap *m, unsigned held, unsigned now_ms, WiimoteOut *out){
 		m->b_mod = m->b_combo = m->b_tri = 0;
 	}
 	if(!(b_held && m->b_mod)){
+		if(held & WM_A) b |= APP_BTN_SQUARE;
 		if(held & WM_1) b |= APP_BTN_CROSS;
 		if(held & WM_2) b |= APP_BTN_CIRCLE;
 	}

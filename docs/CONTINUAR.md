@@ -394,6 +394,18 @@ con muestras sin leer devuelve en el acto cuántas copió; si no, espera y
 devuelve 1; más de 64 da 0x80000104. `tests/guest/ctrl_read.c` lo
 reproduce (antes daba 0 siempre).
 
+### v0.5.3: turbo
+
+El usuario confirmó que con la v0.5.2 los mandos ya funcionan en GTA. Para
+no esperar media hora a la cinemática inicial: turbo con B + A (Wiimote) o
+Z + Y (GameCube), "TURBO" en pantalla. `ge_turbo` hace que PRIM, bezier y
+spline solo avancen sus direcciones (sin vértices ni dibujo); el resto del
+GE sigue igual. `ge_draw` en el CLI: 2,6 s normal, 0,2 s con --null-gpu,
+0,03 s con --turbo. Pendiente: save states (pedido; plan en la
+conversación: guardar módulo a módulo como el DoState de PPSSPP, con una
+prueba de guardar/cargar en PC) y el "warping" de los modelos que ve el
+usuario (probar la misma escena en modo exacto para saber si es de GX).
+
 ## Siguientes pasos, por prioridad
 
 1. **Que el usuario pruebe los controles de la v0.5.0** (sobre todo el

@@ -13,6 +13,7 @@
  *     --bmp FILE        guardar como BMP la captura que pida el programa
  *                       (devctl de pspautotests), igual que en una PSP
  *     --null-gpu        no dibujar (para medir el resto: CPU y geometría)
+ *     --turbo           ni geometría ni dibujo (como el turbo del Wii)
  *     --fast-math       geometría con float normal, como con GX en el Wii
  *     --capturas N      cada N frames, una captura (BMP) si la imagen cambió
  *     --root DIR        DIR hace de ms0:/ y el ejecutable está dentro (como
@@ -224,6 +225,7 @@ int main(int argc, char **argv){
 		else if(!strcmp(argv[i], "--capturas") && i + 1 < argc) every = atoi(argv[++i]);
 		else if(!strcmp(argv[i], "--bmp") && i + 1 < argc) app_set_screenshot_path(argv[++i]);
 		else if(!strcmp(argv[i], "--null-gpu")){ app_set_null_renderer(); null_gpu = 1; }
+		else if(!strcmp(argv[i], "--turbo")) app_set_turbo(1);
 		else if(!strcmp(argv[i], "--fast-math")) app_set_fast_math(1);
 		else if(!strcmp(argv[i], "--root") && i + 1 < argc) app_set_root(argv[++i]);
 		else if(!strcmp(argv[i], "--log") && i + 1 < argc) hle_set_log_file(argv[++i]);   /* como wiisp.log */

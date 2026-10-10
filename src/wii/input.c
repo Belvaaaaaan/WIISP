@@ -125,6 +125,11 @@ int input_wants_exit(const Input *in){
 
 int input_home_ms(void){ return wout.home_ms; }
 
+/* B + A (Wiimote) o Z + Y (GameCube) recién pulsados */
+int input_turbo_toggle(const Input *in){
+	return wout.turbo_toggle || ((in->held & GC(PAD_TRIGGER_Z)) && (in->down & GC(PAD_BUTTON_Y)));
+}
+
 /* Wiimote en horizontal (frontend/wiimote.c) y mando de GameCube -> PSP */
 void input_send_to_psp(const Input *in){
 	static const struct { u32 wii; unsigned psp; } map[] = {

@@ -35,6 +35,8 @@ void input_send_to_psp(const Input *in);
 int  input_wants_exit(const Input *in);
 /* Cuánto lleva HOME pulsado (ms; 0 si no) */
 int  input_home_ms(void);
+/* Cambiar el turbo (B + A en el Wiimote, Z + Y en GameCube) */
+int  input_turbo_toggle(const Input *in);
 /* Botón de apagado (consola o Wiimote): apaga de forma ordenada */
 void input_check_power(void);
 

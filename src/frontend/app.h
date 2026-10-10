@@ -55,6 +55,9 @@ void app_set_output(AppOutputFunc func);
 
 /* Perfilado: el GE hace toda la geometría pero no dibuja nada */
 void app_set_null_renderer(void);
+/* Turbo: el GE no dibuja (ver ge_turbo en gpu/ge.h) */
+void app_set_turbo(int on);
+int  app_turbo(void);
 /* Geometría con float normal, como con el backend GX */
 void app_set_fast_math(int on);
 /* La carpeta que hace de ms0:/ si el ejecutable está dentro de ella (si

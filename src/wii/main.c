@@ -122,6 +122,7 @@ static void run_program(void){
 	char overlay[48] = "";
 
 	gx_ge_enable(menu_renderer_gx());
+	app_set_turbo(0);
 	gx_ge_set_lazy_textures(menu_lazy_textures());
 	app_set_output(program_output);
 	/* Desglose del tiempo real cada 30 s en wiisp.log ([TIEMPOS]) */
@@ -138,6 +139,10 @@ static void run_program(void){
 		u64 t;
 		input_read(&in);
 		if(input_wants_exit(&in)) break;
+		if(input_turbo_toggle(&in)){
+			app_set_turbo(!app_turbo());
+			hle_log_quiet("[TURBO] %s\n", app_turbo() ? "activado (sin dibujar)" : "quitado");
+		}
 		input_send_to_psp(&in);
 		exited = app_run_frame();
 
@@ -158,7 +163,11 @@ static void run_program(void){
 		{
 			int old = prof_switch(PROF_PRESENTAR);
 			/* Con HOME pulsado, que se vea que va a salir */
-			video_draw_psp_frame(input_home_ms() > 0 ? "SALIR..." : overlay);
+			char text[64];
+			if(input_home_ms() > 0) snprintf(text, sizeof(text), "SALIR...");
+			else if(app_turbo()) snprintf(text, sizeof(text), "TURBO  %s", overlay);
+			else snprintf(text, sizeof(text), "%s", overlay);
+			video_draw_psp_frame(text);
 			prof_switch(old);
 		}
 	}

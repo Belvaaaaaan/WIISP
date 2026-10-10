@@ -1330,6 +1330,7 @@ static void process_triangle(const GeClipVertex *v0, const GeClipVertex *v1, con
 enum { CULL_CW = 0, CULL_CCW = 1, CULL_OFF = 2 };
 
 int ge_tri_flags;
+int ge_turbo;
 
 static GeClipVertex data_[4];
 static int data_index_;
@@ -1606,8 +1607,8 @@ void ge_draw_prim(u32 prim, u32 count){
 	if(!mem_valid(vaddr, 1)) return;
 	if(f.idx && !mem_valid(iaddr, 1)) return;
 
-	/* Sin formato de posición no se dibuja, pero se avanza */
-	if(f.pos){
+	/* Sin formato de posición (o en turbo) no se dibuja, pero se avanza */
+	if(f.pos && !ge_turbo){
 		int phase;
 		GE_PROF_T0;
 		load_morph_weights();
@@ -2033,6 +2034,7 @@ static void submit_curve(u32 arg, int is_spline){
 	vformat_setup(&f, ge.cmd[GE_VERTEXTYPE]);
 	if(!mem_valid(vaddr, 1)) return;
 	if(f.idx && !mem_valid(iaddr, 1)) return;
+	if(ge_turbo) goto advance;
 
 	/* Con menos de 4 puntos en u o v el hardware no dibuja nada; los
 	   índices avanzan igual, los vértices no */

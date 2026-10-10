@@ -59,6 +59,12 @@ void ge_get_stats(GeStats *out);
    comprueban como mucho una vez por periodo. */
 extern u32 ge_sync_domain;
 
+/* Turbo: las llamadas de dibujo (PRIM, bezier, spline) solo avanzan sus
+   direcciones, sin calcular vértices ni dibujar. Lo demás del GE (estado,
+   transferencias, CLUT, señales) sigue igual, así que el juego avanza
+   mucho más rápido mientras la pantalla se queda quieta. */
+extern int ge_turbo;
+
 /* Reloj del anfitrión para medir el GE (perfilado); NULL = sin medir */
 extern unsigned long long (*ge_host_clock)(void);
 #ifdef WIISP_PROF
