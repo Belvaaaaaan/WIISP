@@ -426,14 +426,24 @@ dejarlo y quitar los interruptores cuando ya no hagan falta. Si no: probar
 ME; si tampoco, la perspectiva nativa de GX (GX_PERSPECTIVE con
 (X·w, Y·w, −w); la profundidad saldría de w y habría que resolverla).
 
+### v0.5.5: sceKernelCheckThreadStack en Kernel_Library (DBZ TTT)
+
+DBZ Tenkaichi Tag Team la importa de Kernel_Library (NID 0xD13BDE95), donde
+no estaba (solo en ThreadManForUser): devolvía 0, su libc creía que no le
+quedaba pila y se descargaba. Ahora está en las dos bibliotecas y, como
+PPSSPP, devuelve |sp - base de la pila en uso|: la extendida mientras dura
+un sceKernelExtendThreadStack (campo `cur_stack` del hilo, que el final de
+la llamada restaura) y -1 fuera de un hilo. tests/guest/extend_stack lo
+comprueba fuera, dentro y al volver de la pila extendida. Sin el juego aquí:
+falta ver hasta dónde llega ahora.
+
 ## Siguientes pasos, por prioridad
 
 1. **Que el usuario pruebe los controles de la v0.5.0** (sobre todo el
    sentido de la cruceta por movimiento) y, después, seguir con las
    optimizaciones del GE en el orden de arriba (sin frameskip ni dynarec
-   por ahora, a petición del usuario). Pendiente aparte: DBZ TTT se para en
-   `sceKernelCheckThreadStack` (no implementada; devuelve 0 y su libc se
-   descarga sola). El usuario pidió no tocarlo todavía.
+   por ahora, a petición del usuario). DBZ TTT: `sceKernelCheckThreadStack`
+   hecha en la v0.5.5; falta que el usuario diga hasta dónde llega ahora.
 
 2. Hecho (UMD).
 

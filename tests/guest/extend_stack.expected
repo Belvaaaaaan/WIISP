@@ -1,5 +1,8 @@
+CheckThreadStack fuera: en la pila del hilo
   dentro: arg 00000005, pila nueva si
+  CheckThreadStack dentro: en la pila nueva
   DelayThread dentro: 00000000
 ExtendThreadStack: 00001239
 pila de 100 bytes: 80020194
+CheckThreadStack al volver: en la pila del hilo
 Memset devuelve el destino: si

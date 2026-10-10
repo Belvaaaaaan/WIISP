@@ -30,6 +30,7 @@ sceMpeg sceMpegRingbufferPut
 sceMpeg sceMpegRingbufferAvailableSize
 ThreadManForUser sceKernelExtendThreadStack
 Kernel_Library sceKernelMemset
+Kernel_Library sceKernelCheckThreadStack
 SysMemUserForUser sceKernelAllocPartitionMemory
 SysMemUserForUser sceKernelFreePartitionMemory
 SysMemUserForUser sceKernelGetBlockHeadAddr

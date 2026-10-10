@@ -87,6 +87,7 @@ typedef struct {
 	int status;
 	u32 attr, entry, init_prio, prio;
 	u32 stack, stack_size, gp;
+	u32 cur_stack;      /* base de la pila en uso (otra con ExtendThreadStack) */
 	CpuState ctx;
 	VfpuState vctx;     /* registros VFPU (al día solo si no es vfpu_owner) */
 	u64 ready_seq;      /* orden de llegada a la cola de listos */
@@ -981,6 +982,7 @@ static void sceKernelCreateThread(void){
 	t->prio = t->init_prio = prio;
 	t->stack = stack;
 	t->stack_size = stack_size;
+	t->cur_stack = stack;
 	t->gp = cur >= 0 ? cpu.r[R_GP] : module_gp;
 	/* La PSP rellena la pila con 0xFF */
 	memset(mem_ptr(stack, stack_size), 0xFF, stack_size);
@@ -1171,6 +1173,8 @@ int kernel_enqueue_call(u32 func, u32 a0, u32 a1, u32 a2, KernelCallDone done, c
    pila nueva de size bytes y devuelve lo que devuelva (PPSSPP). La libc
    de muchos juegos (DBZ Tenkaichi Tag Team) arranca así. */
 static u32 extend_stack_done(u32 ret, u32 *d){
+	Thread *t = current();
+	if(t) t->cur_stack = d[1];
 	kernel_free(d[0]);
 	return ret;
 }
@@ -1187,10 +1191,13 @@ static void sceKernelExtendThreadStack(void){
 	memset(mem_ptr(stack, size), 0xFF, size);
 	mem_write32(stack, thread_uid(cur));
 	d[0] = stack;
+	d[1] = t->cur_stack;
 	if(enqueue_call(entry, (stack + size - 0x10) & ~15u, ARG(2), 0, 0, extend_stack_done, d)){
 		kernel_free(stack);
 		RETURN(SCE_KERNEL_ERROR_ILLEGAL_CONTEXT);
+		return;
 	}
+	t->cur_stack = stack;
 }
 
 /* El trampolín: la función del juego volvió. El hilo sigue donde estaba
@@ -1305,8 +1312,14 @@ static void sceKernelReferThreadStatus(void){
 	RETURN(0);
 }
 
+/* Bytes libres de la pila en uso: sp - base, la extendida si la hay
+   (PPSSPP: |sp - currentStack.start|; -1 fuera de un hilo). La libc de DBZ
+   Tenkaichi Tag Team la llama desde Kernel_Library y con 0 se descarga. */
 static void sceKernelCheckThreadStack(void){
-	RETURN(cur >= 0 ? cpu.r[R_SP] - threads[cur].stack : 0);
+	s64 d;
+	if(cur < 0){ RETURN(0xFFFFFFFFu); return; }
+	d = (s64)cpu.r[R_SP] - (s64)threads[cur].cur_stack;
+	RETURN((u32)(d < 0 ? -d : d));
 }
 
 static void sceKernelGetThreadStackFreeSize(void){
@@ -3063,6 +3076,7 @@ static const HleFunction kernel_library[] = {
 	{ "sceKernelCpuResumeIntrWithSync", sceKernelCpuResumeIntr },
 	{ "sceKernelIsCpuIntrEnable", sceKernelIsCpuIntrEnable },
 	{ "sceKernelIsCpuIntrSuspended", sceKernelIsCpuIntrSuspended },
+	{ "sceKernelCheckThreadStack", sceKernelCheckThreadStack },
 	{ "sceKernelLockLwMutex", sceKernelLockLwMutex },
 	{ "sceKernelLockLwMutexCB", cb_lock_lwmutex },
 	{ "sceKernelTryLockLwMutex", sceKernelTryLockLwMutex },
