@@ -19,6 +19,9 @@
  *     --root DIR        DIR hace de ms0:/ y el ejecutable está dentro (como
  *                       el --root de PPSSPP para pspautotests: "../x" funciona)
  *
+ * En Windows, con la consola en primer plano, W A S D mueven el stick
+ * analógico de la PSP.
+ *
  * SPDX-License-Identifier: GPL-2.0-or-later
 **/
 
@@ -118,6 +121,29 @@ static void sampler_stop(void){
 	sampler_run = 0;
 	pthread_join(sampler_thread, NULL);
 	sampler_on = 0;
+}
+#endif
+
+#ifdef _WIN32
+/* W A S D -> stick analógico (0-255, 128 en el centro, arriba 0); en
+   diagonal, sobre el círculo como la cruceta del Wiimote. Solo con la
+   consola en primer plano, para no leer lo que se escribe en otra ventana. */
+static void keyboard_input(void){
+	static int was_moving;
+	HWND con = GetConsoleWindow();
+	int dx = 0, dy = 0, r, moving;
+	if(con && GetForegroundWindow() == con){
+		if(GetAsyncKeyState('A') & 0x8000) dx--;
+		if(GetAsyncKeyState('D') & 0x8000) dx++;
+		if(GetAsyncKeyState('W') & 0x8000) dy--;
+		if(GetAsyncKeyState('S') & 0x8000) dy++;
+	}
+	moving = dx || dy;
+	if(!moving && !was_moving) return;
+	was_moving = moving;
+	r = dx && dy ? 90 : 128;
+	dx = 128 + dx * r; dy = 128 + dy * r;
+	app_set_input(0, (unsigned char)(dx > 255 ? 255 : dx), (unsigned char)(dy > 255 ? 255 : dy));
 }
 #endif
 
@@ -255,6 +281,9 @@ int main(int argc, char **argv){
 		clock_t last_report = start;
 		signal(SIGINT, on_sigint);
 		for(i = 0; i < frames && !exited && !stop_requested; i++){
+#ifdef _WIN32
+			keyboard_input();
+#endif
 			exited = app_run_frame();
 			if(every > 0 && (i + 1) % every == 0){
 				unsigned long long h = framebuffer_hash();

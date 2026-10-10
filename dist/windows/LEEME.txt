@@ -13,8 +13,14 @@ Como usarlo
    "Terminar el trabajo por lotes").
 4. Manda los archivos que quedan en esta carpeta:
    - wiisp.log
-   - captura_XXXXXX.bmp (una cada 5 segundos de juego, solo si la imagen
-     cambio) y pantalla_final.bmp
+   - captura_XXXXXX.bmp (una cada 150 frames, 2,5 segundos de juego, solo
+     si la imagen cambio) y pantalla_final.bmp
+
+Controles
+---------
+Con la ventana negra delante (haz clic en ella), W A S D mueven el stick
+analogico de la PSP: W arriba, S abajo, A izquierda, D derecha. Ojo: el PC
+dibuja con el renderizador exacto (por software), no con el GX del Wii.
 
 Notas
 -----
@@ -22,5 +28,5 @@ Notas
   firmado: pulsa "Mas informacion" y "Ejecutar de todas formas".
 - Las partidas guardadas van a la carpeta PSP\SAVEDATA junto a la ISO.
 - Uso avanzado (desde una consola):
-    wiisp-cli.exe --run --frames 10800 --capturas 300 --log wiisp.log juego.iso
+    wiisp-cli.exe --run --frames 10800 --capturas 150 --log wiisp.log juego.iso
   --frames: cuantos frames de juego (60 = 1 segundo).

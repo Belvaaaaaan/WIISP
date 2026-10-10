@@ -11,8 +11,9 @@ if "%~1"=="" (
 del /q captura_*.bmp pantalla_final.bmp 2>nul
 echo Ejecutando "%~nx1" durante 3 minutos de juego como maximo.
 echo Puede tardar varios minutos. Ctrl+C para parar antes.
+echo Con esta ventana delante, W A S D mueven el stick analogico.
 echo.
-wiisp-cli.exe --run --quiet --frames 10800 --capturas 300 --log wiisp.log --screenshot pantalla_final.bmp "%~1"
+wiisp-cli.exe --run --quiet --frames 10800 --capturas 150 --log wiisp.log --screenshot pantalla_final.bmp "%~1"
 echo.
 echo Terminado. Manda wiisp.log y las capturas .bmp de esta carpeta.
 pause
