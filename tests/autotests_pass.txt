@@ -217,6 +217,15 @@ threads/lwmutex/refer
 threads/lwmutex/try
 threads/lwmutex/try600
 threads/lwmutex/unlock
+threads/mbx/cancel/cancel
+threads/mbx/create/create
+threads/mbx/delete/delete
+threads/mbx/mbx
+threads/mbx/poll/poll
+threads/mbx/priority/priority
+threads/mbx/receive/receive
+threads/mbx/refer/refer
+threads/mbx/send/send
 threads/mutex/cancel
 threads/mutex/create
 threads/mutex/delete

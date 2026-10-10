@@ -762,6 +762,7 @@ const NidName nid_names[] = {
 	{ 0x45D851D1, "sce_paf_private_wcscpy" },
 	{ 0x4612DB4B, "scePaf_4612DB4B" },
 	{ 0x468BC716, "sceKernelGetInterruptExitCount" },
+	{ 0x469989AD, "scePowerSetClockFrequency630" },
 	{ 0x46EBB729, "sceUmdCheckMedium" },
 	{ 0x46F186C3, "sceDisplayWaitVblankStartCB" },
 	{ 0x46F61F8B, "scePsmfPlayerGetVideoData" },
@@ -2854,4 +2855,4 @@ const NidName nid_names[] = {
 	{ 0xFFC36A14, "sceKernelReferThreadRunStatus" },
 };
 
-const u32 nid_names_count = 2842;
+const u32 nid_names_count = 2843;

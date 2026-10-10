@@ -437,13 +437,31 @@ la llamada restaura) y -1 fuera de un hilo. tests/guest/extend_stack lo
 comprueba fuera, dentro y al volver de la pila extendida. Sin el juego aquí:
 falta ver hasta dónde llega ahora.
 
+### v0.5.6: buzones de mensajes (Mbx) y sceImpose (DBZ TTT)
+
+Con la 0.5.5, DBZ pasa CheckThreadStack (0x1FFD0) y se cae a los 0,13 s:
+crea un buzón con `sceKernelCreateMbx` (no implementada, daba 0), un hilo
+espera en `sceKernelReceiveMbxCB` (también 0, sin escribir el mensaje) y
+lee el mensaje de 0x00000008. Hecho como PPSSPP: Create/Delete/Send/
+Receive(CB)/Poll/CancelReceive/ReferMbxStatus, lista circular en la
+memoria del juego (cabeza = el primero en salir), hilos por llegada o
+prioridad (0x100), mensajes por prioridad (0x400), plazo que vence en el
+acto con 0-1 us (`kernel_chance`, el __KernelChance de PPSSPP), recheck al
+volver de callbacks y la corrección de la cabeza de ReferMbxStatus. Ojo:
+en PPSSPP `Memory::WriteUnchecked_U32(valor, dirección)`. 9 pspautotests
+nuevos (threads/mbx/*): 275/275. También sceImpose (idioma y botón,
+batería, avisos del UMD y HOME, apagado de pantalla) y el NID 0x469989AD
+de scePower (SetClockFrequency de SDK 6.3x). `sceUtilityLoadModule(0x108)`
+da 0x8002013C a propósito: necesita los módulos de red cargados (PPSSPP).
+
 ## Siguientes pasos, por prioridad
 
 1. **Que el usuario pruebe los controles de la v0.5.0** (sobre todo el
    sentido de la cruceta por movimiento) y, después, seguir con las
    optimizaciones del GE en el orden de arriba (sin frameskip ni dynarec
    por ahora, a petición del usuario). DBZ TTT: `sceKernelCheckThreadStack`
-   hecha en la v0.5.5; falta que el usuario diga hasta dónde llega ahora.
+   (v0.5.5) y buzones Mbx (v0.5.6) hechos; falta que el usuario diga hasta
+   dónde llega ahora.
 
 2. Hecho (UMD).
 

@@ -199,6 +199,7 @@ static const HleFunction power[] = {
 	{ "scePowerUnregisterCallback", scePowerUnregisterCallback },
 	{ "scePowerUnregitserCallback", scePowerUnregisterCallback },
 	{ "scePowerSetClockFrequency", scePowerSetClockFrequency },
+	{ "scePowerSetClockFrequency630", scePowerSetClockFrequency },   /* NID 0x469989AD (SDK 6.3x), la misma */
 	{ "scePowerSetCpuClockFrequency", scePowerSetCpuClockFrequency },
 	{ "scePowerSetBusClockFrequency", scePowerSetBusClockFrequency },
 	{ "scePowerGetCpuClockFrequency", scePowerGetCpuClockFrequency },

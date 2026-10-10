@@ -1185,7 +1185,58 @@ static void sceUtilityHtmlViewerShutdownStart(void){ RETURN(ERR_WRONG_TYPE); }
 	{ #name "InitStart", name##InitStart }, { #name "GetStatus", name##GetStatus }, \
 	{ #name "Update", name##Update }, { #name "ShutdownStart", name##ShutdownStart }
 
+/* --- sceImpose: idioma, botón de confirmar y avisos del sistema (PPSSPP) ---- */
+
+static u32 impose_language, impose_button, impose_umd_popup, impose_backlight_off, impose_home_popup;
+
+static void impose_reset(void){
+	impose_language = 1;   /* inglés, como sceUtilityGetSystemParamInt */
+	impose_button = 1;     /* X confirma */
+	impose_umd_popup = 0;
+	impose_backlight_off = 0;
+	impose_home_popup = 1;
+}
+
+static void sceImposeSetLanguageMode(void){
+	impose_language = ARG(0);
+	impose_button = ARG(1);
+	RETURN(0);
+}
+
+static void sceImposeGetLanguageMode(void){
+	if(mem_valid(ARG(0), 4)) mem_write32(ARG(0), impose_language);
+	if(mem_valid(ARG(1), 4)) mem_write32(ARG(1), impose_button);
+	RETURN(0);
+}
+
+/* Sin cargar y con la carga en el último de 4 niveles */
+static void sceImposeGetBatteryIconStatus(void){
+	if(mem_valid(ARG(0), 4)) mem_write32(ARG(0), 0);
+	if(mem_valid(ARG(1), 4)) mem_write32(ARG(1), 3);
+	RETURN(0);
+}
+
+static void sceImposeSetUMDPopup(void){ impose_umd_popup = ARG(0); RETURN(0); }
+static void sceImposeGetUMDPopup(void){ RETURN(impose_umd_popup); }
+static void sceImposeSetBacklightOffTime(void){ impose_backlight_off = ARG(0); RETURN(0); }
+static void sceImposeGetBacklightOffTime(void){ RETURN(impose_backlight_off); }
+static void sceImposeSetHomePopup(void){ impose_home_popup = ARG(0); RETURN(0); }
+static void sceImposeGetHomePopup(void){ RETURN(impose_home_popup); }
+
+static const HleFunction impose[] = {
+	{ "sceImposeSetLanguageMode", sceImposeSetLanguageMode },
+	{ "sceImposeGetLanguageMode", sceImposeGetLanguageMode },
+	{ "sceImposeGetBatteryIconStatus", sceImposeGetBatteryIconStatus },
+	{ "sceImposeSetUMDPopup", sceImposeSetUMDPopup },
+	{ "sceImposeGetUMDPopup", sceImposeGetUMDPopup },
+	{ "sceImposeSetBacklightOffTime", sceImposeSetBacklightOffTime },
+	{ "sceImposeGetBacklightOffTime", sceImposeGetBacklightOffTime },
+	{ "sceImposeSetHomePopup", sceImposeSetHomePopup },
+	{ "sceImposeGetHomePopup", sceImposeGetHomePopup },
+};
+
 void utility_init(void){
+	impose_reset();
 	memset(mod_loaded, 0, sizeof(mod_loaded));
 	memset(mod_addr, 0, sizeof(mod_addr));
 	memset(dlgs, 0, sizeof(dlgs));
@@ -1227,5 +1278,6 @@ static const HleFunction utility[] = {
 
 const HleLibrary hle_utility_libs[] = {
 	HLE_LIBRARY("sceUtility", utility),
+	HLE_LIBRARY("sceImpose", impose),
 };
 const u32 hle_utility_libs_count = sizeof(hle_utility_libs) / sizeof(hle_utility_libs[0]);

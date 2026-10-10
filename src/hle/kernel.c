@@ -33,7 +33,7 @@
 /* UIDs                                                               */
 /* ------------------------------------------------------------------ */
 
-enum { UID_THREAD = 1, UID_SEMA, UID_EVF, UID_MEMBLOCK, UID_CALLBACK, UID_LWMUTEX, UID_FPL, UID_MUTEX };
+enum { UID_THREAD = 1, UID_SEMA, UID_EVF, UID_MEMBLOCK, UID_CALLBACK, UID_LWMUTEX, UID_FPL, UID_MUTEX, UID_MBX };
 
 /* UID = 0x04 tipo índice+1: positivo y fácil de reconocer en los logs */
 static inline u32 make_uid(int type, int index){ return 0x04000000u | ((u32)type << 16) | (u32)(index + 1); }
@@ -54,7 +54,7 @@ enum {
 };
 
 enum {
-	W_NONE = 0, W_SLEEP = 1, W_DELAY = 2, W_SEMA = 3, W_EVF = 4, W_THREADEND = 9,
+	W_NONE = 0, W_SLEEP = 1, W_DELAY = 2, W_SEMA = 3, W_EVF = 4, W_MBX = 5, W_THREADEND = 9,
 	W_FPL = 10,
 	W_VBLANK = 100, W_LWMUTEX = 101, W_MUTEX = 106, W_GEDRAW = 102, W_GELIST = 103,
 	W_MODULE = 104,     /* sceKernelStartModule: espera el fin de module_start */
@@ -2459,6 +2459,270 @@ static void forget_thread_callbacks(int i){
 	for(k = 0; k < MAX_CALLBACKS; k++) if(callbacks[k].used && callbacks[k].thread == i) callbacks[k].used = 0;
 }
 
+/* ------------------------------------------------------------------ */
+/* Buzones de mensajes (Mbx), como PPSSPP sceKernelMbx.cpp            */
+/* ------------------------------------------------------------------ */
+
+/* Los mensajes son del juego: { u32 next; u8 prioridad; ... }. El kernel
+   los encadena en una lista circular por next (el último apunta al
+   primero) y guarda la cabeza: el primero en salir. Un hilo que espera
+   recibe el puntero en wait_a. */
+#define MAX_MBXS 1024
+static void cb_wait(void (*fn)(void), int only_if_waiting);
+#define MBX_ATTR_THPRI 0x100   /* hilos por prioridad (si no, por llegada) */
+#define MBX_ATTR_MSPRI 0x400   /* mensajes por prioridad (si no, en orden) */
+#define SCE_KERNEL_ERROR_UNKNOWN_MBXID 0x8002019Bu
+#define SCE_KERNEL_ERROR_MBOX_NOMSG    0x800201B2u
+#define MBX_ERROR_DUPLICATE_MSG        0x800201C9u
+
+typedef struct {
+	int used;
+	char name[32];
+	u32 attr;
+	s32 num_msgs;
+	u32 head;
+} Mbx;
+
+static Mbx mbxs[MAX_MBXS];
+
+static int find_mbx(u32 uid){
+	int i = uid_index(uid, UID_MBX, MAX_MBXS);
+	return (i >= 0 && mbxs[i].used) ? i : -1;
+}
+
+static int valid4(u32 a){ return !(a & 3) && mem_valid(a, 4); }
+
+/* El hilo que recibe el siguiente mensaje (por llegada o prioridad) */
+static int mbx_first_waiter(int m){
+	int i, best = -1;
+	for(i = 0; i < MAX_THREADS; i++){
+		Thread *t = &threads[i];
+		if(!t->used || t->status != TH_WAITING || t->wait != W_MBX || t->wait_index != m) continue;
+		if(best < 0 || ((mbxs[m].attr & MBX_ATTR_THPRI) ? t->prio < threads[best].prio : t->wait_seq < threads[best].wait_seq))
+			best = i;
+	}
+	return best;
+}
+
+static int mbx_waiters(int m){
+	int i, n = 0;
+	for(i = 0; i < MAX_THREADS; i++)
+		n += threads[i].used && threads[i].status == TH_WAITING && threads[i].wait == W_MBX && threads[i].wait_index == m;
+	return n;
+}
+
+/* Saca el primer mensaje y escribe su dirección en out (Mbx::ReceiveMessage) */
+static u32 mbx_receive(Mbx *b, u32 out){
+	u32 ptr = b->head;
+	int c = 0;
+	if(!valid4(b->head)) return SCE_KERNEL_ERROR_ILLEGAL_ADDR;
+	for(;;){
+		u32 next = mem_read32(b->head);
+		if(!valid4(next)) return SCE_KERNEL_ERROR_ILLEGAL_ADDR;
+		if(next == ptr){
+			/* b->head es el último: ahora apunta al segundo, la nueva cabeza */
+			if(b->head != ptr){
+				next = mem_read32(next);
+				mem_write32(b->head, next);
+				b->head = next;
+				break;
+			}
+			if(c < b->num_msgs - 1) return MBX_ERROR_DUPLICATE_MSG;
+			b->head = 0;
+			break;
+		}
+		b->head = next;
+		/* Una lista corrupta con un bucle que no pasa por ptr */
+		if(++c > b->num_msgs) return SCE_KERNEL_ERROR_ILLEGAL_ADDR;
+	}
+	if(mem_valid(out, 4)) mem_write32(out, ptr);
+	b->num_msgs--;
+	return 0;
+}
+
+static void mbx_wake_all(int m, u32 ret){
+	int i;
+	for(i = 0; i < MAX_THREADS; i++)
+		if(threads[i].used && threads[i].status == TH_WAITING && threads[i].wait == W_MBX && threads[i].wait_index == m)
+			wake(i, ret);
+}
+
+static void sceKernelCreateMbx(void){
+	u32 name = ARG(0), attr = ARG(1);
+	int i;
+	if(!name){ RETURN(SCE_KERNEL_ERROR_ERROR); return; }
+	/* Acepta 0x000-0x0FF, 0x100-0x1FF y 0x400-0x4FF */
+	if((attr & ~(u32)(MBX_ATTR_THPRI | MBX_ATTR_MSPRI)) & ~0xFFu){ RETURN(SCE_KERNEL_ERROR_ILLEGAL_ATTR); return; }
+	for(i = 0; i < MAX_MBXS && mbxs[i].used; i++);
+	if(i == MAX_MBXS){ RETURN(SCE_KERNEL_ERROR_NO_MEMORY); return; }
+	memset(&mbxs[i], 0, sizeof(mbxs[i]));
+	mbxs[i].used = 1;
+	mem_read_cstr(name, mbxs[i].name, sizeof(mbxs[i].name));
+	mbxs[i].attr = attr;
+	RETURN(make_uid(UID_MBX, i));
+}
+
+static void sceKernelDeleteMbx(void){
+	int m = find_mbx(ARG(0));
+	if(m < 0){ RETURN(SCE_KERNEL_ERROR_UNKNOWN_MBXID); return; }
+	mbx_wake_all(m, SCE_KERNEL_ERROR_WAIT_DELETE);
+	mbxs[m].used = 0;
+	RETURN(0);
+	request_resched();
+}
+
+static void sceKernelSendMbx(void){
+	int m = find_mbx(ARG(0)), w;
+	u32 pkt = ARG(1);
+	Mbx *b;
+	if(m < 0){ RETURN(SCE_KERNEL_ERROR_UNKNOWN_MBXID); return; }
+	if(!mem_valid(pkt, 8)){ RETURN(0xFFFFFFFFu); return; }
+	b = &mbxs[m];
+	/* Cola vacía y alguien esperando: el mensaje va directo a él */
+	if(b->num_msgs == 0 && (w = mbx_first_waiter(m)) >= 0){
+		if(mem_valid(threads[w].wait_a, 4)) mem_write32(threads[w].wait_a, pkt);
+		wake(w, 0);
+		RETURN(0);
+		request_resched();
+		return;
+	}
+	if(b->num_msgs == 0){
+		b->num_msgs = 1;
+		mem_write32(pkt, pkt);
+		b->head = pkt;
+	} else {
+		u32 next = b->head, prev = 0;
+		int i, n = b->num_msgs, inserted = 0;
+		for(i = 0; i < n; i++){
+			if(next == pkt){ RETURN(MBX_ERROR_DUPLICATE_MSG); return; }
+			if(!valid4(next)){ RETURN(SCE_KERNEL_ERROR_ILLEGAL_ADDR); return; }
+			prev = next;
+			next = mem_read32(next);
+		}
+		/* Ahora prev es el último y next la cabeza (el primero) */
+		if(b->attr & MBX_ATTR_MSPRI){
+			u8 prio = mem_read8(pkt + 4);
+			for(i = 0; i < n; i++){
+				if(prio < mem_read8(next + 4)){
+					/* Entre prev y next; delante del primero, nueva cabeza */
+					b->num_msgs++;
+					mem_write32(prev, pkt);
+					mem_write32(pkt, next);
+					if(i == 0) b->head = pkt;
+					inserted = 1;
+					break;
+				}
+				prev = next;
+				next = mem_read32(next);
+			}
+		}
+		if(!inserted){
+			/* Al final: detrás del último y apuntando a la cabeza */
+			b->num_msgs++;
+			mem_write32(prev, pkt);
+			mem_write32(pkt, b->head);
+		}
+	}
+	RETURN(0);
+}
+
+/* Como PPSSPP __KernelChance: cierto en esa proporción de las llamadas,
+   repartido (60 = tres de cada cinco) */
+static int chance_acc = 50;
+static int kernel_chance(int percent){
+	if(percent < 50) return 0;
+	if(percent >= 100) return 1;
+	chance_acc += percent;
+	if(chance_acc >= 100){ chance_acc -= 100; return 1; }
+	return 0;
+}
+
+/* Con plazo de 0 o 1 us la espera suele vencer antes de empezar */
+static int wait_times_out_at_once(u32 timeout_addr){
+	u32 us;
+	if(!valid4(timeout_addr)) return 0;
+	us = mem_read32(timeout_addr);
+	if(us > 100) us = 100;
+	return kernel_chance(85 - (int)us * 35);
+}
+
+static void receive_mbx(void){
+	int m = find_mbx(ARG(0));
+	u32 out = ARG(1), timeout = ARG(2);
+	if(m < 0){ RETURN(SCE_KERNEL_ERROR_UNKNOWN_MBXID); return; }
+	if(mbxs[m].num_msgs > 0){ RETURN(mbx_receive(&mbxs[m], out)); return; }
+	if(wait_times_out_at_once(timeout)){ RETURN(SCE_KERNEL_ERROR_WAIT_TIMEOUT); return; }
+	wait_current(W_MBX, m, timeout);
+	if(cur >= 0 && threads[cur].status == TH_WAITING) threads[cur].wait_a = out;
+}
+
+static void sceKernelReceiveMbx(void){ receive_mbx(); }
+static void sceKernelReceiveMbxCB(void){ cb_wait(receive_mbx, 0); }
+
+static void sceKernelPollMbx(void){
+	int m = find_mbx(ARG(0));
+	if(m < 0){ RETURN(SCE_KERNEL_ERROR_UNKNOWN_MBXID); return; }
+	if(mbxs[m].num_msgs > 0) RETURN(mbx_receive(&mbxs[m], ARG(1)));
+	else RETURN(SCE_KERNEL_ERROR_MBOX_NOMSG);
+}
+
+static void sceKernelCancelReceiveMbx(void){
+	int m = find_mbx(ARG(0)), n;
+	if(m < 0){ RETURN(SCE_KERNEL_ERROR_UNKNOWN_MBXID); return; }
+	n = mbx_waiters(m);
+	mbx_wake_all(m, SCE_KERNEL_ERROR_WAIT_CANCEL);
+	if(ARG(1) && mem_valid(ARG(1), 4)) mem_write32(ARG(1), (u32)n);
+	RETURN(0);
+	if(n) request_resched();
+}
+
+/* Recorre la lista como la PSP: corrige la cabeza si el juego tocó los
+   next (NULL, un mensaje que se apunta a sí mismo, mensajes de más) */
+static void mbx_fix_head(Mbx *b){
+	u32 head = b->head, packet = head;
+	int i, n = b->num_msgs;
+	for(i = 0; i < n; i++){
+		u32 next;
+		if(!packet || !mem_valid(packet, 4)){ b->head = 0; packet = 0; break; }
+		next = mem_read32(packet);
+		if(!next){ b->head = 0; packet = 0; break; }
+		if(next == packet){
+			if(n > 1) b->head = packet;
+			break;
+		}
+		packet = next;
+	}
+	if(packet && packet != head){
+		for(i = 0; i < n; i++){
+			u32 next;
+			if(!packet || !mem_valid(packet, 4)) break;
+			next = mem_read32(packet);
+			if(next == head){ b->head = packet; break; }
+			if(!next || next == packet) break;
+			packet = next;
+		}
+	}
+}
+
+static void sceKernelReferMbxStatus(void){
+	int m = find_mbx(ARG(0));
+	u32 info = ARG(1);
+	Mbx *b;
+	if(m < 0){ RETURN(SCE_KERNEL_ERROR_UNKNOWN_MBXID); return; }
+	if(!mem_valid(info, 52)){ RETURN(0xFFFFFFFFu); return; }
+	b = &mbxs[m];
+	mbx_fix_head(b);
+	RETURN(0);
+	if(!mem_read32(info)) return;   /* size 0: no escribe nada */
+	mem_write32(info, 52);
+	memset(mem_ptr(info + 4, 32), 0, 32);
+	memcpy(mem_ptr(info + 4, 32), b->name, strlen(b->name));
+	mem_write32(info + 36, b->attr);
+	mem_write32(info + 40, (u32)mbx_waiters(m));
+	mem_write32(info + 44, (u32)b->num_msgs);
+	mem_write32(info + 48, b->head);
+}
+
 static u32 (*hle_recheck[16])(u32 id, int *done);
 
 void kernel_set_wait_recheck(int type, u32 (*fn)(u32 id, int *done)){
@@ -2505,6 +2769,15 @@ static void recheck_wait(int i){
 		if(!lwmutexes[m].used){ wake(i, SCE_KERNEL_ERROR_WAIT_DELETE); break; }
 		wa = lwmutexes[m].workarea;
 		if(mem_read32(wa) == 0) lwmutex_hand_over(wa, i, 0);
+		break;
+	}
+	case W_MBX: {
+		int m = t->wait_index;
+		if(!mbxs[m].used){ wake(i, SCE_KERNEL_ERROR_WAIT_DELETE); break; }
+		if(mbxs[m].num_msgs > 0){
+			mbx_receive(&mbxs[m], t->wait_a);
+			wake(i, 0);
+		}
 		break;
 	}
 	case W_FPL: {
@@ -2820,6 +3093,8 @@ void kernel_init(const PspModule *mod, const char *exec_path){
 	memset(lwmutexes, 0, sizeof(lwmutexes));
 	memset(mutexes, 0, sizeof(mutexes));
 	memset(semas, 0, sizeof(semas));
+	memset(mbxs, 0, sizeof(mbxs));
+	chance_acc = 50;
 	memset(evfs, 0, sizeof(evfs));
 	memset(blocks, 0, sizeof(blocks));
 	memset(events, 0, sizeof(events));
@@ -2924,6 +3199,7 @@ void kernel_dump_state(void){
 			case W_FPL: snprintf(det, sizeof(det), "fpl \"%s\"", fpls[t->wait_index].name); break;
 			case W_VBLANK: snprintf(det, sizeof(det), "vblank"); break;
 			case W_MUTEX: snprintf(det, sizeof(det), "mutex \"%s\"", mutexes[t->wait_index].name); break;
+			case W_MBX: snprintf(det, sizeof(det), "mbx \"%s\"", mbxs[t->wait_index].name); break;
 			case W_LWMUTEX:
 				snprintf(det, sizeof(det), "lwmutex \"%s\" (%08X)", lwmutexes[t->wait_index].name,
 				         lwmutexes[t->wait_index].workarea);
@@ -3052,6 +3328,14 @@ static const HleFunction thread_man[] = {
 	{ "sceKernelCancelSema", sceKernelCancelSema },
 	{ "sceKernelCancelEventFlag", sceKernelCancelEventFlag },
 	{ "sceKernelReferFplStatus", sceKernelReferFplStatus },
+	{ "sceKernelCreateMbx", sceKernelCreateMbx },
+	{ "sceKernelDeleteMbx", sceKernelDeleteMbx },
+	{ "sceKernelSendMbx", sceKernelSendMbx },
+	{ "sceKernelReceiveMbx", sceKernelReceiveMbx },
+	{ "sceKernelReceiveMbxCB", sceKernelReceiveMbxCB },
+	{ "sceKernelPollMbx", sceKernelPollMbx },
+	{ "sceKernelCancelReceiveMbx", sceKernelCancelReceiveMbx },
+	{ "sceKernelReferMbxStatus", sceKernelReferMbxStatus },
 	{ "sceKernelSuspendThread", sceKernelSuspendThread },
 	{ "sceKernelResumeThread", sceKernelResumeThread },
 	{ "sceKernelChangeCurrentThreadAttr", sceKernelChangeCurrentThreadAttr },
