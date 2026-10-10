@@ -12,17 +12,22 @@
  *   SELECT / START     B + 1 / B + 2
  *   (turbo)            B + A: activar o quitar (sin dibujar, para pasar
  *                      rápido cinemáticas y cargas)
+ *   (diagnóstico)      B + -: matemática rápida o exacta de la geometría;
+ *                      B + +: perspectiva de las texturas normalizada o no
+ *                      (solo con GX)
  *   cruceta            movimiento: inclinar hacia delante (arriba) o hacia
  *                      ti (abajo) y girar como un volante (izquierda y
  *                      derecha), hasta cerca del tope
  *   (salir al menú)    mantener HOME 1 segundo
  *
- * Con B pulsado, 1 y 2 son SELECT y START y A cambia el turbo. Por eso B
+ * Con B pulsado, 1 y 2 son SELECT y START, A cambia el turbo y - y + los
+ * interruptores de diagnóstico. Por eso B
  * espera WM_COMBO_MS
- * antes de mandar el triángulo (si en ese tiempo llega 1 o 2, era una
+ * antes de mandar el triángulo (si en ese tiempo llega otro, era una
  * combinación y el triángulo no llega a pulsarse); un toque corto de B
- * manda el triángulo al soltarlo. Si 1, 2 o A ya estaban pulsados antes que
- * B, B es el triángulo en el acto y 1, 2 y A siguen siendo X, O y cuadrado.
+ * manda el triángulo al soltarlo. Si 1, 2, A, - o + ya estaban pulsados
+ * antes que B, B es el triángulo en el acto y los demás siguen siendo X, O,
+ * cuadrado, L y R.
  *
  * El movimiento usa la gravedad que mide el Wiimote en cada informe (unos
  * 100 por segundo, se emule rápido o lento): hace falta pasar del umbral
@@ -81,7 +86,11 @@ typedef struct {
 	int exit;             /* HOME mantenido el tiempo suficiente */
 	int home_ms;          /* cuánto lleva HOME pulsado (0 si no) */
 	int turbo_toggle;     /* B + A recién pulsado: cambiar el turbo */
+	int diag_toggle;      /* B + - / B + + recién pulsado: WM_DIAG_* */
 } WiimoteOut;
+
+#define WM_DIAG_MATH 1    /* matemática de la geometría rápida / exacta */
+#define WM_DIAG_TEX  2    /* perspectiva de las texturas normalizada o no */
 
 void wm_init(WiimoteMap *m);
 /* Cada informe del acelerómetro (gravedad en g, ejes del Wiimote) */

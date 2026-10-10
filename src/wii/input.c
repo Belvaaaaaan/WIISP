@@ -130,6 +130,17 @@ int input_turbo_toggle(const Input *in){
 	return wout.turbo_toggle || ((in->held & GC(PAD_TRIGGER_Z)) && (in->down & GC(PAD_BUTTON_Y)));
 }
 
+/* B + - / B + + (Wiimote) o Z + L / Z + R (GameCube) recién pulsados:
+   WM_DIAG_MATH y WM_DIAG_TEX */
+int input_diag_toggle(const Input *in){
+	int t = wout.diag_toggle;
+	if(in->held & GC(PAD_TRIGGER_Z)){
+		if(in->down & GC(PAD_TRIGGER_L)) t |= WM_DIAG_MATH;
+		if(in->down & GC(PAD_TRIGGER_R)) t |= WM_DIAG_TEX;
+	}
+	return t;
+}
+
 /* Wiimote en horizontal (frontend/wiimote.c) y mando de GameCube -> PSP */
 void input_send_to_psp(const Input *in){
 	static const struct { u32 wii; unsigned psp; } map[] = {

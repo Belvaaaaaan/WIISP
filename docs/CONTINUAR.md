@@ -406,6 +406,26 @@ conversación: guardar módulo a módulo como el DoState de PPSSPP, con una
 prueba de guardar/cargar en PC) y el "warping" de los modelos que ve el
 usuario (probar la misma escena en modo exacto para saber si es de GX).
 
+### v0.5.4: diagnóstico del warping
+
+El usuario confirmó que el warping (texturas que "nadan" como en PS1) solo
+sale con GX, no en modo exacto. Descartado con el cubo de pspautotests
+(renderizador exacto, `--fast-math` contra exacta): solo 30 píxeles de
+borde cambian de verdad, ningún desplazamiento de textura. Recorte,
+posiciones (1/16 de píxel) y profundidad son el mismo código en los dos
+modos. Sospechoso: la perspectiva de texturas en GX (proyección ortográfica,
+s/w, t/w y q = 1/w por la normal, división s/q por píxel); q muy pequeña
+con w grande, y el hardware podría interpolarla con poca precisión (Dolphin
+lo hace en float, no sirve de referencia). Arreglo candidato: multiplicar
+el triángulo por su w más cercana (`tex_scale3` en gx_ge.c; s/q igual, q en
+(0, 1]; 3 multiplicaciones por vértice). Versión de diagnóstico con dos
+interruptores durante el juego (B + − / B + +, Z + L / Z + R): matemática
+MR/ME y texturas TN/TS, en la esquina y en wiisp.log (`[DIAG]`). Con B
+pulsado primero, − y + ya no son L/R (como A). Si TN quita el warping:
+dejarlo y quitar los interruptores cuando ya no hagan falta. Si no: probar
+ME; si tampoco, la perspectiva nativa de GX (GX_PERSPECTIVE con
+(X·w, Y·w, −w); la profundidad saldría de w y habría que resolverla).
+
 ## Siguientes pasos, por prioridad
 
 1. **Que el usuario pruebe los controles de la v0.5.0** (sobre todo el

@@ -92,10 +92,17 @@ static void test_wiimote_b(void){
 	CHECK_EQ(step(WM_B | WM_2, 7300), APP_BTN_START);
 	CHECK_EQ(step(0, 7400), 0);
 
-	/* L y R siguen igual con B */
-	CHECK_EQ(step(WM_B | WM_PLUS, 8000), APP_BTN_RTRIGGER);
-	CHECK_EQ(step(WM_B | WM_PLUS, 8000 + WM_COMBO_MS), APP_BTN_RTRIGGER | APP_BTN_TRIANGLE);
-	CHECK_EQ(step(0, 8500), 0);
+	/* B + - y B + +: los interruptores de diagnóstico, una vez y sin L, R
+	   ni triángulo */
+	CHECK_EQ(step(WM_B, 8000), 0);
+	CHECK_EQ(step(WM_B | WM_PLUS, 8050), 0); CHECK_EQ(wo.diag_toggle, WM_DIAG_TEX);
+	CHECK_EQ(step(WM_B | WM_PLUS, 8000 + WM_COMBO_MS + 50), 0); CHECK_EQ(wo.diag_toggle, 0);
+	CHECK_EQ(step(WM_B | WM_PLUS | WM_MINUS, 8300), 0); CHECK_EQ(wo.diag_toggle, WM_DIAG_MATH);
+	CHECK_EQ(step(0, 8400), 0); CHECK_EQ(wo.diag_toggle, 0);
+	/* + antes que B: R y triángulo, sin diagnóstico */
+	CHECK_EQ(step(WM_PLUS, 8500), APP_BTN_RTRIGGER);
+	CHECK_EQ(step(WM_PLUS | WM_B, 8510), APP_BTN_RTRIGGER | APP_BTN_TRIANGLE); CHECK_EQ(wo.diag_toggle, 0);
+	CHECK_EQ(step(0, 8600), 0);
 
 	/* B + A: cambia el turbo una vez, sin cuadrado ni triángulo */
 	CHECK_EQ(step(WM_B, 9000), 0);

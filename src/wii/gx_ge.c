@@ -122,6 +122,7 @@ static TexEntry texc[TC_MAX];
 static TexEntry *cur_tex;
 static u32 tex_total;
 static int lazy_textures = 1;          /* espaciado de las comprobaciones */
+static int tex_norm = 1;               /* s/w, t/w y 1/w normalizadas por triángulo */
 static core_u32 clut_memo_gen, clut_memo_hash;
 static int clut_memo_valid;
 static unsigned prof_clut_hashes;
@@ -1523,14 +1524,26 @@ static inline float finite_uv(float f){
 	return f - f == 0.0f ? f : 0.0f;
 }
 
-/* v da posición, uv y niebla; cv los colores */
-static inline void put_vertex(const GeVertex *v, const GeVertex *cv){
+/* La perspectiva de las texturas la hace GX con s/w, t/w y q = 1/w y la
+   división s/q en cada píxel. q puede ser muy pequeña (0,001 con w = 1000) y
+   el hardware la interpola con menos precisión que un float: todo el
+   triángulo se multiplica por la w más cercana, s/q no cambia y q queda en
+   (0, 1]. k es ese factor (1 sin normalizar). */
+static inline float tex_scale3(const GeVertex *v0, const GeVertex *v1, const GeVertex *v2){
+	float w = v0->clipw;
+	if(v1->clipw < w) w = v1->clipw;
+	if(v2->clipw < w) w = v2->clipw;
+	return w > 0.0f && w < 3.0e38f ? w : 1.0f;
+}
+
+/* v da posición, uv y niebla; cv los colores; k el factor de tex_scale3 */
+static inline void put_vertex(const GeVertex *v, const GeVertex *cv, float k){
 	float s = 0.0f, t = 0.0f, q = 1.0f;
 	if(tex_on){
 		s = finite_uv(v->s); t = finite_uv(v->t);
 		if(through){ s *= inv_tw; t *= inv_th; }
 		else {
-			float iw = 1.0f / v->clipw;
+			float iw = k / v->clipw;
 			if(tex_proj) q = v->q;
 			s *= iw * tex_su; t *= iw * tex_sv; q *= iw;
 		}
@@ -1541,12 +1554,14 @@ static inline void put_vertex(const GeVertex *v, const GeVertex *cv){
 
 static void gx_triangle(const GeVertex *v0, const GeVertex *v1, const GeVertex *v2){
 	const GeVertex *c;
+	float k;
 	if(!prepare(0)) return;
 	c = flat ? v2 : NULL;
+	k = tex_on && !through && tex_norm ? tex_scale3(v0, v1, v2) : 1.0f;
 	GX_Begin(GX_TRIANGLES, GX_VTXFMT0, 3);
-	put_vertex(v0, c ? c : v0);
-	put_vertex(v1, c ? c : v1);
-	put_vertex(v2, c ? c : v2);
+	put_vertex(v0, c ? c : v0, k);
+	put_vertex(v1, c ? c : v1, k);
+	put_vertex(v2, c ? c : v2, k);
 	GX_End();
 	drawn();
 }
@@ -1638,8 +1653,8 @@ static void gx_line(const GeVertex *v0, const GeVertex *v1){
 	if(!prepare(0)) return;
 	pos_off = 0.5f;
 	GX_Begin(GX_LINES, GX_VTXFMT0, 2);
-	put_vertex(v0, flat ? v1 : v0);
-	put_vertex(v1, v1);
+	put_vertex(v0, flat ? v1 : v0, 1.0f);
+	put_vertex(v1, v1, 1.0f);
 	GX_End();
 	pos_off = 0.0f;
 	drawn();
@@ -1649,7 +1664,7 @@ static void gx_point(const GeVertex *v0){
 	if(!prepare(0)) return;
 	pos_off = 0.5f;
 	GX_Begin(GX_POINTS, GX_VTXFMT0, 1);
-	put_vertex(v0, v0);
+	put_vertex(v0, v0, 1.0f);
 	GX_End();
 	pos_off = 0.0f;
 	drawn();
@@ -1691,6 +1706,8 @@ void gx_ge_profile(unsigned long long *setup, unsigned long long *state, unsigne
 }
 
 void gx_ge_set_lazy_textures(int on){ lazy_textures = on; }
+void gx_ge_set_tex_norm(int on){ tex_norm = on; }
+int gx_ge_tex_norm(void){ return tex_norm; }
 
 /* Sin acentos: también sale en la consola del Wii */
 void gx_ge_texture_report(char *buf, size_t size){

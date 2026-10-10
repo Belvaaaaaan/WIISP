@@ -60,6 +60,7 @@ void app_set_turbo(int on);
 int  app_turbo(void);
 /* Geometría con float normal, como con el backend GX */
 void app_set_fast_math(int on);
+int  app_fast_math(void);
 /* La carpeta que hace de ms0:/ si el ejecutable está dentro de ella (si
    no, es la del ejecutable) */
 void app_set_root(const char *dir);

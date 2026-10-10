@@ -81,20 +81,23 @@ void wm_step(WiimoteMap *m, unsigned held, unsigned now_ms, WiimoteOut *out){
 		out->stick = dx || dy;
 	}
 
-	if(held & WM_MINUS) b |= APP_BTN_LTRIGGER;
-	if(held & WM_PLUS) b |= APP_BTN_RTRIGGER;
-
-	/* B: con 1 o 2 ya pulsados es el triángulo en el acto; si no, puede ser
-	   el principio de B+1 / B+2 */
+	/* B: con 1, 2, A, - o + ya pulsados es el triángulo en el acto; si no,
+	   puede ser el principio de una combinación */
 	if(b_held && !(prev & WM_B)){
 		m->b_since = now_ms;
 		m->b_combo = 0;
-		m->b_mod = !(prev & (WM_1 | WM_2 | WM_A));
+		m->b_mod = !(prev & (WM_1 | WM_2 | WM_A | WM_MINUS | WM_PLUS));
 		m->b_tri = !m->b_mod;
 	}
 	if(b_held){
 		if(m->b_mod && (held & WM_A) && !(prev & WM_A)){
 			out->turbo_toggle = 1;
+			m->b_combo = 1;
+			m->b_tri = 0;
+		}
+		if(m->b_mod && (held & WM_MINUS) && !(prev & WM_MINUS)) out->diag_toggle |= WM_DIAG_MATH;
+		if(m->b_mod && (held & WM_PLUS) && !(prev & WM_PLUS)) out->diag_toggle |= WM_DIAG_TEX;
+		if(m->b_mod && (held & (WM_MINUS | WM_PLUS))){
 			m->b_combo = 1;
 			m->b_tri = 0;
 		}
@@ -112,6 +115,8 @@ void wm_step(WiimoteMap *m, unsigned held, unsigned now_ms, WiimoteOut *out){
 		m->b_mod = m->b_combo = m->b_tri = 0;
 	}
 	if(!(b_held && m->b_mod)){
+		if(held & WM_MINUS) b |= APP_BTN_LTRIGGER;
+		if(held & WM_PLUS) b |= APP_BTN_RTRIGGER;
 		if(held & WM_A) b |= APP_BTN_SQUARE;
 		if(held & WM_1) b |= APP_BTN_CROSS;
 		if(held & WM_2) b |= APP_BTN_CIRCLE;

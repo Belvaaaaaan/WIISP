@@ -303,6 +303,7 @@ int  app_turbo(void){ return ge_turbo; }
 void app_set_null_renderer(void){ ge_hw = &null_renderer; ge_fast_math = 1; }
 
 void app_set_fast_math(int on){ ge_fast_math = on; }
+int  app_fast_math(void){ return ge_fast_math; }
 
 void app_set_root(const char *dir){
 	size_t n;

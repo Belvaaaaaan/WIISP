@@ -71,6 +71,7 @@ izquierda, 1 y 2 a la derecha), también en el menú.
 | − / + | | L / R |
 | B + 1 / B + 2 | | SELECT / START |
 | B + A | | turbo: activar o quitar ("TURBO" en pantalla) |
+| B + − / B + + | | diagnóstico (solo GX): matemática rápida o exacta / perspectiva de texturas normalizada o no |
 | Inclinar hacia delante / hacia ti | | cruceta arriba / abajo |
 | Girar como un volante | | cruceta izquierda / derecha |
 | HOME | salir al Homebrew Channel | mantener 1 s: volver al menú |
@@ -86,13 +87,20 @@ A se pulsan antes que B.
 juego avanza varias veces más rápido con la imagen quieta; sirve para pasar
 cinemáticas y cargas. En el CLI, `--turbo`.
 
+**Diagnóstico del warping** (solo con el renderizador GX): en la esquina
+sale `MR TN` (lo normal). B + − (Z + L) cambia la geometría entre `MR`
+(matemática rápida, float) y `ME` (exacta, la del GE; más lenta). B + +
+(Z + R) cambia la perspectiva de las texturas entre `TN` (normalizada por
+triángulo, nuevo en la 0.5.4) y `TS` (sin normalizar, como hasta la 0.5.3).
+Cada cambio queda en wiisp.log como `[DIAG]`.
+
 | GameCube | En el menú | Durante la emulación (PSP) |
 |---|---|---|
 | Stick / cruceta | — / moverse | stick analógico / cruceta |
 | A / B | elegir / atrás | X / O |
 | Y / X | renderizador / SD ↔ USB y texturas | cuadrado / triángulo |
 | L / R / Z | | L / R / SELECT |
-| START | salir al Homebrew Channel | START; Z + START: volver al menú; Z + Y: turbo |
+| START | salir al Homebrew Channel | START; Z + START: volver al menú; Z + Y: turbo; Z + L / Z + R: diagnóstico |
 
 El botón de apagado de la consola o del Wiimote apaga el Wii de forma
 ordenada.

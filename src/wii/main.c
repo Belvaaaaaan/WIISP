@@ -36,6 +36,7 @@
 #include "wii/wii.h"
 #include "wii/gx_ge.h"
 #include "frontend/app.h"
+#include "frontend/wiimote.h"
 #include "hle/hle.h"
 #include "core/prof.h"
 #ifdef WIISP_PROF
@@ -122,6 +123,7 @@ static void run_program(void){
 	char overlay[48] = "";
 
 	gx_ge_enable(menu_renderer_gx());
+	gx_ge_set_tex_norm(1);
 	app_set_turbo(0);
 	gx_ge_set_lazy_textures(menu_lazy_textures());
 	app_set_output(program_output);
@@ -137,11 +139,23 @@ static void run_program(void){
 	while(!exited){
 		Input in;
 		u64 t;
+		int diag;
 		input_read(&in);
 		if(input_wants_exit(&in)) break;
 		if(input_turbo_toggle(&in)){
 			app_set_turbo(!app_turbo());
 			hle_log_quiet("[TURBO] %s\n", app_turbo() ? "activado (sin dibujar)" : "quitado");
+		}
+		diag = input_diag_toggle(&in);
+		if(diag && gx_ge_enabled()){
+			if(diag & WM_DIAG_MATH){
+				app_set_fast_math(!app_fast_math());
+				hle_log_quiet("[DIAG] geometria con matematica %s\n", app_fast_math() ? "rapida (float)" : "exacta (la del GE)");
+			}
+			if(diag & WM_DIAG_TEX){
+				gx_ge_set_tex_norm(!gx_ge_tex_norm());
+				hle_log_quiet("[DIAG] perspectiva de texturas %s\n", gx_ge_tex_norm() ? "normalizada por triangulo" : "sin normalizar (como la 0.5.3)");
+			}
 		}
 		input_send_to_psp(&in);
 		exited = app_run_frame();
@@ -165,8 +179,13 @@ static void run_program(void){
 			/* Con HOME pulsado, que se vea que va a salir */
 			char text[64];
 			if(input_home_ms() > 0) snprintf(text, sizeof(text), "SALIR...");
-			else if(app_turbo()) snprintf(text, sizeof(text), "TURBO  %s", overlay);
-			else snprintf(text, sizeof(text), "%s", overlay);
+			else {
+				/* Con GX: M(atemática) R(ápida) o E(xacta), T(exturas)
+				   N(ormalizadas) o S(in normalizar) */
+				char tag[8] = "";
+				if(gx_ge_enabled()) snprintf(tag, sizeof(tag), "M%c T%c  ", app_fast_math() ? 'R' : 'E', gx_ge_tex_norm() ? 'N' : 'S');
+				snprintf(text, sizeof(text), "%s%s%s", app_turbo() ? "TURBO  " : "", tag, overlay);
+			}
 			video_draw_psp_frame(text);
 			prof_switch(old);
 		}

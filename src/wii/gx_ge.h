@@ -34,6 +34,10 @@ void gx_ge_profile(unsigned long long *setup, unsigned long long *state, unsigne
 /* Espaciado de las comprobaciones de texturas (gpu/texcache.h); activado
    por defecto */
 void gx_ge_set_lazy_textures(int on);
+/* Diagnóstico del warping: 1 (normal) = perspectiva de las texturas
+   normalizada por triángulo; 0 = s/w, t/w y 1/w tal cual (hasta la 0.5.3) */
+void gx_ge_set_tex_norm(int on);
+int  gx_ge_tex_norm(void);
 
 /* Qué hizo la caché de texturas desde la última llamada (una línea) */
 void gx_ge_texture_report(char *buf, size_t size);
