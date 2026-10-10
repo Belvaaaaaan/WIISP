@@ -364,6 +364,23 @@ inclinar hacia delante da "abajo", basta con cambiar el signo en
 `wm_accel`. wiisp.log apunta los cambios (`[MANDO] cruceta por
 movimiento: ...` con los grados).
 
+### v0.5.1: el juego no reaccionaba a los mandos
+
+wiisp.log de la v0.5.0: el Wiimote se leía en plena partida (líneas
+`[MANDO]` de la cruceta por movimiento) y GTA llama a
+`sceCtrlReadBufferPositive` cada 2 vblanks, pero no reaccionó a nada, ni
+con el mando de GameCube. A ~9 % de velocidad, GTA lee el mando unas 2,6
+veces por segundo real y solo veía lo que estuviera pulsado justo en ese
+instante: un toque corto caía entre dos lecturas. Ahora (`hle/display.c`)
+lo que se pulsa entre dos lecturas del juego se le entrega en la siguiente
+aunque ya se haya soltado, y wiisp.log apunta lo que lee el juego
+(`[MANDO] el juego lee: START; stick 128, 128 @12345 ms`, los primeros 300
+cambios por programa). Si el juego lee los botones y aun así no reacciona,
+el fallo está en otra parte (por ejemplo, el estado del juego).
+
+El registro tenía 2 MB en total y se cortaba en el segundo juego de la
+sesión: ahora son 2 MB por programa (8 MB en total).
+
 ## Siguientes pasos, por prioridad
 
 1. **Que el usuario pruebe los controles de la v0.5.0** (sobre todo el

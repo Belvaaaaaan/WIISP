@@ -19,7 +19,7 @@
 
 /* Versión de WIISP (la misma que dist/apps/wiisp/meta.xml): sale en el
    menú y al principio de wiisp.log */
-#define WIISP_VERSION "0.5.0"
+#define WIISP_VERSION "0.5.1"
 
 typedef void (*HleFunc)(void);
 
@@ -120,6 +120,8 @@ void hle_output(const char *text, u32 len);
 
 /* Mensajes del emulador (no del juego) */
 void hle_log(const char *fmt, ...) __attribute__((format(printf, 1, 2)));
+/* Solo a wiisp.log (lo que pasa a menudo durante el juego, como [MANDO]) */
+void hle_log_quiet(const char *fmt, ...) __attribute__((format(printf, 1, 2)));
 /* Además de stderr, el registro va a este archivo (NULL = ninguno). Se
    vacía en cada línea para que sobreviva a un cuelgue. */
 void hle_set_log_file(const char *path);
@@ -163,8 +165,13 @@ typedef void (*HleScreenshotFunc)(void);
 void hle_set_screenshot(HleScreenshotFunc func);
 void hle_screenshot(void);
 
-/* Mandos: botones en el formato de la PSP (PSP_CTRL_*) */
+/* Mandos: botones en el formato de la PSP (PSP_CTRL_*). Un botón pulsado
+   entre dos lecturas del juego le llega en la siguiente aunque ya se haya
+   soltado. */
 void hle_set_input(u32 buttons, u8 lx, u8 ly);
+
+/* Empieza otro programa: vuelve a haber sitio en wiisp.log (2 MB cada uno) */
+void hle_log_new_program(void);
 
 /* Framebuffer que la PSP muestra ahora */
 typedef struct {
@@ -347,5 +354,7 @@ void hle_write_datetime(u32 addr, u64 unix_us);
 void display_init(void);
 void power_init(void);   /* net.c: ranuras de callbacks de energía */
 void display_fill_ctrl(u32 addr);
+/* Tras una lectura del mando del juego (olvida lo retenido, [MANDO]) */
+void display_ctrl_read_done(void);
 
 #endif

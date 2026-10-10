@@ -9,6 +9,8 @@
 #include "frontend/app.h"
 #include "frontend/wiimote.h"
 #include "test.h"
+#include "core/memory.h"
+#include "hle/hle.h"
 
 static WiimoteMap wm;
 static WiimoteOut wo;
@@ -176,7 +178,36 @@ static void test_wiimote_tilt(void){
 	CHECK_EQ(wo.lx, 128); CHECK_EQ(wo.ly, 128);   /* la cruceta del Wiimote es el stick */
 }
 
+/* hle/display.c: un toque entre dos lecturas del juego le llega igual */
+static void test_ctrl_latch(void){
+	const u32 buf = 0x08900000u;
+	printf("Mando: lo pulsado entre lecturas llega al juego\n");
+	display_init();
+	hle_set_input(0, 128, 128);
+	display_fill_ctrl(buf); display_ctrl_read_done();
+	CHECK_EQ(mem_read32(buf + 4), 0);
+	/* START pulsado y soltado entre dos lecturas */
+	hle_set_input(APP_BTN_START, 128, 128);
+	hle_set_input(0, 128, 128);
+	display_fill_ctrl(buf); display_ctrl_read_done();
+	CHECK_EQ(mem_read32(buf + 4), APP_BTN_START);
+	display_fill_ctrl(buf); display_ctrl_read_done();
+	CHECK_EQ(mem_read32(buf + 4), 0);
+	/* Mantenido: se ve en todas */
+	hle_set_input(APP_BTN_CROSS, 0, 255);
+	display_fill_ctrl(buf); display_ctrl_read_done();
+	CHECK_EQ(mem_read32(buf + 4), APP_BTN_CROSS);
+	CHECK_EQ(mem_read8(buf + 8), 0); CHECK_EQ(mem_read8(buf + 9), 255);
+	hle_set_input(APP_BTN_CROSS, 128, 128);
+	display_fill_ctrl(buf); display_ctrl_read_done();
+	CHECK_EQ(mem_read32(buf + 4), APP_BTN_CROSS);
+	hle_set_input(0, 128, 128);
+	display_fill_ctrl(buf); display_ctrl_read_done();
+	CHECK_EQ(mem_read32(buf + 4), 0);
+}
+
 void test_wiimote(void){
+	test_ctrl_latch();
 	test_wiimote_buttons();
 	test_wiimote_b();
 	test_wiimote_home();

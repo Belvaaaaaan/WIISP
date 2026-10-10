@@ -8,14 +8,18 @@
  * SPDX-License-Identifier: GPL-2.0-or-later
 **/
 
+#include <stdio.h>
 #include "hle/hle.h"
 #include "core/memory.h"
 
 static HleFramebuffer fb;
 static u32 display_mode, display_width, display_height;
 static u32 input_buttons;
+static u32 input_latched;   /* pulsados desde la última lectura del juego */
 static u8 input_lx = 128, input_ly = 128;
 static u32 ctrl_cycle, ctrl_mode;
+static u32 read_buttons;    /* lo último que leyó el juego ([MANDO]) */
+static int read_stick, read_logs;
 
 void display_init(void){
 	memset(&fb, 0, sizeof(fb));
@@ -23,14 +27,50 @@ void display_init(void){
 	display_width = 480;
 	display_height = 272;
 	ctrl_cycle = ctrl_mode = 0;
+	input_latched = 0;
+	read_buttons = 0;
+	read_stick = 0;
+	read_logs = 0;
 }
 
 void hle_get_framebuffer(HleFramebuffer *out){ *out = fb; }
 
+/* Lo que se pulsa entre dos lecturas del juego se queda hasta que lo lea
+   (con la emulación lenta, el juego lee el mando pocas veces por segundo
+   real y un toque corto se perdía) */
 void hle_set_input(u32 buttons, u8 lx, u8 ly){
+	input_latched |= buttons & ~input_buttons;
 	input_buttons = buttons;
 	input_lx = lx;
 	input_ly = ly;
+}
+
+static u32 ctrl_buttons(void){ return input_buttons | input_latched; }
+
+/* Tras cada lectura del juego: se olvida lo retenido y se apunta en
+   wiisp.log lo que cambió (los primeros cambios de cada programa) */
+void display_ctrl_read_done(void){
+	static const struct { u32 bit; const char *name; } names[] = {
+		{ 0x0001, "SELECT" }, { 0x0008, "START" }, { 0x0010, "arriba" }, { 0x0020, "derecha" },
+		{ 0x0040, "abajo" }, { 0x0080, "izquierda" }, { 0x0100, "L" }, { 0x0200, "R" },
+		{ 0x1000, "triangulo" }, { 0x2000, "circulo" }, { 0x4000, "X" }, { 0x8000, "cuadrado" },
+	};
+	u32 b = ctrl_buttons();
+	int stick = input_lx < 96 || input_lx > 160 || input_ly < 96 || input_ly > 160;
+	input_latched = 0;
+	if((b != read_buttons || stick != read_stick) && read_logs < 300){
+		char line[160];
+		size_t len = 0;
+		unsigned i;
+		read_logs++;
+		for(i = 0; i < sizeof(names) / sizeof(names[0]); i++)
+			if(b & names[i].bit) len += (size_t)snprintf(line + len, sizeof(line) - len, " %s", names[i].name);
+		if(!len) snprintf(line, sizeof(line), " nada");
+		hle_log_quiet("[MANDO] el juego lee:%s; stick %u, %u @%u ms\n", line, input_lx, input_ly,
+		        (unsigned)(hle_now_us() / 1000));
+	}
+	read_buttons = b;
+	read_stick = stick;
 }
 
 /* SceCtrlData: u32 TimeStamp, u32 Buttons, u8 Lx, u8 Ly, u8 Rsrv[6] */
@@ -39,7 +79,7 @@ void display_fill_ctrl(u32 addr){
 	if(!p) return;
 	memset(p, 0, 16);
 	wr_le32(p, (u32)hle_now_us());
-	wr_le32(p + 4, input_buttons);
+	wr_le32(p + 4, ctrl_buttons());
 	p[8] = input_lx;
 	p[9] = input_ly;
 }
@@ -112,6 +152,7 @@ static void sceCtrlGetSamplingMode(void){ if(ARG(0)) mem_write32(ARG(0), ctrl_mo
 static void sceCtrlPeekBufferPositive(void){
 	u32 i, n = ARG(1);
 	for(i = 0; i < n; i++) display_fill_ctrl(ARG(0) + i * 16);
+	display_ctrl_read_done();
 	RETURN(n);
 }
 
@@ -119,6 +160,7 @@ static void sceCtrlReadBufferPositive(void){
 	/* La lectura bloquea hasta la siguiente muestra (cada vblank) */
 	u32 n = ARG(1), i;
 	for(i = 0; i < n; i++) display_fill_ctrl(ARG(0) + i * 16);
+	display_ctrl_read_done();
 	kernel_wait_vblank();
 	RETURN(n);
 }

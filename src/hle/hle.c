@@ -255,15 +255,20 @@ void hle_output(const char *text, u32 len){
 	else fwrite(text, 1, len, stdout);
 }
 
-#define LOG_FILE_MAX (2u * 1024 * 1024)
-static u32 log_written;
+/* 2 MB por programa (así el segundo juego de una sesión también se ve) y
+   8 MB en total */
+#define LOG_FILE_MAX  (2u * 1024 * 1024)
+#define LOG_TOTAL_MAX (8u * 1024 * 1024)
+static u32 log_written, log_total;
 
 void hle_set_log_file(const char *path){
 	if(log_file) fclose(log_file);
 	log_file = path ? fopen(path, "w") : NULL;
-	log_written = 0;
+	log_written = log_total = 0;
 	if(log_file) fprintf(log_file, "[WIISP] version " WIISP_VERSION "\n");
 }
+
+void hle_log_new_program(void){ log_written = 0; }
 
 /* En la SD (libfat) el tamaño del archivo solo se apunta al cerrarlo o con
    fsync: sin esto, si la sesión acaba apagando el Wii el registro queda
@@ -284,10 +289,11 @@ static void log_v(int to_screen, const char *fmt, va_list ap){
 	int old = prof_switch(PROF_REGISTRO);
 	va_copy(ap2, ap);
 	if(to_screen) vfprintf(stderr, fmt, ap);
-	if(log_file && log_written < LOG_FILE_MAX){
+	if(log_file && log_written < LOG_FILE_MAX && log_total < LOG_TOTAL_MAX){
 		int n = vfprintf(log_file, fmt, ap2);
-		if(n > 0) log_written += (u32)n;
-		if(log_written >= LOG_FILE_MAX) fputs("[registro recortado]\n", log_file);
+		if(n > 0){ log_written += (u32)n; log_total += (u32)n; }
+		if(log_written >= LOG_FILE_MAX || log_total >= LOG_TOTAL_MAX)
+			fputs("[registro recortado: el siguiente programa vuelve a escribir]\n", log_file);
 		fflush(log_file);
 		unsynced = 1;
 		{
@@ -314,6 +320,13 @@ void hle_log(const char *fmt, ...){
    desplaza toda la consola y el emulador pasaba más tiempo escribiendo que
    ejecutando el juego (GTA saltando sus videos). */
 static void log_file_only(const char *fmt, ...){
+	va_list ap;
+	va_start(ap, fmt);
+	log_v(0, fmt, ap);
+	va_end(ap);
+}
+
+void hle_log_quiet(const char *fmt, ...){
 	va_list ap;
 	va_start(ap, fmt);
 	log_v(0, fmt, ap);

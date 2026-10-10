@@ -90,7 +90,7 @@ void input_read(Input *in){
 		wmap.tilt_changed = 0;
 		if(tilt_logs < 40){
 			tilt_logs++;
-			hle_log("[MANDO] cruceta por movimiento:%s%s%s%s%s (adelante %d, giro %d grados)\n",
+			hle_log_quiet("[MANDO] cruceta por movimiento:%s%s%s%s%s (adelante %d, giro %d grados)\n",
 			        wmap.tilt & APP_BTN_UP ? " arriba" : "", wmap.tilt & APP_BTN_DOWN ? " abajo" : "",
 			        wmap.tilt & APP_BTN_LEFT ? " izquierda" : "", wmap.tilt & APP_BTN_RIGHT ? " derecha" : "",
 			        wmap.tilt ? "" : " suelta", (int)wmap.forward, (int)wmap.side);

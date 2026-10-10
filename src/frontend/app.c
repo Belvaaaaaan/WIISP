@@ -119,6 +119,7 @@ int app_load(const char *path, int max_imports, const char *imports_out){
 	int err;
 
 	if(verbose) printf("Cargando %s\n", path);
+	hle_log_new_program();
 	hle_log("[WIISP] cargando %s\n", path);
 	hle_shutdown();
 	loader_free(&module);
