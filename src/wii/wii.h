@@ -31,8 +31,10 @@ void input_init(void);
 void input_read(Input *in);
 /* Envía el estado de los mandos a la PSP emulada */
 void input_send_to_psp(const Input *in);
-/* HOME (Wiimote) o Z+START (GameCube) durante la emulación */
+/* HOME mantenido 1 s (Wiimote) o Z+START (GameCube) durante la emulación */
 int  input_wants_exit(const Input *in);
+/* Cuánto lleva HOME pulsado (ms; 0 si no) */
+int  input_home_ms(void);
 /* Botón de apagado (consola o Wiimote): apaga de forma ordenada */
 void input_check_power(void);
 

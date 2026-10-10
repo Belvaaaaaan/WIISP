@@ -59,7 +59,7 @@ Estructura del repositorio:
 | `src/cpu/` | Intérprete del Allegrex (enteros, FPU y VFPU) |
 | `src/hle/` | HLE: syscalls por NID, hilos, sincronización, memoria, E/S, display, mandos |
 | `tools/` | Generador de la tabla de NIDs a partir del PSPSDK |
-| `src/frontend/` | Lógica común a todas las plataformas (`app.c`) |
+| `src/frontend/` | Lógica común a todas las plataformas (`app.c`) y el mapeo del Wiimote en horizontal a la PSP (`wiimote.c`: combinaciones con B, cruceta por movimiento, HOME mantenido; se prueba en PC) |
 | `src/wii/` | Frontend del Wii (libogc). Es el único sitio con `#include <gccore.h>` |
 | `src/host/` | CLI de PC para depurar sin la consola |
 | `tests/` | Pruebas unitarias (x86 con sanitizers y PowerPC big-endian con qemu) |

@@ -320,12 +320,56 @@ y normal del vértice anterior cuando faltan, por eso hoy se leen en
 orden), enviar por lotes a GX, o no rehacer el estado de GX en cada
 llamada.
 
+### Registro de la v0.4.10 (GTA LCS, modo rápido, ~4,5 min)
+
+- Velocidad 8,8-9,6 % (antes ~8,5 %). Texturas 6,6-9 % (antes 10-12 %):
+  95-98 % de usos sin leerlas, 0 cambios sin aviso, 0 inestables.
+- GE 63-67 % por dentro: transformar y luces 21-26 %, ensamblar 12-18 %,
+  leer vértices 9,5-20 %, comandos 7-8 %, enviar a GX 2-4 %, estado ~1 %.
+- **GTA no usa índices** (0 %): tiras (65-75 %) y listas. Reutilizar
+  vértices no le sirve; enviar por lotes tampoco pesa (2-4 %).
+- ~1.250 llamadas de dibujo por vblank (~40 vértices cada una); ~48.000
+  triángulos recibidos y solo un 16-25 % dibujados (30-47 % de espaldas,
+  28-56 % fuera de pantalla): se transforma todo para tirar la mayoría.
+- Luces encendidas en el 93-95 % de los vértices pero con 0,1-0,3 luces de
+  media: casi siempre el color es ambiente + material.
+- Con un 4 % de vértices con huesos, "leer vertices" pasa de 9,5 a 20 %: el
+  skinning (`ge_skin`) no tiene camino rápido, siempre la aritmética exacta
+  del GE.
+- Cada llamada recalcula dos productos de matrices 4x4 con la aritmética
+  del GE (`compute_transform_state`) aunque no cambien.
+- 800-2.000 texturas decodificadas cada 30 s frente a ~60 cambios con
+  aviso (caché pequeña o la misma textura con otra paleta); ~420 cargas de
+  paleta por vblank. Framebuffers 6 % (2 bajadas y 0,5 subidas por vblank;
+  las subidas no bajaron con el cambio de `mem_valid`).
+- Orden propuesto: skinning rápido, matrices solo al cambiar, color
+  constante sin luces, descartar antes de calcular todo, paletas de GX
+  (TLUT), copia de framebuffer en la GPU, T&L por hardware.
+
+### v0.5.0: el Wiimote solo como mando de PSP
+
+A petición del usuario, antes de seguir optimizando. Wiimote en horizontal
+(`frontend/wiimote.c`, independiente de libogc, con `tests/test_wiimote.c`):
+cruceta = stick analógico, 1 = X, 2 = O, B = triángulo, A = cuadrado,
+- = L, + = R, B+1 = SELECT, B+2 = START, la cruceta de la PSP con el
+movimiento (inclinar 50° adelante / 75° hacia ti, girar 55° como un
+volante; histéresis de 15°, 3 informes seguidos, sin contar sacudidas) y
+HOME mantenido 1 s para volver al menú ("SALIR..." en pantalla). El menú
+también va con el Wiimote en horizontal. GameCube igual que antes.
+Pendientes: Wiimote + Nunchuk y mando Clásico.
+
+Sin probar aún en el Wii: los signos de los ejes del acelerómetro salen
+de WiiBrew (en horizontal +x hacia el jugador, +y hacia el sensor). Si
+inclinar hacia delante da "abajo", basta con cambiar el signo en
+`wm_accel`. wiisp.log apunta los cambios (`[MANDO] cruceta por
+movimiento: ...` con los grados).
+
 ## Siguientes pasos, por prioridad
 
-1. **Que el usuario pruebe GTA LCS con la v0.4.10 en el Wii (modo rápido)**
-   y mande wiisp.log: con "GE por dentro" y los contadores de dibujo se
-   elige la siguiente optimización del GE (sin frameskip ni dynarec por
-   ahora, a petición del usuario). Pendiente aparte: DBZ TTT se para en
+1. **Que el usuario pruebe los controles de la v0.5.0** (sobre todo el
+   sentido de la cruceta por movimiento) y, después, seguir con las
+   optimizaciones del GE en el orden de arriba (sin frameskip ni dynarec
+   por ahora, a petición del usuario). Pendiente aparte: DBZ TTT se para en
    `sceKernelCheckThreadStack` (no implementada; devuelve 0 y su libc se
    descarga sola). El usuario pidió no tocarlo todavía.
 

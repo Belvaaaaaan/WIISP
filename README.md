@@ -58,14 +58,36 @@ Aparece un menú para elegir el programa en la **SD o en un USB**: pon tus
 `.pbp`, `.prx`, `.elf` o `.bin` donde quieras (por ejemplo en `sd:/wiisp/`),
 con su nombre original, y tus juegos como `.iso`, `.cso` o `.zso`.
 
-| Botón (Wiimote / GameCube) | En el menú | Durante la emulación |
+El **Wiimote va en horizontal** (como un mando de NES: la cruceta a la
+izquierda, 1 y 2 a la derecha), también en el menú.
+
+| Wiimote en horizontal | En el menú | Durante la emulación (PSP) |
 |---|---|---|
-| Cruceta | moverse (izquierda/derecha: página) | cruceta de la PSP |
-| A | abrir carpeta / elegir | X (cruz) |
-| B | carpeta anterior | O (círculo) |
-| 1 / X | cambiar SD ↔ USB; (al abrir un programa) texturas rápidas o seguras | cuadrado / triángulo |
-| HOME / START | salir al Homebrew Channel | HOME o Z+START: volver al menú |
-| 2 / Y | (al abrir un programa) renderizador GX o software | triángulo / cuadrado |
+| Cruceta | moverse (izquierda/derecha: página) | stick analógico |
+| 1 | cambiar SD ↔ USB; (al abrir un programa) texturas rápidas o seguras | X (cruz) |
+| 2 | (al abrir un programa) renderizador GX o software | O (círculo) |
+| B | carpeta anterior | triángulo |
+| A | abrir carpeta / elegir | cuadrado |
+| − / + | | L / R |
+| B + 1 / B + 2 | | SELECT / START |
+| Inclinar hacia delante / hacia ti | | cruceta arriba / abajo |
+| Girar como un volante | | cruceta izquierda / derecha |
+| HOME | salir al Homebrew Channel | mantener 1 s: volver al menú |
+
+La cruceta de la PSP por movimiento pide llegar cerca del tope (50° hacia
+delante, 75° hacia ti, 55° de giro) y se suelta 15° antes, así que no salta
+sin querer al jugar. Con B pulsado, 1 y 2 son SELECT y START: por eso el
+triángulo tarda 0,12 s en pulsarse al mantener B (un toque corto llega al
+soltarlo), y triángulo + X o triángulo + O a la vez solo salen si 1 o 2 se
+pulsan antes que B.
+
+| GameCube | En el menú | Durante la emulación (PSP) |
+|---|---|---|
+| Stick / cruceta | — / moverse | stick analógico / cruceta |
+| A / B | elegir / atrás | X / O |
+| Y / X | renderizador / SD ↔ USB y texturas | cuadrado / triángulo |
+| L / R / Z | | L / R / SELECT |
+| START | salir al Homebrew Channel | START; Z + START: volver al menú |
 
 El botón de apagado de la consola o del Wiimote apaga el Wii de forma
 ordenada.

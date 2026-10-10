@@ -132,7 +132,7 @@ static void run_program(void){
 		return;
 	}
 	sampler_start();
-	printf("\n--- Ejecutando (HOME o Z+START para volver) ---\n");
+	printf("\n--- Ejecutando (mantener HOME o Z+START para volver) ---\n");
 	while(!exited){
 		Input in;
 		u64 t;
@@ -157,7 +157,8 @@ static void run_program(void){
 		}
 		{
 			int old = prof_switch(PROF_PRESENTAR);
-			video_draw_psp_frame(overlay);
+			/* Con HOME pulsado, que se vea que va a salir */
+			video_draw_psp_frame(input_home_ms() > 0 ? "SALIR..." : overlay);
 			prof_switch(old);
 		}
 	}
