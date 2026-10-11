@@ -169,6 +169,19 @@ static void on_sigint(int sig){
 	stop_requested = 1;
 }
 
+/* --osk TEXTO: el teclado en pantalla "escribe" siempre este texto (para
+   probar en PC los juegos que piden un nombre) */
+static const char *osk_text;
+
+static int host_osk(const unsigned short *desc, const unsigned short *initial, unsigned short *out,
+                    unsigned limit, unsigned lines, unsigned inputtype){
+	unsigned i;
+	(void)desc; (void)initial; (void)lines; (void)inputtype;
+	for(i = 0; osk_text[i] && i < limit; i++) out[i] = (unsigned char)osk_text[i];
+	out[i] = 0;
+	return 1;
+}
+
 static void output(const char *text, unsigned len){
 	fwrite(text, 1, len, stdout);
 	fflush(stdout);
@@ -263,12 +276,13 @@ int main(int argc, char **argv){
 		else if(!strcmp(argv[i], "--turbo")) app_set_turbo(1);
 		else if(!strcmp(argv[i], "--fast-math")) app_set_fast_math(1);
 		else if(!strcmp(argv[i], "--root") && i + 1 < argc) app_set_root(argv[++i]);
+		else if(!strcmp(argv[i], "--osk") && i + 1 < argc){ osk_text = argv[++i]; app_set_osk(host_osk); }
 		else if(!strcmp(argv[i], "--log") && i + 1 < argc) hle_set_log_file(argv[++i]);   /* como wiisp.log */
 		else path = argv[i];
 	}
 	if(!path){
 		fprintf(stderr, "uso: %s [--all] [--imports FILE] [--run] [--frames N] [--quiet]\n"
-		                "          [--screenshot FILE] [--capturas N] [--log FILE]\n"
+		                "          [--screenshot FILE] [--capturas N] [--log FILE] [--osk TEXTO]\n"
 		                "          EBOOT.PBP|archivo.elf|archivo.prx|imagen.iso|imagen.cso\n", argv[0]);
 		return 2;
 	}

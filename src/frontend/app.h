@@ -53,6 +53,19 @@ const char *app_exit_reason(void);
 typedef void (*AppOutputFunc)(const char *text, unsigned len);
 void app_set_output(AppOutputFunc func);
 
+/* Teclado en pantalla de la PSP (sceUtilityOsk). La función del frontend
+   bloquea (modal) hasta que el usuario acepta o cancela.
+     desc: título que pone el juego; initial: texto de partida (ambos UTF-16
+     terminados en 0, pueden estar vacíos); out: aquí va el texto final, con
+     sitio para limit + 1 palabras; limit: máximo de caracteres; lines: 1 =
+     una línea; inputtype: tipos de carácter que pide el juego (0 = todos).
+   Devuelve 1 si el usuario aceptó (out relleno) y 0 si canceló. Sin función
+   (NULL), el diálogo devuelve el texto inicial sin cambios. */
+typedef int (*AppOskFunc)(const unsigned short *desc, const unsigned short *initial,
+                          unsigned short *out, unsigned limit, unsigned lines,
+                          unsigned inputtype);
+void app_set_osk(AppOskFunc func);
+
 /* Perfilado: el GE hace toda la geometría pero no dibuja nada */
 void app_set_null_renderer(void);
 /* Turbo: el GE no dibuja (ver ge_turbo en gpu/ge.h) */

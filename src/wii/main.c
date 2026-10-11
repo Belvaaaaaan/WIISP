@@ -258,6 +258,7 @@ static int autotest(const char *appdir){
 	}
 	if(!list) return 0;
 	printf("Pruebas automaticas (%s)\n", path);
+	app_set_osk(NULL);   /* sin nadie delante, el teclado se cierra solo */
 	gx_ge_enable(1);
 	while(fgets(line, sizeof(line), list)){
 		int frames, exited = 0;
@@ -332,6 +333,7 @@ int main(int argc, char **argv){
 
 	video_init();
 	input_init();
+	app_set_osk(wii_osk);   /* teclado en pantalla para los juegos que lo piden */
 
 	printf("\n\nWIISP " WIISP_VERSION " - emulador de PSP para Wii\n\n");
 	if(app_init() || !fatInitDefault()){

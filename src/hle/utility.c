@@ -17,6 +17,10 @@
  * cifrar en ms0:/PSP/SAVEDATA/<juego><partida>/ (en el Wii, en la SD), con
  * su PARAM.SFO.
  *
+ * El teclado (OSK) lo atiende el frontend a través de hle_set_osk(): si hay
+ * uno, la emulación se detiene mientras el usuario escribe. Sin él, el
+ * diálogo devuelve el texto inicial tal cual.
+ *
  * SPDX-License-Identifier: GPL-2.0-or-later
 **/
 
@@ -1054,8 +1058,11 @@ static void sceUtilitySavedataUpdate(void){
 	dlg_update(&dlg_save);
 	if(dlg_save.status != ST_RUNNING){ RETURN(ERR_INVALID_STATUS); return; }
 	if(!save.done){
+		u32 r;
 		save.late_len = 0;
-		set_prm32(P_RESULT, savedata_run());
+		r = savedata_run();
+		set_prm32(P_RESULT, r);
+		hle_log("[Utility] savedata modo %u: resultado 0x%08X\n", prm32(P_MODE), r);
 		save.done = 1;
 		if(!save.late_len) dlg_change(&dlg_save, ST_FINISHED, 0);
 	} else if(save.late_len){
@@ -1079,7 +1086,7 @@ static void sceUtilitySavedataShutdownStart(void){
 }
 
 /* --- Los demás diálogos: sin interfaz, se cierran solos ----------------------------- */
-/* El teclado (OSK) acepta el texto que ya traía; los de red, PSN, capturas,
+/* El teclado (OSK) lo atiende osk_run (más abajo); los de red, PSN, capturas,
    instalación, compartir y navegador se dan por cancelados. */
 
 static const u32 sizes_osk[] = { 0x40, 0x44 };
@@ -1090,21 +1097,85 @@ static const u32 sizes_install[] = { 1424, 1432 };
 static const u32 sizes_share[] = { 0x50, 0x54, 0x64 };
 static const u32 sizes_html[] = { 0x70, 0x78, 0x80, 0x98, 0xA4, 0xA8 };
 
-static void osk_finish(u32 addr){
-	u32 n = mem_read32(addr + 0x30), data = mem_read32(addr + 0x34), i;
-	for(i = 0; i < n && i < 8; i++){
-		u32 d = data + i * 52, in, out, lim, k;
-		if(!mem_valid(d, 52)) break;
-		in = mem_read32(d + 32);
-		out = mem_read32(d + 40);
-		lim = mem_read32(d + 48);
-		for(k = 0; out && k + 1 < lim && mem_valid(in + k * 2, 2); k++){
-			u16 c = mem_read16(in + k * 2);
+/* --- Teclado en pantalla (OSK) ------------------------------------------------------ */
+
+/* SceUtilityOskParams: base (0x30 bytes), nº de campos (0x30), puntero a los
+   campos (0x34), estado (0x38). Cada campo (SceUtilityOskData) ocupa 52 bytes:
+   +16 inputtype, +20 lines, +28 desc, +32 intext, +36 outtextlength,
+   +40 outtext, +44 result, +48 outtextlimit. */
+#define OSK_FIELD_SIZE        52
+#define OSK_MAX_FIELDS        8
+#define OSK_TEXT_MAX          256   /* caracteres que se leen o escriben por campo */
+#define OSK_RESULT_UNCHANGED  0
+#define OSK_RESULT_CANCELLED  1
+#define OSK_RESULT_CHANGED    2
+
+static HleOskFunc osk_handler;
+
+void hle_set_osk(HleOskFunc func){ osk_handler = func; }
+
+/* Cadena UTF-16 de la PSP a un búfer de host (dst tiene sitio para max + 1).
+   Devuelve cuántos caracteres leyó. Un puntero nulo o inválido es "". */
+static u32 read_utf16(u32 addr, unsigned short *dst, u32 max){
+	u32 n = 0;
+	if(addr)
+		while(n < max && mem_valid(addr + n * 2, 2)){
+			u16 c = mem_read16(addr + n * 2);
 			if(!c) break;
-			mem_write16(out + k * 2, c);
+			dst[n++] = c;
 		}
-		if(out && lim && mem_valid(out + k * 2, 2)) mem_write16(out + k * 2, 0);
-		mem_write32(d + 44, 0);   /* PSP_UTILITY_OSK_RESULT_UNCHANGED */
+	dst[n] = 0;
+	return n;
+}
+
+/* Para el registro: solo ASCII imprimible */
+static void utf16_to_log(const unsigned short *s, char *out, size_t n){
+	size_t i = 0;
+	for(; s[i] && i + 1 < n; i++) out[i] = s[i] >= 32 && s[i] < 127 ? (char)s[i] : '?';
+	out[i] = 0;
+}
+
+static void osk_run(u32 addr){
+	u32 n = mem_read32(addr + 0x30), data = mem_read32(addr + 0x34), i;
+	for(i = 0; i < n && i < OSK_MAX_FIELDS; i++){
+		u32 d = data + i * OSK_FIELD_SIZE, out_p, lim, max_chars, len, k, result = OSK_RESULT_UNCHANGED;
+		unsigned short desc[129], text[OSK_TEXT_MAX + 1], res[OSK_TEXT_MAX + 1];
+		char logd[130], logt[OSK_TEXT_MAX + 1];
+		if(!mem_valid(d, OSK_FIELD_SIZE)) break;
+		out_p = mem_read32(d + 40);
+		lim = mem_read32(d + 48);
+		read_utf16(mem_read32(d + 28), desc, 128);
+		len = read_utf16(mem_read32(d + 32), text, OSK_TEXT_MAX);
+		/* outtextlimit incluye el 0 final: caben lim - 1 caracteres */
+		max_chars = lim > 0 ? lim - 1 : 0;
+		if(max_chars > OSK_TEXT_MAX) max_chars = OSK_TEXT_MAX;
+		if(len > max_chars){ len = max_chars; text[len] = 0; }
+		memcpy(res, text, (len + 1) * sizeof(res[0]));
+
+		utf16_to_log(desc, logd, sizeof(logd));
+		utf16_to_log(text, logt, sizeof(logt));
+		hle_log("[Utility] teclado: \"%s\" (inicial \"%s\", maximo %u)%s\n", logd, logt, max_chars,
+		        osk_handler ? "" : " sin teclado en este frontend");
+
+		if(osk_handler && out_p && max_chars){
+			if(osk_handler(desc, text, res, max_chars, mem_read32(d + 20), mem_read32(d + 16))){
+				for(len = 0; len < max_chars && res[len]; len++);
+				result = OSK_RESULT_CHANGED;
+			} else {
+				memcpy(res, text, (len + 1) * sizeof(res[0]));   /* cancelado: lo de antes */
+				result = OSK_RESULT_CANCELLED;
+			}
+		}
+		if(out_p && lim && mem_valid(out_p, (len + 1) * 2)){
+			for(k = 0; k < len; k++) mem_write16(out_p + k * 2, res[k]);
+			mem_write16(out_p + len * 2, 0);
+		}
+		mem_write32(d + 36, len);
+		mem_write32(d + 44, result);
+		if(result != OSK_RESULT_UNCHANGED){
+			utf16_to_log(res, logt, sizeof(logt));
+			hle_log("[Utility] teclado: %s \"%s\"\n", result == OSK_RESULT_CHANGED ? "aceptado" : "cancelado", logt);
+		}
 	}
 	mem_write32(addr + 0x38, 0);
 	mem_write32(addr + 0x1C, 0);
@@ -1123,7 +1194,7 @@ static void generic_init(int type, const u32 *sizes, int n){
 	dlg_change(d, ST_INIT, 0);
 	dlg_change(d, ST_RUNNING, 50000);
 	if(type != DLG_HTML) current_type = type;
-	hle_log("[Utility] dialogo %d omitido\n", type);
+	if(type != DLG_OSK) hle_log("[Utility] dialogo %d omitido\n", type);
 	RETURN(0);
 }
 
@@ -1141,7 +1212,7 @@ static void generic_update(int type){
 	dlg_update(d);
 	if(d->status != ST_RUNNING){ RETURN(ERR_INVALID_STATUS); return; }
 	if(++d->updates >= 2){
-		if(type == DLG_OSK) osk_finish(d->addr);
+		if(type == DLG_OSK) osk_run(d->addr);
 		else if(mem_valid(d->addr + 0x1C, 4)) mem_write32(d->addr + 0x1C, RESULT_CANCEL);
 		dlg_change(d, ST_FINISHED, 0);
 	}

@@ -50,6 +50,13 @@ void video_clear_console(void);
 /* Dibuja el framebuffer de la PSP (si hay) y el texto superpuesto */
 void video_draw_psp_frame(const char *overlay);
 
+/* --- Teclado en pantalla (osk.c) ------------------------------------------ */
+
+/* Diálogo modal para sceUtilityOsk (ver AppOskFunc en frontend/app.h).
+   Devuelve 1 si el usuario aceptó y 0 si canceló. */
+int  wii_osk(const unsigned short *desc, const unsigned short *initial, unsigned short *out,
+             unsigned limit, unsigned lines, unsigned inputtype);
+
 /* --- Menú (menu.c) -------------------------------------------------------- */
 
 /* Muestra el selector de archivos. Devuelve 1 y la ruta elegida, o 0 si el

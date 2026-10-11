@@ -513,6 +513,7 @@ int main(int argc, char **argv){
 	test_filelist();
 	test_formats();
 	test_io();
+	test_osk();
 	test_vfpu();
 	test_wiimote();
 	test_texcache();   /* la última: vacía la memoria */
