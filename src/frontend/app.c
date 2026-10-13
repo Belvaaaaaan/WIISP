@@ -267,6 +267,7 @@ void app_imports_path(const char *path, char *out, size_t out_size){
 }
 const char *app_exit_reason(void){ return hle_exit_reason(); }
 void app_set_output(AppOutputFunc func){ output_func = func; }
+void app_set_osk(AppOskFunc func){ hle_set_osk(func); }
 
 void app_set_input(unsigned buttons, unsigned char lx, unsigned char ly){
 	hle_set_input(buttons, lx, ly);

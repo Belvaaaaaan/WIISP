@@ -214,6 +214,23 @@ void atrac_notify_load(u32 bss);
 extern const HleLibrary hle_utility_libs[];
 extern const u32 hle_utility_libs_count;
 void utility_init(void);
+/* Teclado en pantalla (sceUtilityOsk). El frontend lo implementa como un
+   diálogo modal: la emulación se detiene hasta que el usuario acepta o
+   cancela. Los textos son UTF-16 (UCS-2) terminados en 0.
+     desc:    título que muestra el juego (puede estar vacío)
+     initial: texto con el que empieza el campo (puede estar vacío)
+     out:     aquí se deja el texto final, con espacio para limit + 1 palabras
+     limit:   máximo de caracteres que se pueden escribir
+     lines:   1 = una línea; más = campo multilínea
+     inputtype: tipos de carácter que pide el juego (0 = todos)
+   Devuelve 1 si el usuario aceptó (out rellenado) o 0 si canceló. Con
+   NULL (por defecto) el diálogo se cierra solo devolviendo el texto
+   inicial sin cambios. Solo se usan tipos de C estándar para poder
+   enlazarlo con el frontend del Wii (ver frontend/app.h). */
+typedef int (*HleOskFunc)(const unsigned short *desc, const unsigned short *initial,
+                          unsigned short *out, unsigned limit, unsigned lines,
+                          unsigned inputtype);
+void hle_set_osk(HleOskFunc func);
 extern const HleLibrary hle_mpeg_libs[];
 extern const u32 hle_mpeg_libs_count;
 void mpeg_init(void);
