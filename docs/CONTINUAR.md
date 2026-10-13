@@ -466,6 +466,18 @@ los vblanks que faltan) y `scePowerCheckWlanCoexistenceClock` (0xA85880D0,
 fallando por `sceDisplayIsVblank` (siempre 0) y sceDisplayWaitVblank
 dentro del vblank, que ya fallaban.
 
+### Para el siguiente chat (empezar aquí)
+
+El plan de rendimiento está en `docs/HOJA_DE_RUTA.md` (documentos del
+usuario + correcciones). Acordado: guardar los interruptores con esos
+nombres y hacer primero la infraestructura de interruptores y la primera
+tanda (prof_espera, skinning rápido, matrices al cambiar, color constante,
+cpu_sin_extra), verificable en el PC; el usuario mide en el Wii con DBZ y
+GTA. Pendiente del usuario: probar la 0.5.4+ (warping, TN/TS y MR/ME). El
+usuario implementó por su cuenta el teclado (OSK) y las partidas de DBZ:
+si están en la rama, revisarlos y pasarles las pruebas. Numeración: 0.5.6.x
+mientras se arreglaba DBZ; lo siguiente puede ser 0.5.7.
+
 ### Carrito (para cuando el usuario vuelva a su Wii)
 
 1. Verificar en el Wii la 0.5.4+ (warping: TN/TS y MR/ME) con el registro.
