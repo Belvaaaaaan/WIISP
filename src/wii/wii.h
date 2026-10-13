@@ -19,7 +19,8 @@ enum {
 	IN_BACK = 1 << 5,     /* B */
 	IN_SWITCH = 1 << 6,   /* 1 / X: cambiar SD <-> USB */
 	IN_EXIT = 1 << 7,     /* HOME / START */
-	IN_OPTION = 1 << 8    /* 2 / Y */
+	IN_OPTION = 1 << 8,   /* 2 / Y */
+	IN_EXTRA = 1 << 9     /* + / R */
 };
 
 typedef struct {

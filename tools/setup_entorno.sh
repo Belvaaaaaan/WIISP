@@ -34,16 +34,25 @@ if [ ! -d "$DEST/devkitpro/devkitPPC" ]; then
 import json, os, sys, tarfile, urllib.request
 dest = sys.argv[1]
 repo = 'devkitpro/devkitppc'
-tok = json.load(urllib.request.urlopen(
-    f'https://auth.docker.io/token?service=registry.docker.io&scope=repository:{repo}:pull'))['token']
-def get(url, accept):
-    req = urllib.request.Request(url, headers={'Authorization': 'Bearer ' + tok, 'Accept': accept})
-    return urllib.request.urlopen(req)
-base = f'https://registry-1.docker.io/v2/{repo}'
 acc = ','.join(['application/vnd.docker.distribution.manifest.list.v2+json',
                 'application/vnd.oci.image.index.v1+json',
                 'application/vnd.docker.distribution.manifest.v2+json',
                 'application/vnd.oci.image.manifest.v1+json'])
+# Primero la réplica de Google (sin límite de descargas ni token); si no
+# responde, el registro de Docker Hub (100 manifiestos por hora y por IP)
+def registro():
+    try:
+        base = 'https://mirror.gcr.io/v2/' + repo
+        urllib.request.urlopen(urllib.request.Request(base + '/manifests/latest', method='HEAD',
+                                                      headers={'Accept': acc}))
+        return base, {}
+    except Exception:
+        tok = json.load(urllib.request.urlopen(
+            f'https://auth.docker.io/token?service=registry.docker.io&scope=repository:{repo}:pull'))['token']
+        return 'https://registry-1.docker.io/v2/' + repo, {'Authorization': 'Bearer ' + tok}
+base, auth = registro()
+def get(url, accept):
+    return urllib.request.urlopen(urllib.request.Request(url, headers=dict(auth, Accept=accept)))
 man = json.load(get(base + '/manifests/latest', acc))
 if 'manifests' in man:   # lista multiarquitectura: la de amd64
     d = next(m['digest'] for m in man['manifests'] if m.get('platform', {}).get('architecture') == 'amd64')
@@ -53,11 +62,12 @@ for layer in man['layers']:
     path = dest + '/capas/' + layer['digest'].split(':')[1] + '.tgz'
     if not os.path.exists(path):
         print('descargando', layer['digest'][:19], layer.get('size', 0) // (1 << 20), 'MB')
-        with get(base + '/blobs/' + layer['digest'], '*/*') as r, open(path, 'wb') as f:
+        with get(base + '/blobs/' + layer['digest'], '*/*') as r, open(path + '.part', 'wb') as f:
             while True:
                 b = r.read(1 << 20)
                 if not b: break
                 f.write(b)
+        os.rename(path + '.part', path)
     # Solo interesa /opt/devkitpro
     with tarfile.open(path) as t:
         members = [m for m in t.getmembers() if m.name.startswith('opt/devkitpro')]

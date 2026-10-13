@@ -24,6 +24,23 @@
  * la última imagen va a <programa>.gx.bmp o .soft.bmp. Al acabar escribe
  * autotest.done y apaga.
  *
+ * Escenas de prueba repetibles (ver frontend/guion.h):
+ *   - Una ruta con dispositivo (sd:/ISO/juego.iso) se usa tal cual.
+ *   - Si existe <programa>.guion, se reproduce: el mando lo pone el guion, el
+ *     límite de frames es su línea "fin", las partidas salen de
+ *     <programa>.partidas (vaciada y rellenada desde <programa>.partidas_base
+ *     si existe) y el registro completo, con [TIEMPOS], va a <programa>.log.
+ *     Las huellas van a <programa>.huellas y las capturas a
+ *     <programa>.c<cuadro>.bmp.
+ *   - "veces N" corre N veces cada programa siguiente (salidas con .v1,
+ *     .v2...), para comprobar que la escena sale idéntica.
+ *   - "opt NOMBRE 0|1" cambia un interruptor de optimización (core/opt.h)
+ *     para los programas siguientes.
+ *
+ * Para grabar un guion: al abrir un juego, +/R activa "grabar guion"; se
+ * juega normalmente desde el arranque y al salir queda <juego>.guion junto
+ * al juego, con sus partidas de prueba (<juego>.partidas).
+ *
  * SPDX-License-Identifier: GPL-2.0-or-later
 **/
 
@@ -56,6 +73,9 @@ void *plat_alloc_big(size_t size){
 	SYS_SetArena2Lo(lo + size);
 	return lo;
 }
+
+/* Rutas normales de las partidas y del registro (las pruebas las cambian) */
+static char savedata_normal[340], log_normal[340];
 
 static void program_output(const char *text, unsigned len){
 	fwrite(text, 1, len, stdout);
@@ -184,7 +204,8 @@ static void run_program(void){
 				   N(ormalizadas) o S(in normalizar) */
 				char tag[8] = "";
 				if(gx_ge_enabled()) snprintf(tag, sizeof(tag), "M%c T%c  ", app_fast_math() ? 'R' : 'E', gx_ge_tex_norm() ? 'N' : 'S');
-				snprintf(text, sizeof(text), "%s%s%s", app_turbo() ? "TURBO  " : "", tag, overlay);
+				snprintf(text, sizeof(text), "%s%s%s%s", app_guion_activo() == 2 ? "GRABANDO  " : "",
+				         app_turbo() ? "TURBO  " : "", tag, overlay);
 			}
 			video_draw_psp_frame(text);
 			prof_switch(old);
@@ -205,8 +226,34 @@ static void run_program(void){
 		       frames * 1000.0 / elapsed, instr / 1000.0 / elapsed, frames, elapsed / 1000.0);
 }
 
+/* Grabar un guion: partidas de prueba y <juego>.guion (el anterior queda
+   como .guion.bak). 0 = grabando. */
+static int start_recording(const char *path){
+	char guion[560], bak[580], partidas[560], base[580];
+	snprintf(partidas, sizeof(partidas), "%s.partidas", path);
+	snprintf(base, sizeof(base), "%s_base", partidas);
+	if(app_preparar_partidas(partidas, base)){
+		printf("\nError: no se pudieron preparar %s\n", partidas);
+		return -1;
+	}
+	snprintf(guion, sizeof(guion), "%s.guion", path);
+	snprintf(bak, sizeof(bak), "%s.bak", guion);
+	if(access(guion, F_OK) == 0){
+		unlink(bak);
+		rename(guion, bak);
+	}
+	if(app_guion_grabar(guion)){
+		printf("\nError: no se puede escribir %s\n", guion);
+		app_set_savedata_dir(savedata_normal);
+		return -1;
+	}
+	hle_log_quiet("[GUION] grabando %s (partidas en %s)\n", guion, partidas);
+	return 0;
+}
+
 static void open_file(const char *path){
 	char imports[512];
+	static int record;
 
 	video_clear_console();
 	app_imports_path(path, imports, sizeof(imports));
@@ -215,21 +262,31 @@ static void open_file(const char *path){
 		printf("A: ejecutar   B: volver al menu\n");
 		for(;;){
 			Input in;
-			printf("\r2/Y: renderizador %s  1/X: texturas %s  ",
+			printf("\r2/Y: renderizador %s  1/X: texturas %s  +/R: grabar guion %s  ",
 			       menu_renderer_gx() ? "GX (rapido)      " : "software (exacto)",
-			       menu_lazy_textures() ? "rapidas" : "seguras");
+			       menu_lazy_textures() ? "rapidas" : "seguras", record ? "SI" : "no");
 			fflush(stdout);
 			do {
 				VIDEO_WaitVSync();
 				input_read(&in);
-			} while(!(in.menu & (IN_ACCEPT | IN_BACK | IN_EXIT | IN_OPTION | IN_SWITCH)));
+			} while(!(in.menu & (IN_ACCEPT | IN_BACK | IN_EXIT | IN_OPTION | IN_SWITCH | IN_EXTRA)));
 			if(in.menu & IN_OPTION){ menu_set_renderer_gx(!menu_renderer_gx()); continue; }
 			if(in.menu & IN_SWITCH){ menu_set_lazy_textures(!menu_lazy_textures()); continue; }
+			if(in.menu & IN_EXTRA){ record = !record; continue; }
 			printf("\n");
 			if(in.menu & IN_ACCEPT) break;
 			return;
 		}
+		if(record && start_recording(path)){
+			wait_accept();
+			return;
+		}
 		run_program();
+		if(app_guion_activo()){
+			app_guion_parar();
+			app_set_savedata_dir(savedata_normal);
+			printf("Guion grabado en %s.guion\n", path);
+		}
 	}
 	printf("\nPulsa A o B para volver al menu.\n");
 	wait_accept();
@@ -243,11 +300,102 @@ static void autotest_output(const char *text, unsigned len){
 	if(autotest_file) fwrite(text, 1, len, autotest_file);
 }
 
+/* Una ejecución de la lista de pruebas. prefix es la ruta de las salidas
+   (la del programa, más ".vN" si se repite). */
+static void autotest_run(const char *path, const char *prefix, int max_frames){
+	char out[700], guion[640];
+	int frames, exited = 0, scripted;
+
+	snprintf(guion, sizeof(guion), "%s.guion", path);
+	scripted = access(guion, F_OK) == 0;
+	snprintf(out, sizeof(out), "%s.bmp", prefix);
+	app_set_screenshot_path(out);
+	snprintf(out, sizeof(out), "%s.out", prefix);
+	autotest_file = fopen(out, "w");
+	app_set_verbose(0);
+	app_set_output(autotest_output);
+	if(scripted){
+		char partidas[640], base[660];
+		snprintf(partidas, sizeof(partidas), "%s.partidas", path);
+		snprintf(base, sizeof(base), "%s_base", partidas);
+		if(app_preparar_partidas(partidas, base)) printf("  no se pudieron preparar %s\n", partidas);
+		snprintf(out, sizeof(out), "%s.log", prefix);
+		hle_set_log_file(out);
+	}
+	if(app_load(path, 8, NULL) == 0){
+		char err[160];
+		if(scripted && app_guion_reproducir(guion, prefix, err, sizeof(err))){
+			printf("  guion: %s\n", err);
+			hle_log("[GUION] %s: %s\n", guion, err);
+			scripted = -1;   /* no se ejecuta: sin guion la escena no vale */
+		}
+	} else exited = -1;   /* no se pudo cargar */
+	if(scripted >= 0 && exited == 0 && app_start() == 0){
+		u64 start = now_ms();
+		unsigned done_frames;
+		unsigned long long instr, ge0 = app_ge_host_ticks(), ps, pst, pp;
+		unsigned cnt[4];
+		FILE *st;
+		app_set_host_clock(host_clock);
+		if(scripted){
+			/* Como al jugar: desglose de tiempos cada 30 s en el registro */
+			hle_log("[GUION] %s: hasta el cuadro %u, %s\n", guion, app_guion_fin(),
+			        gx_ge_enabled() ? "GX" : "software");
+			prof_set_clock(prof_ticks, (u64)TB_TIMER_CLOCK * 1000ull);
+			hle_set_profile_hook(profile_hook);
+			sampler_start();
+			if(app_guion_fin()) max_frames = (int)app_guion_fin() + 1;
+		} else prof_set_clock(NULL, 0);   /* las pruebas miden con lo suyo */
+		gx_ge_profile(&ps, &pst, &pp, cnt);
+		for(frames = 0; frames < max_frames && !exited; frames++){
+			exited = app_run_frame();
+			video_draw_psp_frame(NULL);
+		}
+		if(scripted){
+			hle_profile_report("final de la escena");
+			sampler_stop();
+			prof_set_clock(NULL, 0);
+		}
+		app_get_stats(&done_frames, &instr);
+		snprintf(out, sizeof(out), "%s.stats", prefix);
+		st = fopen(out, "a");
+		if(st){
+			u64 ms = now_ms() - start;
+			fprintf(st, "%s: %u frames en %u ms: %.1f FPS, %.1f MIPS\n", gx_ge_enabled() ? "gx" : "soft",
+			        done_frames, (unsigned)ms, ms ? done_frames * 1000.0 / ms : 0.0, ms ? instr / 1000.0 / ms : 0.0);
+			gx_ge_profile(&ps, &pst, &pp, cnt);
+			fprintf(st, "   GE %u ms (buferes/texturas %u, estado GX %u), presentar %u ms\n"
+			            "   %u presentaciones desde la VRAM, %u bajadas, %u subidas, %u texturas decodificadas\n",
+			        (unsigned)ticks_to_millisecs(app_ge_host_ticks() - ge0), (unsigned)ticks_to_millisecs(ps),
+			        (unsigned)ticks_to_millisecs(pst), (unsigned)ticks_to_millisecs(pp), cnt[0], cnt[1], cnt[2], cnt[3]);
+#ifdef WIISP_PROF
+			fprintf(st, "   prof: vertices %u ms, backend %u ms, draw_prim %u ms (preparar %u ms), luces %u ms, decodificar %u ms\n",
+			        (unsigned)ticks_to_millisecs(ge_prof[0]), (unsigned)ticks_to_millisecs(ge_prof[1]),
+			        (unsigned)ticks_to_millisecs(ge_prof[2]), (unsigned)ticks_to_millisecs(ge_prof[3]),
+			        (unsigned)ticks_to_millisecs(ge_prof[4]), (unsigned)ticks_to_millisecs(ge_prof[5]));
+			memset(ge_prof, 0, sizeof(ge_prof));
+#endif
+			fclose(st);
+		}
+		gx_ge_sync_vram();
+		snprintf(out, sizeof(out), "%s.%s.bmp", prefix, gx_ge_enabled() ? "gx" : "soft");
+		app_write_bmp(out);
+	}
+	app_guion_parar();
+	if(autotest_file) fclose(autotest_file);
+	autotest_file = NULL;
+	gx_ge_reset();
+	if(scripted){
+		app_set_savedata_dir(savedata_normal);
+		hle_reopen_log_file(log_normal);
+	}
+}
+
 /* Busca autotest.txt en sd:/wiisp/ y, si no, junto al boot.dol */
 static int autotest(const char *appdir){
 	FILE *list, *done;
-	char base[300], line[256], path[600], out[620];
-	int count = 0, max_frames = 1200;
+	char base[300], line[256], path[600], prefix[620];
+	int count = 0, max_frames = 1200, times = 1;
 	snprintf(base, sizeof(base), "sd:/wiisp");
 	snprintf(path, sizeof(path), "%s/autotest.txt", base);
 	list = fopen(path, "r");
@@ -261,61 +409,28 @@ static int autotest(const char *appdir){
 	app_set_osk(NULL);   /* sin nadie delante, el teclado se cierra solo */
 	gx_ge_enable(1);
 	while(fgets(line, sizeof(line), list)){
-		int frames, exited = 0;
+		int k;
 		line[strcspn(line, "\r\n")] = 0;
 		if(!line[0] || line[0] == '#') continue;
 		if(!strcmp(line, "gx")){ gx_ge_enable(1); continue; }
 		if(!strcmp(line, "soft")){ gx_ge_enable(0); continue; }
 		if(!strncmp(line, "frames ", 7)){ max_frames = atoi(line + 7); continue; }
-		snprintf(path, sizeof(path), "%s/autotest/%s", base, line);
-		printf("%s\n", line);
-		snprintf(out, sizeof(out), "%s.bmp", path);
-		app_set_screenshot_path(out);
-		snprintf(out, sizeof(out), "%s.out", path);
-		autotest_file = fopen(out, "w");
-		app_set_verbose(0);
-		app_set_output(autotest_output);
-		if(app_load(path, 8, NULL) == 0 && app_start() == 0){
-			u64 start = now_ms();
-			unsigned done_frames;
-			unsigned long long instr, ge0 = app_ge_host_ticks(), ps, pst, pp;
-			unsigned cnt[4];
-			FILE *st;
-			app_set_host_clock(host_clock);
-			prof_set_clock(NULL, 0);   /* las pruebas miden con lo suyo */
-			gx_ge_profile(&ps, &pst, &pp, cnt);
-			for(frames = 0; frames < max_frames && !exited; frames++){
-				exited = app_run_frame();
-				video_draw_psp_frame(NULL);
-			}
-			app_get_stats(&done_frames, &instr);
-			snprintf(out, sizeof(out), "%s.stats", path);
-			st = fopen(out, "a");
-			if(st){
-				u64 ms = now_ms() - start;
-				fprintf(st, "%s: %u frames en %u ms: %.1f FPS, %.1f MIPS\n", gx_ge_enabled() ? "gx" : "soft",
-				        done_frames, (unsigned)ms, ms ? done_frames * 1000.0 / ms : 0.0, ms ? instr / 1000.0 / ms : 0.0);
-				gx_ge_profile(&ps, &pst, &pp, cnt);
-				fprintf(st, "   GE %u ms (buferes/texturas %u, estado GX %u), presentar %u ms\n"
-				            "   %u presentaciones desde la VRAM, %u bajadas, %u subidas, %u texturas decodificadas\n",
-				        (unsigned)ticks_to_millisecs(app_ge_host_ticks() - ge0), (unsigned)ticks_to_millisecs(ps),
-				        (unsigned)ticks_to_millisecs(pst), (unsigned)ticks_to_millisecs(pp), cnt[0], cnt[1], cnt[2], cnt[3]);
-#ifdef WIISP_PROF
-				fprintf(st, "   prof: vertices %u ms, backend %u ms, draw_prim %u ms (preparar %u ms), luces %u ms, decodificar %u ms\n",
-				        (unsigned)ticks_to_millisecs(ge_prof[0]), (unsigned)ticks_to_millisecs(ge_prof[1]),
-				        (unsigned)ticks_to_millisecs(ge_prof[2]), (unsigned)ticks_to_millisecs(ge_prof[3]),
-				        (unsigned)ticks_to_millisecs(ge_prof[4]), (unsigned)ticks_to_millisecs(ge_prof[5]));
-				memset(ge_prof, 0, sizeof(ge_prof));
-#endif
-				fclose(st);
-			}
-			snprintf(out, sizeof(out), "%s.%s.bmp", path, gx_ge_enabled() ? "gx" : "soft");
-			app_write_bmp(out);
+		if(!strncmp(line, "veces ", 6)){ times = atoi(line + 6); if(times < 1) times = 1; continue; }
+		if(!strncmp(line, "opt ", 4)){
+			int r = app_opt_set(line + 4);
+			if(r) printf("%s: %s\n", line, r > 0 ? "todavia no esta implementada" : "no se entiende");
+			hle_log("[OPT] %s%s\n", line + 4, r > 0 ? " (todavia no esta implementada)" : r ? " (no se entiende)" : "");
+			continue;
 		}
-		if(autotest_file) fclose(autotest_file);
-		autotest_file = NULL;
-		gx_ge_reset();
-		count++;
+		if(strstr(line, ":/")) snprintf(path, sizeof(path), "%s", line);
+		else snprintf(path, sizeof(path), "%s/autotest/%s", base, line);
+		for(k = 1; k <= times; k++){
+			if(times > 1) snprintf(prefix, sizeof(prefix), "%s.v%d", path, k);
+			else snprintf(prefix, sizeof(prefix), "%s", path);
+			printf("%s%s\n", line, times > 1 ? (k == 1 ? " (vez 1)" : " (otra vez)") : "");
+			autotest_run(path, prefix, max_frames);
+			count++;
+		}
 	}
 	fclose(list);
 	snprintf(path, sizeof(path), "%s/autotest.done", base);
@@ -352,13 +467,12 @@ int main(int argc, char **argv){
 	}
 
 	/* Partidas y registro junto a WIISP (sd:/apps/wiisp/ o sd:/wiisp/) */
-	{
-		char dir[340];
-		snprintf(dir, sizeof(dir), "%s/SAVEDATA", appdir[0] ? appdir : "sd:/wiisp");
-		io_set_savedata_dir(dir);
-		snprintf(dir, sizeof(dir), "%s/wiisp.log", appdir[0] ? appdir : "sd:/wiisp");
-		hle_set_log_file(dir);
-	}
+	snprintf(savedata_normal, sizeof(savedata_normal), "%s/SAVEDATA", appdir[0] ? appdir : "sd:/wiisp");
+	app_set_savedata_dir(savedata_normal);
+	snprintf(log_normal, sizeof(log_normal), "%s/wiisp.log", appdir[0] ? appdir : "sd:/wiisp");
+	hle_set_log_file(log_normal);
+	/* Las capturas de los guiones necesitan la imagen en la VRAM emulada */
+	app_set_before_capture(gx_ge_sync_vram);
 
 	autotest(appdir[0] ? appdir : NULL);
 

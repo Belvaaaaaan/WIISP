@@ -82,6 +82,41 @@ void app_set_root(const char *dir);
 void app_set_host_clock(unsigned long long (*clock)(void));
 unsigned long long app_ge_host_ticks(void);
 
+/* --- Escenas de prueba repetibles ----------------------------------------
+   Un guion (frontend/guion.h) dice qué botones hay pulsados en cada cuadro
+   emulado. Se activa después de app_load y antes de app_start, y vale para
+   esa ejecución:
+     - reproducir: el mando real se ignora; las capturas van a
+       <prefijo>.c<cuadro>.bmp y las huellas a <prefijo>.huellas. Al llegar a
+       "fin", app_run_frame devuelve 1 ("fin del guion").
+     - grabar: lo que llega por app_set_input se escribe en el guion (con el
+       stick redondeado) y las huellas van a <guion>.huellas.
+   Mientras hay guion, el teclado en pantalla devuelve el texto inicial: lo
+   que escriba alguien no quedaría grabado. */
+int  app_guion_reproducir(const char *guion, const char *prefijo, char *err, size_t errlen);
+int  app_guion_grabar(const char *guion);
+/* Termina el guion (al grabar, escribe la línea "fin") */
+void app_guion_parar(void);
+/* 0 = sin guion, 1 = reproduciendo, 2 = grabando */
+int  app_guion_activo(void);
+/* Cuadro de la línea "fin" del guion que se reproduce (0 si no hay) */
+unsigned app_guion_fin(void);
+/* Se llama antes de cada captura del guion (en el Wii, bajar a la VRAM
+   emulada lo que solo está en la GPU) */
+void app_set_before_capture(void (*fn)(void));
+
+/* Partidas: carpeta que hace de ms0:/PSP/SAVEDATA */
+void app_set_savedata_dir(const char *dir);
+/* Partidas de prueba: vacía dir (debe terminar en ".partidas"), copia
+   dentro lo que haya en base y la usa como SAVEDATA. 0 = correcto. */
+int  app_preparar_partidas(const char *dir, const char *base);
+
+/* Interruptores de optimización (core/opt.h): "nombre=0|1" o "nombre 0|1".
+   0 = cambiado, -1 = nombre o valor desconocido, 1 = todavía no existe. */
+int  app_opt_set(const char *texto);
+/* Los interruptores implementados y su valor, en una línea */
+void app_opt_describe(char *buf, size_t size);
+
 /* Mandos en formato PSP (ver APP_BTN_*) y stick analógico (0-255) */
 void app_set_input(unsigned buttons, unsigned char lx, unsigned char ly);
 

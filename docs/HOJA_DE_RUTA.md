@@ -24,6 +24,45 @@ volver a medir tras cada paso.
 6. Primero "hacer lo mismo más barato" (resultado idéntico); después
    "adivinar qué me puedo saltar".
 
+## Metodología acordada (octubre de 2026)
+
+**Primero, medir (pasos 1 a 5):**
+
+1. **Escena de prueba repetible** — hecho en la v0.5.7: guiones de botones
+   grabados jugando en el Wii, huellas cada 60 cuadros y partidas de prueba
+   (`docs/ESCENAS_DE_PRUEBA.md`). Dos escenas: una pelea de DBZ y un juego
+   2D (Street Fighter Alpha 3 MAX o Metal Slug XX). Correr cada una dos
+   veces: huellas y capturas idénticas; si no, algo depende del reloj del
+   Wii en vez de los ciclos emulados.
+2. **Separar la espera (0.1, `prof_espera`).** Ojo: en el Wii no hay espera
+   real del vblank (sin limitador; con todos los hilos esperando, el kernel
+   salta al siguiente evento), así que el 40 % de "syscalls" de los menús
+   es trabajo real. Medir primero el tiempo por syscall.
+3. **Interruptores** — hecho en la v0.5.7 (`src/core/opt.h`): `opt nombre
+   0|1` en `autotest.txt`, `--opt` en el PC, línea `[OPT]` antes de cada
+   `[TIEMPOS]`.
+4. **Reconocer el Broadway:** escribir en wiisp.log DBAT0-7, HID4, SDR1 y
+   GQR1-7 al arrancar, para saber si 2.5 (BAT) y 1.2b (`psq_l`) son posibles
+   con esta libogc. Los PMC (0.2) esperan a cuando haga falta contar fallos
+   de caché.
+5. **Línea base:** las dos escenas tres veces en el Wii real (`veces 3`),
+   guardando logs y capturas. La velocidad solo se mide en el Wii (Dolphin
+   no emula los tiempos de caché); Dolphin sirve para la exactitud.
+
+**Después, optimizar de una en una (pasos 6 a 11):**
+
+6. 2.1 `cpu_sin_extra`: hoy `step()` hace `ld32(pc)` y un `switch` por
+   instrucción. Poco código y poco riesgo; 2D de ~55 % a ~83 % según la
+   estimación. Va antes que la fase 1 porque es casi gratis.
+7. Medir el render-to-texture antes de hacerlo: registrar cada render
+   target y quién lo consume (GE, CPU, pantalla): da el techo real de 1.1.
+8. 1.2 + 1.2b: decodificadores especializados, verificados vértice a
+   vértice contra el genérico.
+9. 1.1: render-to-texture, con los 7 pasos de la hoja (resumidos en la Fase 1 de abajo).
+10. 1.4 (charolas) y 1.3 (caja, solo con los BBOX del juego).
+11. Decidir el diseño del IR y hacer 2.2 y 2.3 como IR, junto con 2.5
+    (BAT). Las fases 3, 4 y 5 vienen después.
+
 ## Diagnóstico (DBZ TTT, v0.5.6.1)
 
 | Escena | Velocidad | Dónde va el tiempo | Límite |

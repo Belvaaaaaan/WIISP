@@ -514,6 +514,7 @@ int main(int argc, char **argv){
 	test_formats();
 	test_io();
 	test_osk();
+	test_guion();
 	test_vfpu();
 	test_wiimote();
 	test_texcache();   /* la última: vacía la memoria */

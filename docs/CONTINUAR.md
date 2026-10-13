@@ -10,9 +10,14 @@ nueva sin perder nada. Léelo junto con `README.md`, `ARQUITECTURA.md` y
   El texto que se ve en la pantalla del Wii va **sin acentos** (la fuente no
   los tiene).
 - Rama de trabajo: `claude/psp-wii-emulator-dt141p` hasta la v0.4.3; la
-  v0.4.4 sigue encima en `claude/wiisp-psp-wii-emulator-gr0b83` (la rama
-  que asigna cada sesión puede cambiar: partir siempre de la más reciente).
-  No abrir pull requests si no se piden.
+  v0.4.4 sigue encima en `claude/wiisp-psp-wii-emulator-gr0b83` y la v0.5.7
+  en `claude/happy-euler-b460be` (la rama que asigna cada sesión puede
+  cambiar: partir siempre de la más reciente). No abrir pull requests si no
+  se piden.
+- Comentarios del código: explicar qué hace y por qué, **sin citar otros
+  emuladores** ("igual que X", "estilo de Y"); se ve poco profesional. Los
+  avisos de copyright del código portado (GPL) sí se quedan. Las
+  referencias a otros proyectos van en los documentos, no en el código.
 - Nunca subir datos de juegos (ISO, EBOOT descifrados, volcados): son de
   Sony/Rockstar.
 - PPSSPP (GPLv2+) es la referencia de comportamiento: ante una duda de cómo
@@ -35,6 +40,12 @@ make -j8                                       # wiisp.dol para el Wii
   libc6-dev-powerpc-cross qemu-user`, luego `make -f Makefile.pc test-ppc
   cli-ppc` y `WIISP_CLI="qemu-ppc build-pc/wiisp-cli-ppc" python3
   tests/autotests.py ...`.
+- devkitPPC sale de la imagen Docker oficial: el script la baja de
+  `mirror.gcr.io` (sin límite) y, si no responde, de Docker Hub (100
+  manifiestos por hora y por IP: en la nube suele dar "429").
+  `pkg.devkitpro.org` está bloqueado en el entorno de la nube.
+- Programas de PSP de prueba (`tests/guest`): `apt-get install
+  gcc-mipsel-linux-gnu` y `make -C tests/guest check`.
 - Dolphin (opcional, lento de compilar) sirve para probar el .dol:
   `tools/dolphin_autotest.py` (necesita Xvfb).
 - CLI de PC: `build-pc/wiisp-cli --run --frames N --log salida.log juego.iso`
@@ -466,17 +477,54 @@ los vblanks que faltan) y `scePowerCheckWlanCoexistenceClock` (0xA85880D0,
 fallando por `sceDisplayIsVblank` (siempre 0) y sceDisplayWaitVblank
 dentro del vblank, que ya fallaban.
 
+### v0.5.7: teclado, escenas repetibles e interruptores
+
+- Integrado el teclado en pantalla (OSK) que hizo el usuario
+  (`src/wii/osk.c`, `sceUtilityOsk` en `utility.c`, `tests/test_osk.c`).
+- Paso 1 de la metodología: **guiones de botones** (`src/frontend/guion.c`,
+  formato en `guion.h`). `app.c` los reproduce (el mando real se ignora) o
+  los graba (lo que llega por `app_set_input`, con el stick redondeado y
+  ya redondeado para el juego), y escribe **huellas** del estado cada 60
+  cuadros (ciclos, PC, registros, RAM muestreada; RAM entera en capturas y
+  al final). Mismo resultado en x86 y en PowerPC (`tests/guest/guion_eco`).
+  Partidas de prueba en `<juego>.partidas` (vaciada y rellenada desde
+  `<juego>.partidas_base`): lo que el juego guarde no cambia la siguiente
+  corrida. Mientras hay guion, el OSK no se abre.
+- Wii: al abrir un juego, **+/R graba un guion**. `autotest.txt` acepta
+  rutas con dispositivo, `veces N` y `opt NOMBRE 0|1`; con guion, cada
+  corrida deja `.log` (con `[TIEMPOS]`), `.huellas`, capturas y `.stats`.
+  Guía para el usuario: `docs/ESCENAS_DE_PRUEBA.md`.
+- PC: `--guion`, `--salida`, `--grabar`, `--partidas`, `--opt`.
+  `tools/comparar_huellas.py` dice el primer cuadro en que dos corridas se
+  separan.
+- Paso 3: **interruptores** en `src/core/opt.h` con todos los nombres de la
+  hoja de ruta (ninguno implementado aún: `lista = 0`). Línea `[OPT]` antes
+  de cada `[TIEMPOS]`.
+- La hora del RTC ya salía de los ciclos emulados (`HLE_EPOCH_BASE` +
+  `hle_now_us`): no hizo falta fijarla.
+- Hallazgo para el paso 2: en el Wii **no hay espera real del vblank** (ni
+  `VIDEO_WaitVSync` ni limitador en el bucle; con todos los hilos esperando,
+  `kernel_run_until` salta al siguiente evento). El 40 % de "syscalls" de
+  los menús de DBZ no es espera: hay que medir qué syscalls se lo llevan
+  antes de decidir dónde va `PROF_ESPERA`.
+
 ### Para el siguiente chat (empezar aquí)
 
-El plan de rendimiento está en `docs/HOJA_DE_RUTA.md` (documentos del
-usuario + correcciones). Acordado: guardar los interruptores con esos
-nombres y hacer primero la infraestructura de interruptores y la primera
-tanda (prof_espera, skinning rápido, matrices al cambiar, color constante,
-cpu_sin_extra), verificable en el PC; el usuario mide en el Wii con DBZ y
-GTA. Pendiente del usuario: probar la 0.5.4+ (warping, TN/TS y MR/ME). El
-usuario implementó por su cuenta el teclado (OSK) y las partidas de DBZ:
-si están en la rama, revisarlos y pasarles las pruebas. Numeración: 0.5.6.x
-mientras se arreglaba DBZ; lo siguiente puede ser 0.5.7.
+Metodología acordada (detalle en `docs/HOJA_DE_RUTA.md`): primero medir
+(pasos 1-5), después optimizar de una en una (pasos 6-11).
+
+- Hechos: paso 1 (guiones; falta que el usuario grabe las dos escenas: una
+  pelea de DBZ y un juego 2D, SFA3 MAX o Metal Slug XX, y compruebe con
+  `veces 2` que salen idénticas) y paso 3 (interruptores).
+- Siguiente: paso 2 (medir el tiempo por syscall en los menús y separar la
+  espera, ver el hallazgo de la v0.5.7) y paso 4 (escribir en wiisp.log
+  DBAT0-7, HID4, SDR1 y GQR1-7 al arrancar). Después el usuario hace la
+  línea base (paso 5) en el Wii real.
+
+Pendiente de antes: la primera tanda del GE (skinning rápido, matrices al
+cambiar, color constante; ver el carrito) entra en los pasos 6-11 con su
+interruptor. Pendiente del usuario: probar la 0.5.4+ (warping, TN/TS y
+MR/ME). Numeración: 0.5.6.x mientras se arreglaba DBZ, ahora 0.5.7.
 
 ### Carrito (para cuando el usuario vuelva a su Wii)
 

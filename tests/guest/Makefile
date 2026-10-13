@@ -1,7 +1,8 @@
 # WIISP - tests/guest/Makefile
 # Programas de PSP de prueba, compilados con el gcc MIPS de Linux
 # (apt-get install gcc-mipsel-linux-gnu). Cada uno se ejecuta con
-# build-pc/wiisp-cli y su salida se compara con el .expected.
+# build-pc/wiisp-cli y su salida se compara con el .expected. Si hay un
+# <programa>.guion, se ejecuta con ese guion de botones.
 #
 #   make -C tests/guest            # compilar
 #   make -C tests/guest check      # compilar y comparar
@@ -24,7 +25,8 @@ $(OUT)/%.elf: %.c guest.h crt0.S link.ld $(OUT)/imports.S
 
 check: all
 	@ok=0; bad=0; for p in $(PROGS); do \
-		if $(CLI) --run --quiet --frames 600 $(OUT)/$$p.elf 2>/dev/null | diff -u $$p.expected - > $(OUT)/$$p.diff; \
+		g=; [ -f $$p.guion ] && g="--guion $$p.guion --salida $(OUT)/$$p"; \
+		if $(CLI) --run --quiet --frames 600 $$g $(OUT)/$$p.elf 2>/dev/null | diff -u $$p.expected - > $(OUT)/$$p.diff; \
 		then echo "PASA  $$p"; ok=$$((ok+1)); else echo "FALLA $$p"; cat $(OUT)/$$p.diff; bad=$$((bad+1)); fi; \
 	done; echo "$$ok pasan, $$bad fallan"; [ $$bad -eq 0 ]
 

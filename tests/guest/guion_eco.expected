@@ -1,0 +1,9 @@
+cuadro 1: botones 00000000 stick 128 128
+cuadro 10: botones 00004000 stick 128 128
+cuadro 12: botones 00000000 stick 128 128
+cuadro 30: botones 00000009 stick 128 128
+cuadro 31: botones 00000010 stick 255 0
+cuadro 90: botones 00000000 stick 128 128
+cuadro 100: hora 00e13c0e0cc9f4f1
+cuadro 119: botones 0000b300 stick 128 128
+cuadro 120: botones 000000e0 stick 0 200

@@ -1,0 +1,10 @@
+# Guion de prueba de guion_eco.c (ver src/frontend/guion.h)
+10 CRUZ
+12 -
+30 START SELECT
+31 ARRIBA stick 255 0
+60 captura
+90 -
+119 L R CUADRADO TRIANGULO CIRCULO
+120 IZQUIERDA ABAJO DERECHA stick 0 200
+150 fin

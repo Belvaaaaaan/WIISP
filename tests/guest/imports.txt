@@ -45,3 +45,4 @@ UtilsForUser sceKernelDcacheWritebackRange
 UtilsForUser sceKernelDcacheWritebackAll
 sceCtrl sceCtrlReadBufferPositive
 sceCtrl sceCtrlSetSamplingMode
+sceRtc sceRtcGetCurrentTick

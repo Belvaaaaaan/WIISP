@@ -30,6 +30,8 @@ void test_formats(void);
 void test_io(void);
 /* tests/test_osk.c: teclado en pantalla (sceUtilityOsk) */
 void test_osk(void);
+/* tests/test_guion.c: guion de botones e interruptores de optimización */
+void test_guion(void);
 /* tests/test_vfpu.c: caminos rápidos de la VFPU contra el general */
 void test_vfpu(void);
 /* tests/test_texcache.c: avisos de escritura y caché de texturas */

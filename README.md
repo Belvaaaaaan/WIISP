@@ -167,6 +167,16 @@ En la línea de texturas, "sin leerlas" son las veces que bastó la copia ya
 decodificada y "cambios sin aviso" los que solo se vieron al releerlas
 (ARQUITECTURA.md 7).
 
+Antes de cada bloque `[TIEMPOS]`, una línea `[OPT]` dice qué interruptores de
+optimización estaban activos (`src/core/opt.h`).
+
+### Escenas de prueba repetibles
+
+Para comparar una optimización con y sin ella, se graba un guion de botones
+jugando en el Wii (al abrir el juego, **+/R**) y `autotest.txt` lo reproduce
+igual cada vez, con su registro, huellas del estado y capturas. Cómo se hace,
+paso a paso: [docs/ESCENAS_DE_PRUEBA.md](docs/ESCENAS_DE_PRUEBA.md).
+
 ### En Windows
 
 `make -f Makefile.pc win` compila `build-win/wiisp-cli.exe` (con

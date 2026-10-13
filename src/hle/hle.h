@@ -19,7 +19,7 @@
 
 /* Versión de WIISP (la misma que dist/apps/wiisp/meta.xml): sale en el
    menú y al principio de wiisp.log */
-#define WIISP_VERSION "0.5.6.1"
+#define WIISP_VERSION "0.5.7"
 
 typedef void (*HleFunc)(void);
 
@@ -125,6 +125,8 @@ void hle_log_quiet(const char *fmt, ...) __attribute__((format(printf, 1, 2)));
 /* Además de stderr, el registro va a este archivo (NULL = ninguno). Se
    vacía en cada línea para que sobreviva a un cuelgue. */
 void hle_set_log_file(const char *path);
+/* Vuelve a abrir el registro añadiendo al final (sin borrarlo) */
+void hle_reopen_log_file(const char *path);
 /* Asegura que lo escrito llega a la SD (también lo hace solo cada segundo) */
 void hle_log_sync(void);
 

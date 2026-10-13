@@ -16,8 +16,16 @@
  *     --turbo           ni geometría ni dibujo (como el turbo del Wii)
  *     --fast-math       geometría con float normal, como con GX en el Wii
  *     --capturas N      cada N frames, una captura (BMP) si la imagen cambió
- *     --root DIR        DIR hace de ms0:/ y el ejecutable está dentro (como
- *                       el --root de PPSSPP para pspautotests: "../x" funciona)
+ *     --root DIR        DIR hace de ms0:/ y el ejecutable está dentro (para
+ *                       pspautotests: "../x" funciona)
+ *     --guion FILE      reproducir un guion de botones (frontend/guion.h); al
+ *                       llegar a "fin" se para. Huellas y capturas van a
+ *                       <salida>.huellas y <salida>.c<cuadro>.bmp
+ *     --salida PREFIJO  prefijo de lo anterior (por defecto, el del guion)
+ *     --grabar FILE     grabar en FILE lo que se pulse (Windows: teclado)
+ *     --partidas DIR    partidas de prueba: DIR (terminado en .partidas) se
+ *                       vacía y se llena con DIR_base si existe
+ *     --opt NOMBRE=0|1  interruptor de optimización (core/opt.h); repetible
  *
  * En Windows, con la consola en primer plano, W A S D mueven el stick
  * analógico de la PSP y ENTER es START.
@@ -262,6 +270,9 @@ static unsigned long long framebuffer_hash(void){
 int main(int argc, char **argv){
 	int max_imports = 16, run = 0, frames = 1800, i, exited = 0, every = 0;
 	const char *path = NULL, *imports = NULL, *screenshot = NULL;
+	const char *guion = NULL, *salida = NULL, *grabar = NULL, *partidas = NULL;
+	const char *opts[64];
+	int n_opts = 0;
 
 	for(i = 1; i < argc; i++){
 		if(!strcmp(argv[i], "--all")) max_imports = -1;
@@ -278,17 +289,50 @@ int main(int argc, char **argv){
 		else if(!strcmp(argv[i], "--root") && i + 1 < argc) app_set_root(argv[++i]);
 		else if(!strcmp(argv[i], "--osk") && i + 1 < argc){ osk_text = argv[++i]; app_set_osk(host_osk); }
 		else if(!strcmp(argv[i], "--log") && i + 1 < argc) hle_set_log_file(argv[++i]);   /* como wiisp.log */
+		else if(!strcmp(argv[i], "--guion") && i + 1 < argc) guion = argv[++i];
+		else if(!strcmp(argv[i], "--salida") && i + 1 < argc) salida = argv[++i];
+		else if(!strcmp(argv[i], "--grabar") && i + 1 < argc) grabar = argv[++i];
+		else if(!strcmp(argv[i], "--partidas") && i + 1 < argc) partidas = argv[++i];
+		else if(!strcmp(argv[i], "--opt") && i + 1 < argc){
+			if(n_opts < (int)(sizeof(opts) / sizeof(opts[0]))) opts[n_opts++] = argv[i + 1];
+			i++;
+		}
 		else path = argv[i];
 	}
 	if(!path){
 		fprintf(stderr, "uso: %s [--all] [--imports FILE] [--run] [--frames N] [--quiet]\n"
 		                "          [--screenshot FILE] [--capturas N] [--log FILE] [--osk TEXTO]\n"
+		                "          [--guion FILE] [--salida PREFIJO] [--grabar FILE] [--partidas DIR]\n"
+		                "          [--opt NOMBRE=0|1]...\n"
 		                "          EBOOT.PBP|archivo.elf|archivo.prx|imagen.iso|imagen.cso\n", argv[0]);
 		return 2;
 	}
 	if(app_init()) return 1;
+	for(i = 0; i < n_opts; i++){
+		int r = app_opt_set(opts[i]);
+		if(r) fprintf(stderr, "[OPT] %s: %s\n", opts[i], r > 0 ? "todavia no esta implementada" : "no se entiende");
+	}
 	if(app_load(path, max_imports, imports)) return 1;
 	if(!run) return 0;
+	if(partidas){
+		char base[600];
+		snprintf(base, sizeof(base), "%s_base", partidas);
+		if(app_preparar_partidas(partidas, base)){
+			fprintf(stderr, "[WIISP] no se pudieron preparar las partidas en %s (debe terminar en .partidas)\n", partidas);
+			return 1;
+		}
+	}
+	if(guion){
+		char err[160];
+		if(app_guion_reproducir(guion, salida ? salida : guion, err, sizeof(err))){
+			fprintf(stderr, "[WIISP] guion %s: %s\n", guion, err);
+			return 1;
+		}
+		if(app_guion_fin() && (unsigned)frames <= app_guion_fin()) frames = (int)app_guion_fin() + 1;
+	} else if(grabar && app_guion_grabar(grabar)){
+		fprintf(stderr, "[WIISP] no se puede escribir %s\n", grabar);
+		return 1;
+	}
 
 	app_set_output(output);
 	prof_set_clock(prof_ticks, prof_ticks_hz());
@@ -335,6 +379,7 @@ int main(int argc, char **argv){
 		        secs > 0 ? instr / secs / 1e6 : 0.0);
 	}
 	sampler_stop();
+	app_guion_parar();
 #ifdef _WIN32
 	keyboard_flush();
 #endif

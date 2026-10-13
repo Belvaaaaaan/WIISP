@@ -21,6 +21,7 @@
 #include "gpu/ge.h"
 #include "cpu/vfpu.h"
 #include "core/prof.h"
+#include "core/opt.h"
 
 /* Todos los imports de todos los módulos cargados: el código del syscall
    de cada stub es su índice aquí */
@@ -268,6 +269,12 @@ void hle_set_log_file(const char *path){
 	if(log_file) fprintf(log_file, "[WIISP] version " WIISP_VERSION "\n");
 }
 
+void hle_reopen_log_file(const char *path){
+	if(log_file) fclose(log_file);
+	log_file = path ? fopen(path, "a") : NULL;
+	log_written = 0;
+}
+
 void hle_log_new_program(void){ log_written = 0; }
 
 /* En la SD (libfat) el tamaño del archivo solo se apunta al cerrarlo o con
@@ -455,6 +462,8 @@ void hle_profile_report(const char *why){
 	secs = (double)total / (double)prof_hz;
 	game = (double)(cpu_cycles - prof_base.cycles) / (double)PSP_CPU_HZ;
 	ge_get_stats(&ge);
+	opt_describe(extra, sizeof(extra));
+	hle_log("[OPT] %s\n", extra);
 	hle_log("[TIEMPOS] %s%s%.1f s reales: %.2f s de juego (%.1f%%), %u vblanks, %llu imagenes (%.2f/s), "
 	        "%.1f M instr (%.2f MIPS)\n", why ? why : "", why ? ", " : "", secs, game, 100.0 * game / secs,
 	        prof_vblanks - prof_base.vblanks, (unsigned long long)(hle_stat_flips - prof_base.flips),

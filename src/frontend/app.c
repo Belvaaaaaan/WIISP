@@ -7,8 +7,13 @@
 
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 #include <strings.h>
 #include "frontend/app.h"
+#include "frontend/guion.h"
+#include "core/opt.h"
+#include "core/prof.h"
+#include "cpu/cpu.h"
 #include "core/memory.h"
 #include "loader/loader.h"
 #include "loader/disc.h"
@@ -32,6 +37,7 @@ int app_init(void){
 	u8 *ram = plat_alloc_big(PSP_RAM_SIZE_32MB);
 	u8 *vram = plat_alloc_big(PSP_VRAM_SIZE);
 	u8 *scratch = plat_alloc_big(PSP_SCRATCH_SIZE);
+	opt_reset();
 	if(!ram || !vram || !scratch){
 		printf("Error: no hay memoria para la RAM de la PSP\n");
 		return -1;
@@ -237,17 +243,173 @@ void app_set_screenshot_path(const char *path){
 	snprintf(screenshot_path, sizeof(screenshot_path), "%s", path ? path : "");
 }
 
+/* --- Guion de botones (frontend/guion.h) --------------------------------- */
+
+enum { G_NADA, G_REPRODUCIR, G_GRABAR };
+
+static struct {
+	int modo;
+	Guion g;
+	u32 pos;              /* siguiente línea por aplicar */
+	int terminado;        /* se llegó a "fin" */
+	char prefijo[512];    /* capturas: <prefijo>.c<cuadro>.bmp */
+	FILE *huellas;
+	FILE *grabacion;
+	u32 botones;          /* último estado grabado */
+	u8 lx, ly;
+	int grabado;          /* ya hay una línea de mando */
+} gs;
+
+static AppOskFunc osk_func;
+static void (*before_capture)(void);
+
+#define HUELLA_CADA 60    /* cuadros entre huellas */
+
+static u32 fnv(u32 h, const u8 *p, u32 n){
+	while(n--){ h ^= *p++; h *= 16777619u; }
+	return h;
+}
+
+static u32 fnv32(u32 h, u32 v){
+	u8 b[4] = { (u8)v, (u8)(v >> 8), (u8)(v >> 16), (u8)(v >> 24) };
+	return fnv(h, b, 4);
+}
+
+/* Huella del estado emulado: si dos corridas del mismo guion se separan, la
+   primera huella distinta dice en qué segundo empezó. Los valores se mezclan
+   como números (no como bytes del anfitrión) para que salgan iguales en el
+   PC y en el Wii. La RAM se muestrea (una palabra cada 1 KB, empezando cada
+   vez en otra posición para cubrir toda la RAM con el tiempo) para que
+   cueste poco; en las capturas y al final se usa entera. */
+static void huella(const char *motivo, int ram_entera){
+	u32 h = 2166136261u, r = 2166136261u, i;
+	int old;
+	if(!gs.huellas) return;
+	old = prof_switch(PROF_REGISTRO);
+	for(i = 0; i < 32; i++) h = fnv32(h, cpu.r[i]);
+	h = fnv32(h, cpu.hi);
+	h = fnv32(h, cpu.lo);
+	for(i = 0; i < 32; i++) h = fnv32(h, cpu.fpr[i].u);
+	h = fnv32(h, cpu.fcr31);
+	if(ram_entera) r = fnv(r, psp_mem.ram, psp_mem.ram_size);
+	else for(i = (frames_run / HUELLA_CADA * 4) & 1023; i < psp_mem.ram_size; i += 1024) r = fnv(r, psp_mem.ram + i, 4);
+	fprintf(gs.huellas, "cuadro %u ciclos %llu pc %08X cpu %08X ram%s %08X%s%s\n", frames_run,
+	        (unsigned long long)cpu_cycles, cpu.pc, h, ram_entera ? "_entera" : "", r,
+	        motivo ? " " : "", motivo ? motivo : "");
+	fflush(gs.huellas);
+	prof_switch(old);
+}
+
+static void capturar(void){
+	char path[560];
+	if(before_capture) before_capture();
+	snprintf(path, sizeof(path), "%s.c%06u.bmp", gs.prefijo, frames_run);
+	app_write_bmp(path);
+	huella("captura", 1);
+}
+
+static void grabar_linea(void){
+	char line[160];
+	int old = prof_switch(PROF_REGISTRO);
+	guion_format(line, sizeof(line), frames_run, gs.botones, gs.lx, gs.ly);
+	fprintf(gs.grabacion, "%s\n", line);
+	fflush(gs.grabacion);
+	prof_switch(old);
+}
+
+static void abrir_huellas(const char *path){
+	char opts[256];
+	gs.huellas = path && path[0] ? fopen(path, "w") : NULL;
+	if(!gs.huellas) return;
+	opt_describe(opts, sizeof(opts));
+	fprintf(gs.huellas, "# huellas de WIISP: una cada %u cuadros\n# [OPT] %s\n", HUELLA_CADA, opts);
+}
+
+int app_guion_reproducir(const char *guion, const char *prefijo, char *err, size_t errlen){
+	char path[560];
+	app_guion_parar();
+	if(guion_load(&gs.g, guion, err, errlen)) return -1;
+	gs.modo = G_REPRODUCIR;
+	snprintf(gs.prefijo, sizeof(gs.prefijo), "%s", prefijo);
+	snprintf(path, sizeof(path), "%s.huellas", prefijo);
+	abrir_huellas(path);
+	hle_set_osk(NULL);   /* el teclado no puede depender de quien mire */
+	return 0;
+}
+
+int app_guion_grabar(const char *guion){
+	char path[560];
+	app_guion_parar();
+	gs.grabacion = fopen(guion, "w");
+	if(!gs.grabacion) return -1;
+	fprintf(gs.grabacion, "# guion de WIISP: cuadro y botones (ver src/frontend/guion.h)\n");
+	gs.modo = G_GRABAR;
+	snprintf(gs.prefijo, sizeof(gs.prefijo), "%s", guion);
+	snprintf(path, sizeof(path), "%s.huellas", guion);
+	abrir_huellas(path);
+	hle_set_osk(NULL);
+	return 0;
+}
+
+void app_guion_parar(void){
+	if(gs.modo == G_GRABAR && gs.grabacion){
+		fprintf(gs.grabacion, "%u fin\n", frames_run);
+		huella("fin", 1);
+	}
+	if(gs.grabacion) fclose(gs.grabacion);
+	if(gs.huellas) fclose(gs.huellas);
+	guion_free(&gs.g);
+	memset(&gs, 0, sizeof(gs));
+	hle_set_osk(osk_func);
+}
+
+int app_guion_activo(void){ return gs.modo; }
+unsigned app_guion_fin(void){ return gs.modo == G_REPRODUCIR ? guion_fin(&gs.g) : 0; }
+void app_set_before_capture(void (*fn)(void)){ before_capture = fn; }
+
+int app_preparar_partidas(const char *dir, const char *base){
+	if(guion_preparar_partidas(dir, base)) return -1;
+	io_set_savedata_dir(dir);
+	return 0;
+}
+void app_set_savedata_dir(const char *dir){ io_set_savedata_dir(dir); }
+
+/* Aplica las líneas del guion que tocan antes de emular este cuadro.
+   Devuelve 1 si el guion terminó. */
+static int guion_paso(void){
+	while(gs.pos < gs.g.n && gs.g.l[gs.pos].cuadro <= frames_run){
+		const GuionLinea *l = &gs.g.l[gs.pos++];
+		if(l->flags & GUION_MANDO) hle_set_input(l->botones, l->lx, l->ly);
+		if(l->flags & GUION_CAPTURA) capturar();
+		if(l->flags & GUION_FIN){
+			huella("fin", 1);
+			gs.terminado = 1;
+			return 1;
+		}
+	}
+	return 0;
+}
+
 int app_start(void){
 	hle_set_output(forward_output);
 	hle_set_screenshot(on_screenshot);
 	frames_run = 0;
 	executed_at_start = cpu_executed;
+	gs.pos = 0;
+	gs.terminado = 0;
+	gs.grabado = 0;
 	return hle_init(&module, host_dir, exec_path);
 }
 
 int app_run_frame(void){
+	int r;
+	if(gs.terminado) return 1;
+	if(gs.modo == G_REPRODUCIR && guion_paso()) return 1;
 	frames_run++;
-	return hle_run_frame();
+	r = hle_run_frame();
+	if(gs.modo && r) huella("termino", 1);
+	else if(gs.modo && frames_run % HUELLA_CADA == 0) huella(NULL, 0);
+	return r;
 }
 
 void app_get_stats(unsigned *frames, unsigned long long *instructions){
@@ -265,13 +427,31 @@ void app_imports_path(const char *path, char *out, size_t out_size){
 		snprintf(out, out_size, "%.*s%.*s.imports.txt", dir_len, path,
 		         (int)(dot ? dot - name : (long)strlen(name)), name);
 }
-const char *app_exit_reason(void){ return hle_exit_reason(); }
+const char *app_exit_reason(void){ return gs.terminado ? "fin del guion" : hle_exit_reason(); }
 void app_set_output(AppOutputFunc func){ output_func = func; }
-void app_set_osk(AppOskFunc func){ hle_set_osk(func); }
+void app_set_osk(AppOskFunc func){
+	osk_func = func;
+	if(!gs.modo) hle_set_osk(func);
+}
 
 void app_set_input(unsigned buttons, unsigned char lx, unsigned char ly){
+	if(gs.modo == G_REPRODUCIR) return;   /* manda el guion */
+	if(gs.modo == G_GRABAR){
+		lx = guion_cuantizar(lx);
+		ly = guion_cuantizar(ly);
+		if(!gs.grabado || buttons != gs.botones || lx != gs.lx || ly != gs.ly){
+			gs.botones = buttons;
+			gs.lx = lx;
+			gs.ly = ly;
+			gs.grabado = 1;
+			grabar_linea();
+		}
+	}
 	hle_set_input(buttons, lx, ly);
 }
+
+int app_opt_set(const char *texto){ return opt_parse(texto); }
+void app_opt_describe(char *buf, size_t size){ opt_describe(buf, size); }
 
 const unsigned char *app_get_framebuffer(unsigned *stride, unsigned *format){
 	HleFramebuffer fb;
