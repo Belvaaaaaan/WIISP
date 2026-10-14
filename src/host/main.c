@@ -393,5 +393,6 @@ int main(int argc, char **argv){
 	keyboard_flush();
 #endif
 	if(screenshot) save_screenshot(screenshot);
+	app_shutdown();
 	return 0;
 }

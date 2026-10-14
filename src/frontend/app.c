@@ -118,6 +118,13 @@ static int load_disc(const char *path){
 	return 0;
 }
 
+void app_shutdown(void){
+	app_guion_parar();
+	hle_shutdown();       /* cierra los archivos que abrió el juego */
+	loader_free(&module);
+	disc_close();         /* y la imagen del UMD */
+}
+
 int app_load(const char *path, int max_imports, const char *imports_out){
 	u32 len = 0;
 	u8 *buf;

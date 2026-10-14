@@ -48,6 +48,7 @@ void input_init(void){
 
 void input_check_power(void){
 	if(!power_pressed) return;
+	app_shutdown();   /* cierra la ISO y los archivos del juego antes de desmontar */
 	hle_log_stats();
 	hle_set_log_file(NULL);   /* cierra wiisp.log antes de desmontar */
 	fatUnmount("sd:");

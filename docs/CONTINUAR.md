@@ -528,6 +528,20 @@ dentro del vblank, que ya fallaban.
   ellas activas también se capturan las partidas normales, sin guion
   (`<juego>.jN.*`, `app_capturas_sin_guion`).
 
+### v0.5.7.3: HOME en el menú dejaba una pantalla roja
+
+- La "pantalla roja" es la de error de libogc 3.1 (`__libogc_panic`: borra
+  el XFB 0xC1700000 con YUV 0x316D31B8 y espera RESET o Z del mando de
+  GameCube). Al salir con HOME se desmontaba la SD con la ISO y los
+  archivos del juego todavía abiertos (se cierran al cargar otro); al
+  terminar, newlib cerraba esos FILE sobre una SD desmontada y reventaba.
+- Ahora `app_shutdown()` cierra guion, archivos del juego, módulo e imagen
+  del UMD antes de desmontar; `shutdown_and_exit()` (wii/main.c) además
+  espera a la GPU y pone la imagen en negro. También al apagar con el
+  botón y al terminar `autotest.txt`. Deja "[WIISP] saliendo" en wiisp.log.
+- Si vuelve a pasar: foto de la pantalla roja (trae PC, LR y la pila) y
+  mirar si wiisp.log termina en "[WIISP] saliendo".
+
 ### Para el siguiente chat (empezar aquí)
 
 Metodología acordada (detalle en `docs/HOJA_DE_RUTA.md`): primero medir

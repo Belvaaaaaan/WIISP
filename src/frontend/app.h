@@ -37,6 +37,12 @@ int  app_is_disc_image(const char *path);
    carpeta si es un EBOOT.PBP, si no "<nombre>.imports.txt" */
 void app_imports_path(const char *path, char *out, size_t out_size);
 
+/* Cierra todo lo que tenga abierto el programa cargado (la imagen del UMD,
+   los archivos del juego, el guion). Hay que llamarla antes de desmontar
+   la SD o el USB: un archivo abierto en un dispositivo ya desmontado
+   revienta al cerrarse al salir. */
+void app_shutdown(void);
+
 /* Prepara la ejecución del programa cargado. 0 = correcto. */
 int  app_start(void);
 

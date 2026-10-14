@@ -528,10 +528,32 @@ static int autotest(const char *appdir){
 	snprintf(path, sizeof(path), "%s/autotest.done", base);
 	done = fopen(path, "w");
 	if(done){ fprintf(done, "%d\n", count); fclose(done); }
+	app_shutdown();
 	hle_set_log_file(NULL);
 	fatUnmount("sd:");
 	SYS_ResetSystem(SYS_POWEROFF, 0, 0);
 	return 1;
+}
+
+/* Vuelta al Homebrew Channel (o al menú del Wii). El orden importa: antes de
+   desmontar la SD hay que cerrar todo lo que siga abierto (la ISO, los
+   archivos del juego, wiisp.log), porque al salir se cierran los archivos
+   pendientes y uno que apunte a una SD desmontada hace saltar la pantalla
+   roja de error. También se deja la GPU parada y la imagen en negro, para
+   que no se vea basura mientras carga el Homebrew Channel. */
+static void shutdown_and_exit(int status){
+	app_shutdown();
+	hle_log_stats();
+	hle_log_quiet("[WIISP] saliendo\n");
+	hle_set_log_file(NULL);
+	fflush(stdout);
+	fatUnmount("sd:");
+	fatUnmount("usb:");
+	GX_DrawDone();
+	VIDEO_SetBlack(TRUE);
+	VIDEO_Flush();
+	VIDEO_WaitVSync();
+	exit(status);
 }
 
 int main(int argc, char **argv){
@@ -547,7 +569,7 @@ int main(int argc, char **argv){
 		printf("Error: %s\n", "no hay memoria o no se pudo montar la SD/USB");
 		printf("Pulsa A o B para salir.\n");
 		wait_accept();
-		return 1;
+		shutdown_and_exit(1);
 	}
 
 	/* La configuración vive junto al boot.dol (p. ej. sd:/apps/wiisp/) */
@@ -574,9 +596,6 @@ int main(int argc, char **argv){
 
 	while(menu_choose_file(path, sizeof(path)))
 		open_file(path);
-	hle_log_stats();
-	hle_set_log_file(NULL);   /* cierra wiisp.log antes de volver al Homebrew Channel */
-	fatUnmount("sd:");
-	fatUnmount("usb:");
+	shutdown_and_exit(0);
 	return 0;
 }
