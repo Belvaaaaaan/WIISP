@@ -51,8 +51,8 @@ volver a medir tras cada paso.
 
 **Después, optimizar de una en una (pasos 6 a 11):**
 
-6. 2.1 `cpu_sin_extra`: hoy `step()` hace `ld32(pc)` y un `switch` por
-   instrucción. Poco código y poco riesgo; 2D de ~55 % a ~83 % según la
+6. 2.1 `cpu_sin_extra` — hecho en la v0.5.9 (abajo). Antes `step()` hacía
+   `ld32(pc)` y un `switch` por instrucción. Poco código y poco riesgo; 2D de ~55 % a ~83 % según la
    estimación. Va antes que la fase 1 porque es casi gratis.
 7. Medir el render-to-texture antes de hacerlo: registrar cada render
    target y quién lo consume (GE, CPU, pantalla): da el techo real de 1.1.
@@ -119,6 +119,18 @@ se aplica una sola. En el PC, 10-19 veces más rápido por vértice con huesos;
 diferencia con el exacto de 2e-5 de la suma de los términos (el redondeo de
 float24), tests/test_skin.c con 600 vértices al azar. En DBZ "leer vertices"
 era el 30 % de las peleas con el 47 % de vértices con huesos.
+
+Hecha (v0.5.9): `cpu_sin_extra` (2.1). `cpu_run` en una sola función con
+pc, npc, la RAM y un contador local de instrucciones en registros; el
+estado global (pc, reloj, instrucciones) se pone al día solo antes de
+llamar fuera (syscall, VFPU, memoria lenta, fallos) y la petición de parar
+solo se mira después. Idéntica ciclo a ciclo al intérprete de antes, que
+queda como `cpu_run_ref` (interp_ref.c, `cpu_sin_extra=0`):
+tests/test_interp.c (3400 programas aleatorios en paralelo con los dos) y
+las 275 pspautotests con huella en cada cuadro. En el Wii, un addiu pasa
+de 54 a 24 instrucciones del Broadway (de 20 a 5 accesos a memoria), un lw
+de ~66 a 29; bajo qemu-ppc, x2,2 MIPS. Queda el despacho por `switch`
+(dos saltos indirectos para SPECIAL): eso es 2.2.
 
 Primera tanda acordada (todas "más barato", verificables en el PC):
 0.1 `prof_espera`, **skinning rápido** (`ge_skin_rapido`), **matrices al

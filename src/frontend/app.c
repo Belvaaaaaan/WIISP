@@ -277,7 +277,9 @@ static void (*before_capture)(void);
 static void (*mode_text)(char *buf, size_t size);
 static unsigned capturas_cada = 400;
 
-#define HUELLA_CADA 60    /* cuadros entre huellas */
+#ifndef HUELLA_CADA
+#define HUELLA_CADA 60    /* cuadros entre huellas (-DHUELLA_CADA=1: cada cuadro) */
+#endif
 
 static u32 fnv(u32 h, const u8 *p, u32 n){
 	while(n--){ h ^= *p++; h *= 16777619u; }

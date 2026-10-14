@@ -42,6 +42,8 @@ void test_skin(void);
 void test_vfpu(void);
 /* tests/test_texcache.c: avisos de escritura y caché de texturas */
 void test_texcache(void);
+/* tests/test_interp.c: el intérprete contra el de referencia */
+void test_interp(void);
 /* tests/test_wiimote.c: el Wiimote en horizontal como mando de PSP */
 void test_wiimote(void);
 

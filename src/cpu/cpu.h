@@ -67,6 +67,11 @@ extern u64 cpu_executed;
    Devuelve las instrucciones ejecutadas. */
 u32 cpu_run(u32 max_cycles);
 
+/* El mismo intérprete en su forma sencilla (todo el estado en memoria y
+   todo comprobado en cada instrucción). cpu_run lo usa con cpu_sin_extra=0;
+   los dos dan exactamente el mismo resultado, ciclo a ciclo. */
+u32 cpu_run_ref(u32 max_cycles);
+
 /* Lo implementa el HLE: se llama al ejecutar `syscall code`, con cpu.pc ya
    apuntando a la instrucción siguiente. */
 void hle_syscall(u32 code);

@@ -642,18 +642,58 @@ dentro del vblank, que ya fallaban.
   en float y una sola multiplicación. Modo exacto (ME) sin cambios.
   `ge_test_decode_vertex` expone la decodificación para tests/test_skin.c.
 
+### v0.5.9: el intérprete sin coste por instrucción (`cpu_sin_extra`, 2.1)
+
+- Medido con r7/r8 (0.5.8): peleas de DBZ a 12-15 FPS según el usuario
+  (13,8 % de velocidad), escena de 307 s a 254 s. En las peleas, CPU
+  24,4 %; en las escenas 2D, la CPU es casi todo (~11,6 MIPS).
+- `cpu_run` (src/cpu/interp.c) reescrito en una sola función: pc, npc, el
+  puntero a la RAM y su tamaño en variables locales; un contador local de
+  32 bits en vez de sumar en cada instrucción a `cpu_cycles` y
+  `cpu_executed` (64 bits, en memoria); lectura de la instrucción directa de
+  la RAM; caminos lentos de memoria fuera de línea; switch con un caso para
+  cada valor (sin comprobar el rango). El estado global se pone al día solo
+  antes de llamar fuera (syscall, VFPU, memoria lenta, fallos) y
+  `cpu_stop_requested` solo se mira después de esas llamadas: son las
+  únicas que pueden pedir parar (no hay nadie más que lo ponga).
+- El de antes queda como `cpu_run_ref` (src/cpu/interp_ref.c) y se usa con
+  `cpu_sin_extra=0`. Un cambio en una instrucción va en los dos.
+- Verificación: tests/test_interp.c ejecuta 3400 programas aleatorios
+  (2,1 M instrucciones: todas las familias, saltos likely, riesgo de bc1x,
+  RAM/espejos/scratchpad/VRAM, VFPU, mfic/mtic, fallos y saltos a
+  direcciones inválidas) en trozos aleatorios con los dos intérpretes y
+  compara todo el estado; detecta los errores metidos a propósito
+  (prueba de mutaciones). Las 275 pspautotests con huella en **cada**
+  cuadro (`-DHUELLA_CADA=1`), `cpu_sin_extra=0` contra `=1`: CPU, ciclos y
+  pc idénticos en las 8477 huellas, y los 7 programas guest también.
+- Velocidad: en el Wii (objdump de interp.o), un addiu pasa de 54
+  instrucciones del Broadway con 20 accesos a memoria a 24 con 5; un lw de
+  ~66 a 29. Bajo qemu-ppc (código PowerPC), pspautotests malloc pasa de
+  18,8 a 40,9 MIPS (x2,2). En el PC (x86) apenas cambia (~5 %): ahí manda
+  el salto indirecto del switch.
+- Hallazgo: con la misma opción, dos ejecuciones de malloc o de algunas de
+  savedata dan distinta la RAM del último MB (la CPU igual). Volcando la
+  RAM: son fechas reales del PC (año, mes, día, hora, minuto y segundos que
+  cambian) que el HLE copia de los archivos: `st_mtime` en sceIoGetstat
+  (io.c, write_stat_common) y `st_ctime/st_atime/st_mtime` en las listas de
+  partidas (utility.c). Al reproducir un guion, las partidas se copian de
+  nuevo (guion_preparar_partidas) y tienen fecha nueva: es muy
+  probablemente la diferencia de RAM entre r1/r2... de DBZ. Propuesta:
+  conservar las fechas al copiar las partidas (y usar mtime en vez de
+  atime), para que dos reproducciones den la misma RAM.
+
 ### Para el siguiente chat (empezar aquí)
 
 Metodología acordada (detalle en `docs/HOJA_DE_RUTA.md`): primero medir
 (pasos 1-5), después optimizar de una en una (pasos 6-11).
 
-- Hechos: paso 1 (guiones; falta que el usuario grabe las dos escenas: una
-  pelea de DBZ y un juego 2D, SFA3 MAX o Metal Slug XX, y compruebe con
-  `veces 2` que salen idénticas) y paso 3 (interruptores).
-- Siguiente: paso 2 (medir el tiempo por syscall en los menús y separar la
-  espera, ver el hallazgo de la v0.5.7) y paso 4 (escribir en wiisp.log
-  DBAT0-7, HID4, SDR1 y GQR1-7 al arrancar). Después el usuario hace la
-  línea base (paso 5) en el Wii real.
+- Hechos: pasos 1, 3, 4 y 5 (guion de DBZ grabado en el Wii; registros del
+  Broadway en wiisp.log; línea base r1-r8), `ge_tex_clut` (0.5.7.8),
+  `ge_skin_rapido` (0.5.8) y 2.1 `cpu_sin_extra` (0.5.9).
+- Siguiente: que el usuario reproduzca dos veces el guion de DBZ con la
+  0.5.9 (r9/r10) para medir 2.1; después el paso 7 (render a textura) y el
+  8 (1.2/1.2b), o lo que digan las mediciones (bajadas de framebuffer por
+  franjas, `ge_mtx_cache`, limitador de cuadros en los menús).
 
 Pendiente de antes: la primera tanda del GE (skinning rápido, matrices al
 cambiar, color constante; ver el carrito) entra en los pasos 6-11 con su

@@ -520,6 +520,7 @@ int main(int argc, char **argv){
 	test_skin();
 	test_vfpu();
 	test_wiimote();
+	test_interp();
 	test_texcache();   /* la última: vacía la memoria */
 
 	printf("\n%d comprobaciones, %d fallos\n", checks, failures);
