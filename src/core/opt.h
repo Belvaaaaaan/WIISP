@@ -30,6 +30,7 @@ enum {
 	OPT_GE_SKIN_RAPIDO,   /* skinning mezclando las matrices por peso */
 	OPT_GE_MTX_CACHE,     /* matrices combinadas solo cuando cambian */
 	OPT_GE_COLOR_CONST,   /* color constante sin luces */
+	OPT_GE_TEX_CLUT,      /* texturas CLUT16/CLUT32 decodificadas de una vez */
 	/* Fase 1: GE */
 	OPT_GE_RTT_GPU,       /* 1.1 render-to-texture en la GPU */
 	OPT_GE_VDEC_ESP,      /* 1.2 decodificadores de vértices por vtype */

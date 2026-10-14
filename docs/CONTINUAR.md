@@ -601,6 +601,16 @@ dentro del vblank, que ya fallaban.
   libre 0x8072F000-0x81800000 (~16,8 MB), MEM2 libre 0x92206000-0x933C6F60.
   2.5 (mem_bat) y 1.2b (psq_l) son posibles.
 
+### v0.5.7.8: primera optimización, `ge_tex_clut`
+
+- Los .log de r1/r2 (0.5.7.6) dieron el dato: en las peleas, las texturas
+  sacadas de framebuffers se leen como CLUT16/CLUT32 y el decodificador
+  genérico tardaba ~38 ms cada una (10,2 s de cada 30). `ge_tex_clut`
+  (`ge_texture_decode_clut16_32` en ge_raster.c, usado por decode_into en
+  gx_ge.c) las decodifica con la paleta convertida una vez. Activada por
+  defecto; `opt ge_tex_clut 0` vuelve al camino de antes.
+- Tiempos de r1 y r2 a menos de 0,2 puntos: la escena sirve para medir.
+
 ### Para el siguiente chat (empezar aquí)
 
 Metodología acordada (detalle en `docs/HOJA_DE_RUTA.md`): primero medir

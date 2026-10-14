@@ -63,6 +63,18 @@ volver a medir tras cada paso.
 11. Decidir el diseño del IR y hacer 2.2 y 2.3 como IR, junto con 2.5
     (BAT). Las fases 3, 4 y 5 vienen después.
 
+## Medido con el censo (v0.5.7.6, DBZ, dos reproducciones del mismo guion)
+
+Peleas a ~7,5 % (las dos corridas a menos de 0,2 puntos). Cada 30 s reales:
+267 texturas que salen de framebuffers tardan **10,2 s en decodificarse**
+(~38 ms cada una, 172 MB) y 374 bajadas tardan 1,9 s. Todas las texturas que
+caen en un framebuffer fallan por **formato**: el juego lee sus búferes de
+480x272 (8888 y 565) y uno de 64x64 (4444) como texturas con paleta
+(CLUT16/CLUT32), y ese formato iba por el decodificador genérico, texel a
+texel. También lee el búfer de profundidad (0x04110000) como textura.
+
+Primera optimización que sale de aquí: `ge_tex_clut` (abajo).
+
 ## Diagnóstico (DBZ TTT, v0.5.6.1)
 
 | Escena | Velocidad | Dónde va el tiempo | Límite |
@@ -95,6 +107,11 @@ instrucciones por segundo de juego, las peleas ~28-36 M.
 - 3.3 (display lists) al final: las listas del GE llevan las matrices.
 
 ## Menú de optimizaciones (nombres de interruptor)
+
+Hecha (v0.5.7.8): `ge_tex_clut`, texturas CLUT16/CLUT32 decodificadas de
+una vez (paleta convertida una vez, índice con desplazamiento/máscara/offset
+y tabla); idéntica bit a bit al decodificador genérico (tests/test_texclut.c,
+400 casos). Ataca el ~34 % del tiempo de las peleas de DBZ.
 
 Primera tanda acordada (todas "más barato", verificables en el PC):
 0.1 `prof_espera`, **skinning rápido** (`ge_skin_rapido`), **matrices al

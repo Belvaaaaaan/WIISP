@@ -17,6 +17,7 @@ const OptInfo opt_info[OPT_N] = {
 	[OPT_GE_SKIN_RAPIDO] = { "ge_skin_rapido", 0, 0 },
 	[OPT_GE_MTX_CACHE]   = { "ge_mtx_cache",   0, 0 },
 	[OPT_GE_COLOR_CONST] = { "ge_color_const", 0, 0 },
+	[OPT_GE_TEX_CLUT]    = { "ge_tex_clut",    1, 1 },
 	[OPT_GE_RTT_GPU]     = { "ge_rtt_gpu",     0, 0 },
 	[OPT_GE_VDEC_ESP]    = { "ge_vdec_esp",    0, 0 },
 	[OPT_GE_VDEC_PSQ]    = { "ge_vdec_psq",    0, 0 },

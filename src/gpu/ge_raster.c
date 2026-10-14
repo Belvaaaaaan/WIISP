@@ -877,6 +877,31 @@ static inline u32 sample_texel(int u, int v, int level){
 	return fetch_texel(u, v, level);
 }
 
+/* CLUT16 y CLUT32 de una vez: la paleta (con el índice ya transformado
+   cabe en 512 entradas) se convierte a 8888 una sola vez y cada texel es
+   desplazar, enmascarar y mirar en la tabla. Mismo resultado que
+   ge_texture_decode para esos formatos, sin pasar por fetch_texel en cada
+   texel. src son las filas del nivel ya sin swizzle. */
+void ge_texture_decode_clut16_32(const u8 *src, u32 pitch, int w, int h, u32 *out, int out_pitch){
+	static u32 pal[512];
+	u32 i, shift = 0, mask = 0xFF, offset = 0;
+	int x, y, bits32 = rs.texfmt == GE_TFMT_CLUT32;
+	for(i = 0; i < 512; i++) pal[i] = lookup_color(i, 0);
+	if(rs.has_clut_shift || rs.has_clut_mask || rs.has_clut_offset){
+		shift = (rs.clutformat >> 2) & 0x1F;
+		mask = (rs.clutformat >> 8) & 0xFF;
+		offset = (((rs.clutformat >> 16) & 0x1F) << 4) & (rs.clut_fmt == GE_FMT_8888 ? 0xFF : 0x1FF);
+	}
+	for(y = 0; y < h; y++){
+		const u8 *row = src + (u32)y * pitch;
+		u32 *o = out + y * out_pitch;
+		if(bits32)
+			for(x = 0; x < w; x++) o[x] = pal[((rd_le32(row + (u32)x * 4) >> shift) & mask) | offset];
+		else
+			for(x = 0; x < w; x++) o[x] = pal[((rd_le16(row + (u32)x * 2) >> shift) & mask) | offset];
+	}
+}
+
 void ge_texture_decode(int level, u32 *out, int w, int h, int pitch){
 	int x, y;
 	for(y = 0; y < h; y++)

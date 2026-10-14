@@ -241,6 +241,9 @@ const GeRasterState *ge_raster_state(void);
    en RGBA de 8 bits (rojo en el byte bajo), fila a fila con `pitch` texels
    por fila. Lee la memoria como el muestreador del GE. */
 void ge_texture_decode(int level, u32 *out, int w, int h, int pitch);
+/* Lo mismo para CLUT16/CLUT32 desde las filas ya sin swizzle (src, con
+   `pitch` bytes por fila), sin pasar texel a texel por el muestreador */
+void ge_texture_decode_clut16_32(const u8 *src, u32 pitch, int w, int h, u32 *out, int out_pitch);
 
 /* --- Renderizador por hardware (opcional) ----------------------------- */
 

@@ -32,6 +32,8 @@ void test_io(void);
 void test_osk(void);
 /* tests/test_guion.c: guion de botones e interruptores de optimización */
 void test_guion(void);
+/* tests/test_texclut.c: texturas CLUT16/CLUT32 rápidas contra el genérico */
+void test_texclut(void);
 /* tests/test_vfpu.c: caminos rápidos de la VFPU contra el general */
 void test_vfpu(void);
 /* tests/test_texcache.c: avisos de escritura y caché de texturas */

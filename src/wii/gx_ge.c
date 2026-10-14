@@ -51,6 +51,7 @@
 #include "core/memory.h"
 #include "hle/hle.h"
 #include "core/prof.h"
+#include "core/opt.h"
 #undef u8
 #undef u16
 #undef u32
@@ -963,7 +964,8 @@ static int decode_into(const GeRasterState *r, int level, u8 *data, int w, int h
 	bytes = pitch * (u32)((h + 7) & ~7);
 	src = bits && r->texvalid[level] && available_bytes(r->texaddr[level], bytes) == bytes && bytes <= sizeof(linear_buf)
 	      ? mem_ptr_r(r->texaddr[level], bytes) : NULL;
-	if(!src || (fmt >= GE_TFMT_CLUT16 && fmt <= GE_TFMT_CLUT32) || (int)bufw < w || (level && !r->use_shared_clut)){
+	if(!src || (fmt >= GE_TFMT_CLUT16 && fmt <= GE_TFMT_CLUT32 && !opt_on[OPT_GE_TEX_CLUT]) || (int)bufw < w ||
+	   (level && !r->use_shared_clut)){
 		/* Genérico */
 		ge_texture_decode(level, decode_buf, w, h, w);
 		for(y = 0; y < h; y++)
@@ -975,6 +977,15 @@ static int decode_into(const GeRasterState *r, int level, u8 *data, int w, int h
 		src = linear_buf;
 	}
 
+	if(fmt == GE_TFMT_CLUT16 || fmt == GE_TFMT_CLUT32){
+		/* ge_tex_clut: los framebuffers que el juego lee como textura con
+		   paleta (efectos) llegan aquí y con el camino genérico costaban
+		   ~38 ms cada uno en el Wii */
+		ge_texture_decode_clut16_32(src, pitch, w, h, decode_buf, w);
+		for(y = 0; y < h; y++)
+			for(x = 0; x < w; x++) put_rgba8(tile_ptr(data, tw, x, y), decode_buf[y * w + x]);
+		return GX_TF_RGBA8;
+	}
 	if(fmt == GE_FMT_565 && allow565){
 		/* RGB565 de GX: mismos bits con rojo arriba, big-endian */
 		for(y = 0; y < h; y++){
