@@ -34,6 +34,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <malloc.h>
+#include <math.h>
 
 /* core/types.h y libogc usan los mismos nombres de tipos con distinta base
    (unsigned int frente a unsigned long): los del núcleo se renombran */
@@ -154,30 +155,72 @@ static unsigned prof_vram_presents, prof_downloads, prof_uploads, prof_decodes;
        parte de la VRAM o la RAM), con tiempo y bytes;
      - texturas que caen dentro de un búfer dibujado: cuántas se usaron
        directamente desde la GPU y, cuando no se pudo, por qué;
-     - los búferes con más actividad. */
+     - los búferes con más actividad.
+   Y para el plan de las texturas con paleta sobre framebuffers (paso 0):
+     - qué rectángulo de la textura muestrean de verdad los vértices (la
+       última fila y columna leídas, contando el vecino del filtro bilineal
+       solo si pesa), con qué filtro y repetición, y el alfa del búfer de
+       origen (uniforme, en la VRAM o en la GPU);
+     - el motivo detallado de cada bajada (textura, búfer arrastrado por el
+       rango de una textura, solape al crear otro destino, copia de bloques
+       del GE...) con la espera a la GPU y la conversión por separado;
+     - cómo empieza cada destino al usarse: borrado completo, restaurado
+       desde su copia o subido desde la VRAM. */
 enum { RD_TEX, RD_CPU, RD_PANT, RD_GE, RD_N };
 enum { RO_FB, RO_VRAM, RO_RAM, RO_N };
 enum { RM_FMT, RM_SWZ, RM_INEXACT, RM_VRAM, RM_ALPHA, RM_NOTEX, RM_N };
+/* Motivo detallado de una bajada */
+enum { DX_TEX, DX_ARRASTRE, DX_CPU, DX_PANT, DX_SOLAPE, DX_CRECE, DX_EXPULSA, DX_TRANSFER, DX_CLUT, DX_GE,
+       DX_SINC, DX_N };
 #define RTT_MAX 24
 typedef struct {
 	core_u32 addr, stride;
 	int fmt, w, h;
 	unsigned binds, dl[RD_N], gpu, dec, miss;
+	unsigned first_clear, first_blit, first_upload;   /* cómo empezó cada uso */
+	int amode, ualpha;
 } RttTarget;
 static RttTarget rtt_t[RTT_MAX];
 static int rtt_n;
 /* Cómo lee el juego un framebuffer como textura con paleta: decide si se
-   puede hacer en la GPU (copia de un canal del EFB + TLUT de GX) */
-#define RTT_PAL_MAX 8
+   puede hacer en la GPU (copia de un canal del EFB + TLUT de GX) y qué
+   parte hace falta decodificar */
+#define RTT_PAL_MAX 12
 typedef struct {
+	core_u32 addr;           /* offset de la textura en la VRAM */
 	int texfmt, surf_fmt, clut_fmt, tw, th, bufw;
 	core_u32 shift, mask, offset;
 	unsigned n;
+	unsigned prims, sprites, through, linear, clamp_s, clamp_t, neighbor_s, neighbor_t;
+	float umin, umax, vmin, vmax;   /* texels en los vértices */
+	int col_max, row_max;           /* última columna y fila leídas (con peso) */
+	unsigned amode[3];
+	int ualpha;
 } RttPal;
 static RttPal rtt_pal[RTT_PAL_MAX];
 static int rtt_npal;
+static RttPal *rtt_cur;                 /* la de las primitivas en curso */
+static core_u32 rtt_tex_off = 0xFFFFFFFFu;   /* textura que se está buscando */
 static unsigned rtt_dl[RD_N], rtt_dec[RO_N], rtt_gpu, rtt_miss[RM_N];
 static u64 rtt_dl_ticks[RD_N], rtt_dec_ticks[RO_N], rtt_dec_bytes[RO_N];
+static unsigned rtt_dx[DX_N], rtt_uploads;
+static u64 rtt_dx_wait[DX_N], rtt_dx_conv[DX_N], rtt_up_ticks;
+static int dl_force = -1;               /* motivo que fija quien llama */
+/* Comandos del GE que provocan bajadas sin ser texturas ni copias */
+#define RTT_CMD_MAX 6
+static unsigned rtt_cmd_n[RTT_CMD_MAX];
+static core_u32 rtt_cmd[RTT_CMD_MAX];
+/* Búfer bajado al crear otro destino encima */
+#define RTT_PAIR_MAX 8
+typedef struct {
+	core_u32 old_addr, new_addr;
+	int old_fmt, new_fmt, old_w, old_h, new_w, new_h;
+	unsigned n;
+} RttPair;
+static RttPair rtt_pair[RTT_PAIR_MAX];
+static int rtt_npair;
+static core_u32 dl_new_addr;            /* el destino que se está creando */
+static int dl_new_fmt, dl_new_w, dl_new_h;
 
 static void *defer_list[64];
 static int ndefer;
@@ -482,7 +525,7 @@ static RttTarget *rtt_target(core_u32 addr, core_u32 stride, int fmt){
 
 static RttTarget *rtt_surface(const Surface *s){
 	RttTarget *t = rtt_target(s->addr, s->stride, s->fmt);
-	if(t){ t->w = s->w; t->h = s->h; }
+	if(t){ t->w = s->w; t->h = s->h; t->amode = s->amode; t->ualpha = s->ualpha; }
 	return t;
 }
 
@@ -532,18 +575,31 @@ static void rtt_note_texture(const GeRasterState *r, int from_gpu){
 		int i;
 		why = RM_FMT;
 		memset(&k, 0, sizeof(k));
+		k.addr = off;
 		k.texfmt = r->texfmt; k.surf_fmt = s->fmt; k.clut_fmt = r->clut_fmt;
 		k.tw = 1 << r->width0_shift; k.th = 1 << r->height0_shift; k.bufw = r->texbufw[0];
 		k.shift = (cf >> 2) & 0x1F; k.mask = (cf >> 8) & 0xFF; k.offset = (cf >> 16) & 0x1F;
 		for(i = 0; i < rtt_npal; i++){
 			RttPal *p = &rtt_pal[i];
-			if(p->texfmt == k.texfmt && p->surf_fmt == k.surf_fmt && p->clut_fmt == k.clut_fmt && p->tw == k.tw &&
-			   p->th == k.th && p->bufw == k.bufw && p->shift == k.shift && p->mask == k.mask && p->offset == k.offset){
+			if(p->addr == k.addr && p->texfmt == k.texfmt && p->surf_fmt == k.surf_fmt && p->clut_fmt == k.clut_fmt &&
+			   p->tw == k.tw && p->th == k.th && p->bufw == k.bufw && p->shift == k.shift && p->mask == k.mask &&
+			   p->offset == k.offset){
 				p->n++;
 				break;
 			}
 		}
-		if(i == rtt_npal && rtt_npal < RTT_PAL_MAX){ k.n = 1; rtt_pal[rtt_npal++] = k; }
+		if(i == rtt_npal && rtt_npal < RTT_PAL_MAX){
+			k.n = 1;
+			k.umin = k.vmin = 1e30f; k.umax = k.vmax = -1e30f;
+			k.col_max = k.row_max = -1;
+			rtt_pal[rtt_npal++] = k;
+		}
+		if(i < rtt_npal){
+			RttPal *p = &rtt_pal[i];
+			rtt_cur = p;
+			p->amode[s->amode < 3 ? s->amode : 0]++;
+			p->ualpha = s->ualpha;
+		}
 	}
 	else if(r->swizzle) why = RM_SWZ;
 	else if(s->addr != off || s->stride != r->texbufw[0] || s->fmt != r->texfmt) why = RM_INEXACT;
@@ -555,20 +611,58 @@ static void rtt_note_texture(const GeRasterState *r, int from_gpu){
 	if(t) t->miss++;
 }
 
+/* Motivo detallado de una bajada (censo) */
+static int rtt_detail(const Surface *s, int why){
+	if(dl_force >= 0) return dl_force;
+	switch(why){
+	case RD_TEX: return s->addr == rtt_tex_off ? DX_TEX : DX_ARRASTRE;
+	case RD_CPU: return DX_CPU;
+	case RD_PANT: return DX_PANT;
+	default: return ge.cur_cmd == GE_TRANSFERSTART ? DX_TRANSFER : ge.cur_cmd == GE_LOADCLUT ? DX_CLUT : DX_GE;
+	}
+}
+
+static void rtt_note_detail(const Surface *s, int dx){
+	int i;
+	if(dx == DX_GE){
+		for(i = 0; i < RTT_CMD_MAX && rtt_cmd_n[i] && rtt_cmd[i] != ge.cur_cmd; i++){}
+		if(i < RTT_CMD_MAX){ rtt_cmd[i] = ge.cur_cmd; rtt_cmd_n[i]++; }
+	} else if(dx == DX_SOLAPE){
+		RttPair *p = NULL;
+		for(i = 0; i < rtt_npair; i++){
+			p = &rtt_pair[i];
+			if(p->old_addr == s->addr && p->old_fmt == s->fmt && p->new_addr == dl_new_addr && p->new_fmt == dl_new_fmt) break;
+		}
+		if(i == rtt_npair){
+			if(rtt_npair == RTT_PAIR_MAX) return;
+			p = &rtt_pair[rtt_npair++];
+			memset(p, 0, sizeof(*p));
+			p->old_addr = s->addr; p->old_fmt = s->fmt; p->old_w = s->w; p->old_h = s->h;
+			p->new_addr = dl_new_addr; p->new_fmt = dl_new_fmt; p->new_w = dl_new_w; p->new_h = dl_new_h;
+		}
+		p->n++;
+	}
+}
+
 /* Contenido de la GPU -> VRAM */
 static void download(Surface *s){
 	if(s == cur_c && efb_c_newer){ efb_to_tex(s); efb_c_newer = 0; }
 	if(s == cur_z && efb_z_newer){ efb_to_tex(s); efb_z_newer = 0; }
 	if(s->has_tex){
 		core_u32 a, e;
-		int why = rtt_reason();
+		int why = rtt_reason(), dx = rtt_detail(s, why);
 		RttTarget *t = rtt_surface(s);
-		u64 t0 = gettime();
+		u64 t0 = gettime(), t1;
 		wait_gpu();
+		t1 = gettime();
 		tex_to_vram(s);
 		prof_downloads++;
 		rtt_dl[why]++;
 		rtt_dl_ticks[why] += gettime() - t0;
+		rtt_dx[dx]++;
+		rtt_dx_wait[dx] += t1 - t0;
+		rtt_dx_conv[dx] += gettime() - t1;
+		rtt_note_detail(s, dx);
 		if(t) t->dl[why]++;
 		/* Las texturas que estén ahí cambiaron (y empieza otro periodo,
 		   como en PPSSPP al leer un framebuffer) */
@@ -635,7 +729,9 @@ static Surface *get_surface(core_u32 addr, core_u32 stride, int fmt, int need_w,
 		/* Crece: la VRAM pasa a mandar y se vuelve a subir */
 		w = s->w > need_w ? s->w : need_w;
 		h = s->h > need_h ? s->h : need_h;
+		dl_force = DX_CRECE;
 		drop_surface(s);
+		dl_force = -1;
 	} else {
 		w = need_w;
 		h = need_h;
@@ -649,6 +745,8 @@ static Surface *get_surface(core_u32 addr, core_u32 stride, int fmt, int need_w,
 		surf_range(&tmp, &a, &e);
 		if(fmt == SURF_Z){ a = addr; e = addr + stride * (core_u32)h * 2; }
 	}
+	dl_new_addr = addr; dl_new_fmt = fmt; dl_new_w = w; dl_new_h = h;
+	dl_force = DX_SOLAPE;
 	for(i = 0; i < MAX_SURF; i++){
 		Surface *o = &surf[i];
 		core_u32 oa, oe;
@@ -658,10 +756,13 @@ static Surface *get_surface(core_u32 addr, core_u32 stride, int fmt, int need_w,
 		if(a < oe && oa < e) drop_surface(o);
 		if(!o->used && !slot) slot = o;
 	}
+	dl_force = -1;
 	if(!slot){
 		/* Sin sitio: fuera el primero que no esté en el EFB */
+		dl_force = DX_EXPULSA;
 		for(i = 0; i < MAX_SURF && !slot; i++)
 			if(&surf[i] != cur_c && &surf[i] != cur_z){ drop_surface(&surf[i]); slot = &surf[i]; }
+		dl_force = -1;
 		if(!slot) return NULL;
 	}
 	slot->tex = memalign(32, (size_t)(w * h * 4));
@@ -796,8 +897,11 @@ static void restore_color(void){
 static void restore_color_body(void){
 	Surface *s = cur_c;
 	if(s->state == VRAM_NEWER || !s->has_tex){
+		u64 t0 = gettime();
 		wait_gpu();
 		vram_to_tex(s);
+		rtt_uploads++;
+		rtt_up_ticks += gettime() - t0;
 		s->state = SYNCED;
 		recompute_watch();
 	}
@@ -1263,6 +1367,7 @@ static void setup_targets(void){
 	skip_draws = 1;
 	stencil_val = -1;
 	reads_dst_alpha = 0;
+	rtt_cur = NULL;
 	if(!r->clear_mode && r->alpha_blend){
 		int sf = r->blend_src, df = r->blend_dst;
 		reads_dst_alpha = sf == BF_DSTALPHA || sf == BF_INVDSTALPHA || sf == BF_DOUBLEDSTALPHA || sf == BF_DOUBLEINVDSTALPHA ||
@@ -1315,9 +1420,16 @@ static void setup_targets(void){
 	tex_su = tex_sv = 1.0f;
 	if(!writes_c) tex_on = 0;
 	if(tex_on){
+		core_u32 ta = r->texaddr[0] & PSP_ADDR_MASK;
+		rtt_tex_off = ta >= PSP_VRAM_BASE && ta < PSP_VRAM_BASE + PSP_VRAM_SIZE ? ta - PSP_VRAM_BASE : 0xFFFFFFFFu;
 		use_rtt = r->texvalid[0] && texture_from_surface(r);
 		if(r->texvalid[0]) rtt_note_texture(r, use_rtt);
 		if(!use_rtt) cur_tex = r->texvalid[0] ? lookup_texture(r) : NULL;
+		if(rtt_cur){
+			rtt_cur->linear += r->mag_filt || r->min_filt;
+			rtt_cur->clamp_s += r->clamp_s != 0;
+			rtt_cur->clamp_t += r->clamp_t != 0;
+		}
 		inv_tw = tex_su / (float)(1 << r->width0_shift);
 		inv_th = tex_sv / (float)(1 << r->height0_shift);
 		tex_proj = r->texture_proj;
@@ -1634,8 +1746,17 @@ static int prepare_targets(int full){
 	}
 	if(skip_draws) return 0;
 	if(touch_c && !restored_c){
-		if(full & 1) restored_c = 1;
-		else restore_color();
+		RttTarget *t = rtt_surface(cur_c);
+		if(full & 1){
+			restored_c = 1;
+			if(t) t->first_clear++;
+		} else {
+			if(t){
+				if(cur_c->state == VRAM_NEWER || !cur_c->has_tex) t->first_upload++;
+				else t->first_blit++;
+			}
+			restore_color();
+		}
 	}
 	if(touch_z && cur_z && !restored_z){
 		if(full & 2) restored_z = 1;
@@ -1731,10 +1852,77 @@ static inline void put_vertex(const GeVertex *v, const GeVertex *cv, float k){
 	    cv->color0, (cv->color1 & 0xFFFFFF) | ((core_u32)fog_byte(v->fogdepth) << 24));
 }
 
+/* --- Censo: qué parte de una textura sobre un framebuffer se lee ----------- */
+
+/* Coordenada de textura en texels */
+static float rtt_texel(const GeVertex *v, int t){
+	float c = t ? v->t : v->s;
+	if(!through) c *= (float)(t ? rtt_cur->th : rtt_cur->tw);
+	return c;
+}
+
+static void rtt_bounds(const GeVertex *v){
+	float u = rtt_texel(v, 0), t = rtt_texel(v, 1);
+	if(u < rtt_cur->umin) rtt_cur->umin = u;
+	if(u > rtt_cur->umax) rtt_cur->umax = u;
+	if(t < rtt_cur->vmin) rtt_cur->vmin = t;
+	if(t > rtt_cur->vmax) rtt_cur->vmax = t;
+}
+
+/* Último texel leído a lo largo de un eje de un sprite: posiciones p0, p1
+   (píxeles) con coordenadas c0, c1 (texels). GX muestrea en el centro de
+   cada píxel cubierto; con filtro lineal lee floor(c - 0.5) y el siguiente,
+   que solo cuenta si su peso no es 0. -1 si no cubre ningún píxel. */
+static int rtt_axis_last(float p0, float p1, float c0, float c1, int linear, unsigned *neighbor){
+	float lo = p0 < p1 ? p0 : p1, hi = p0 < p1 ? p1 : p0;
+	float first = ceilf(lo - 0.5f) + 0.5f, last = ceilf(hi - 0.5f) - 0.5f, a, b, m, f;
+	int i;
+	if(last < first || p1 == p0) return -1;
+	a = c0 + (first - p0) * (c1 - c0) / (p1 - p0);
+	b = c0 + (last - p0) * (c1 - c0) / (p1 - p0);
+	m = a > b ? a : b;
+	if(!linear) return (int)floorf(m);
+	f = m - 0.5f;
+	i = (int)floorf(f);
+	if(f > (float)i){ (*neighbor)++; return i + 1; }
+	return i;
+}
+
+static void rtt_note_sprite(const GeVertex *v0, const GeVertex *v1){
+	const GeRasterState *r = ge_raster_state();
+	int linear = r->mag_filt || r->min_filt, swap = (v0->x < v1->x) != (v0->y < v1->y), c, w;
+	float x0 = (float)v0->x / 16.0f, x1 = (float)v1->x / 16.0f, y0 = (float)v0->y / 16.0f, y1 = (float)v1->y / 16.0f;
+	float s0 = rtt_texel(v0, 0), s1 = rtt_texel(v1, 0), t0 = rtt_texel(v0, 1), t1 = rtt_texel(v1, 1);
+	rtt_cur->prims++;
+	rtt_cur->sprites++;
+	rtt_cur->through += through;
+	rtt_bounds(v0);
+	rtt_bounds(v1);
+	/* Con la orientación cambiada, s va a lo largo de y y t de x (draw_sprite) */
+	c = swap ? rtt_axis_last(y0, y1, s0, s1, linear, &rtt_cur->neighbor_s) : rtt_axis_last(x0, x1, s0, s1, linear, &rtt_cur->neighbor_s);
+	w = swap ? rtt_axis_last(x0, x1, t0, t1, linear, &rtt_cur->neighbor_t) : rtt_axis_last(y0, y1, t0, t1, linear, &rtt_cur->neighbor_t);
+	if(c > rtt_cur->col_max) rtt_cur->col_max = c;
+	if(w > rtt_cur->row_max) rtt_cur->row_max = w;
+}
+
+/* Triángulos: solo los límites de los vértices (y el vecino, por si acaso) */
+static void rtt_note_triangle(const GeVertex *v0, const GeVertex *v1, const GeVertex *v2){
+	const GeVertex *v[3] = { v0, v1, v2 };
+	int i;
+	rtt_cur->prims++;
+	for(i = 0; i < 3; i++){
+		int c = (int)ceilf(rtt_texel(v[i], 0)), w = (int)ceilf(rtt_texel(v[i], 1));
+		rtt_bounds(v[i]);
+		if(c > rtt_cur->col_max) rtt_cur->col_max = c;
+		if(w > rtt_cur->row_max) rtt_cur->row_max = w;
+	}
+}
+
 static void gx_triangle(const GeVertex *v0, const GeVertex *v1, const GeVertex *v2){
 	const GeVertex *c;
 	float k;
 	if(!prepare(0)) return;
+	if(rtt_cur && tex_on) rtt_note_triangle(v0, v1, v2);
 	c = flat ? v2 : NULL;
 	k = tex_on && !through && tex_norm ? tex_scale3(v0, v1, v2) : 1.0f;
 	GX_Begin(GX_TRIANGLES, GX_VTXFMT0, 3);
@@ -1778,6 +1966,7 @@ static void draw_sprite(const GeVertex *v0, const GeVertex *v1){
 static void gx_rect(const GeVertex *v0, const GeVertex *v1){
 	if(v0->x == v1->x || v0->y == v1->y) return;
 	if(!prepare(0)) return;
+	if(rtt_cur && tex_on) rtt_note_sprite(v0, v1);
 	draw_sprite(v0, v1);
 	drawn();
 }
@@ -1927,12 +2116,45 @@ void gx_ge_rtt_report(char *buf, size_t size){
 	        rtt_dec[RO_RAM], tk_ms(rtt_dec_ticks[RO_RAM]), (double)rtt_dec_bytes[RO_RAM] / (1024.0 * 1024.0),
 	        rtt_gpu, misses, rtt_miss[RM_FMT], rtt_miss[RM_SWZ], rtt_miss[RM_INEXACT], rtt_miss[RM_VRAM],
 	        rtt_miss[RM_ALPHA], rtt_miss[RM_NOTEX]);
+	/* Bajadas por motivo detallado, con la espera a la GPU aparte */
+	if(len < size){
+		static const char *const dxn[DX_N] = {
+			"textura", "arrastradas por el rango de una textura", "CPU", "pantalla", "solape al crear otro destino",
+			"el destino crece", "sin sitio", "copia de bloques del GE", "carga de paleta del GE", "otros comandos del GE",
+			"capturas y sincronizar"
+		};
+		int any = 0;
+		len += (size_t)snprintf(buf + len, size - len, "rtt: bajadas por motivo (espera a la GPU + conversion):");
+		for(i = 0; i < DX_N && len < size; i++){
+			if(!rtt_dx[i]) continue;
+			len += (size_t)snprintf(buf + len, size - len, "%s %s %u (%u+%u ms)", any ? "," : "", dxn[i], rtt_dx[i],
+			                        tk_ms(rtt_dx_wait[i]), tk_ms(rtt_dx_conv[i]));
+			any = 1;
+		}
+		if(len < size)
+			len += (size_t)snprintf(buf + len, size - len, "%s; subidas VRAM->GPU %u (%u ms)\n", any ? "" : " ninguna",
+			                        rtt_uploads, tk_ms(rtt_up_ticks));
+	}
+	if(rtt_dx[DX_GE] && len < size){
+		len += (size_t)snprintf(buf + len, size - len, "rtt: bajadas por comandos del GE:");
+		for(i = 0; i < RTT_CMD_MAX && rtt_cmd_n[i] && len < size; i++)
+			len += (size_t)snprintf(buf + len, size - len, " %02X x%u", (unsigned)rtt_cmd[i], rtt_cmd_n[i]);
+		if(len < size) len += (size_t)snprintf(buf + len, size - len, "\n");
+	}
+	for(i = 0; i < rtt_npair && len < size; i++){
+		const RttPair *p = &rtt_pair[i];
+		len += (size_t)snprintf(buf + len, size - len,
+		        "rtt: solape: %08X %s %dx%d bajado al crear %08X %s %dx%d: %u veces\n",
+		        (unsigned)(PSP_VRAM_BASE + p->old_addr), p->old_fmt == SURF_Z ? "Z" : fmts[p->old_fmt & 3], p->old_w, p->old_h,
+		        (unsigned)(PSP_VRAM_BASE + p->new_addr), p->new_fmt == SURF_Z ? "Z" : fmts[p->new_fmt & 3], p->new_w, p->new_h,
+		        p->n);
+	}
 	/* Paletas sobre framebuffers, de más a menos usadas */
 	{
 		static const char *const tf[] = { "565", "5551", "4444", "8888", "CLUT4", "CLUT8", "CLUT16", "CLUT32",
 		                                  "DXT1", "DXT3", "DXT5" };
 		int usedp[RTT_PAL_MAX] = { 0 };
-		for(k = 0; k < 4 && len < size; k++){
+		for(k = 0; k < 6 && len < size; k++){
 			int best = -1;
 			for(i = 0; i < rtt_npal; i++)
 				if(!usedp[i] && (best < 0 || rtt_pal[i].n > rtt_pal[best].n)) best = i;
@@ -1941,16 +2163,29 @@ void gx_ge_rtt_report(char *buf, size_t size){
 			{
 				const RttPal *p = &rtt_pal[best];
 				len += (size_t)snprintf(buf + len, size - len,
-				        "rtt: paleta sobre framebuffer: %s leyendo un %s (desplazamiento %u, mascara %02X, offset %u, "
+				        "rtt: paleta sobre framebuffer: %08X %s leyendo un %s (desplazamiento %u, mascara %02X, offset %u, "
 				        "paleta %s) %dx%d fila %d: %u veces\n",
-				        tf[p->texfmt < 11 ? p->texfmt : 0], p->surf_fmt == SURF_Z ? "Z" : fmts[p->surf_fmt & 3],
+				        (unsigned)(PSP_VRAM_BASE + p->addr), tf[p->texfmt < 11 ? p->texfmt : 0],
+				        p->surf_fmt == SURF_Z ? "Z" : fmts[p->surf_fmt & 3],
 				        (unsigned)p->shift, (unsigned)p->mask, (unsigned)p->offset, fmts[p->clut_fmt & 3],
 				        p->tw, p->th, p->bufw, p->n);
+				if(len < size && p->prims)
+					len += (size_t)snprintf(buf + len, size - len,
+					        "rtt:   %u primitivas (%u sprites, %u through), filtro lineal %u, clamp s %u t %u; "
+					        "vertices u %.2f..%.2f v %.2f..%.2f; lee hasta columna %d y fila %d "
+					        "(vecino con peso: s %u, t %u); alfa del origen: uniforme %u (ultimo %d), en VRAM %u, en GPU %u\n",
+					        p->prims, p->sprites, p->through, p->linear, p->clamp_s, p->clamp_t,
+					        (double)p->umin, (double)p->umax, (double)p->vmin, (double)p->vmax, p->col_max, p->row_max,
+					        p->neighbor_s, p->neighbor_t, p->amode[A_UNIFORM], p->ualpha, p->amode[A_VRAM], p->amode[A_GPU]);
+				else if(len < size)
+					len += (size_t)snprintf(buf + len, size - len,
+					        "rtt:   sin primitivas; alfa del origen: uniforme %u (ultimo %d), en VRAM %u, en GPU %u\n",
+					        p->amode[A_UNIFORM], p->ualpha, p->amode[A_VRAM], p->amode[A_GPU]);
 			}
 		}
 	}
-	/* Los 5 búferes con más bajadas y decodificaciones */
-	for(k = 0; k < 5 && len < size; k++){
+	/* Los 7 búferes con más bajadas y decodificaciones */
+	for(k = 0; k < 7 && len < size; k++){
 		int best = -1;
 		unsigned bs = 0;
 		for(i = 0; i < rtt_n; i++){
@@ -1962,12 +2197,17 @@ void gx_ge_rtt_report(char *buf, size_t size){
 		used[best] = 1;
 		{
 			const RttTarget *t = &rtt_t[best];
+			static const char *const am[3] = { "uniforme", "en VRAM", "en GPU" };
 			len += (size_t)snprintf(buf + len, size - len,
 			        "rtt: %08X %dx%d %s (fila %u): destino %u veces, bajado %u (textura %u, CPU %u, pantalla %u, GE %u), "
-			        "como textura: GPU %u, decodificado %u, no %u\n",
+			        "como textura: GPU %u, decodificado %u, no %u; empieza: borrado %u, copia %u, subida %u; alfa %s",
 			        (unsigned)(PSP_VRAM_BASE + t->addr), t->w, t->h, t->fmt == SURF_Z ? "Z" : fmts[t->fmt & 3],
 			        (unsigned)t->stride, t->binds, t->dl[0] + t->dl[1] + t->dl[2] + t->dl[3], t->dl[RD_TEX], t->dl[RD_CPU],
-			        t->dl[RD_PANT], t->dl[RD_GE], t->gpu, t->dec, t->miss);
+			        t->dl[RD_PANT], t->dl[RD_GE], t->gpu, t->dec, t->miss, t->first_clear, t->first_blit, t->first_upload,
+			        t->fmt == SURF_Z || !has_alpha_fmt(t->fmt) ? "-" : am[t->amode < 3 ? t->amode : 0]);
+			if(len < size && t->fmt != SURF_Z && has_alpha_fmt(t->fmt) && t->amode == A_UNIFORM)
+				len += (size_t)snprintf(buf + len, size - len, " %d", t->ualpha);
+			if(len < size) len += (size_t)snprintf(buf + len, size - len, "\n");
 		}
 	}
 	if(len && len < size && buf[len - 1] == '\n') buf[--len] = 0;
@@ -1979,6 +2219,13 @@ void gx_ge_rtt_report(char *buf, size_t size){
 	memset(rtt_dec_bytes, 0, sizeof(rtt_dec_bytes));
 	memset(rtt_miss, 0, sizeof(rtt_miss));
 	rtt_gpu = 0;
+	memset(rtt_dx, 0, sizeof(rtt_dx)); memset(rtt_dx_wait, 0, sizeof(rtt_dx_wait));
+	memset(rtt_dx_conv, 0, sizeof(rtt_dx_conv));
+	memset(rtt_cmd_n, 0, sizeof(rtt_cmd_n));
+	rtt_npair = 0;
+	rtt_uploads = 0;
+	rtt_up_ticks = 0;
+	rtt_cur = NULL;
 }
 
 static int present_body(void *xfb, GXRModeObj *rm, int widescreen){
@@ -2075,8 +2322,10 @@ static int present_body(void *xfb, GXRModeObj *rm, int widescreen){
 
 void gx_ge_sync_vram(void){
 	int i;
+	dl_force = DX_SINC;
 	for(i = 0; i < MAX_SURF; i++)
 		if(surf[i].used && surf[i].state == GPU_NEWER) download(&surf[i]);
+	dl_force = -1;
 	recompute_watch();
 }
 

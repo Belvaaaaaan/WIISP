@@ -448,7 +448,8 @@ void hle_profile_report(const char *why){
 		"otros", "CPU", "syscalls", "GE", "rasterizar", "texturas", "framebuffers", "presentar", "esperar GX", "E/S",
 		"audio", "registro"
 	};
-	char line[512], extra[2048];
+	char line[512];
+	static char extra[6144];   /* el informe del renderizador puede ser largo */
 	u64 total, d[PROF_N];
 	double secs, game;
 	size_t len;

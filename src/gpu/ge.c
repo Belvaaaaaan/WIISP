@@ -574,6 +574,7 @@ static void jump_to(DisplayList *l, u32 target){
 static void execute(DisplayList *l, u32 op){
 	u32 cmd = op >> 24, arg = op & 0x00FFFFFFu;
 	ge.cmd[cmd] = arg;
+	ge.cur_cmd = cmd;
 	ge_stats.commands++;
 
 	switch(cmd){

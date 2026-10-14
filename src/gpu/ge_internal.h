@@ -98,6 +98,9 @@ typedef struct {
 
 	/* Vértice inmediato pendiente */
 	int immediate_count;
+
+	/* Comando que se está ejecutando (para saber quién lee la VRAM) */
+	u32 cur_cmd;
 } GeState;
 
 extern GeState ge;

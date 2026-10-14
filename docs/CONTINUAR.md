@@ -682,6 +682,38 @@ dentro del vblank, que ya fallaban.
   conservar las fechas al copiar las partidas (y usar mtime en vez de
   atime), para que dos reproducciones den la misma RAM.
 
+### v0.5.9.1: paso 0 del plan de las texturas de framebuffer (solo medir)
+
+Con r9/r10 (0.5.9): escena de 241 s a 180,5 s; menús 128-132 %, 2D 75-79 %,
+peleas 14-17 %; la CPU de las peleas pasó del 25 % al 17 %. En las peleas,
+texturas (21 %) y framebuffers (18 %) salen casi todo de dos texturas con
+paleta que leen framebuffers (CLUT32 sobre 0x04088000 y 0x04000000,
+índice = alfa & 7F; CLUT16 sobre el 565 de 0x04158000) declaradas de
+512x512 sobre búferes de 480x272. Plan acordado con el usuario (documento
+"Optimizaciones de RGBA8" y revisión): recorte de filas y columnas, CLUT32
+según el modo de alfa del origen (copia A8 del EFB usada como CI8 + TLUT
+en A_GPU, índices desde la VRAM en A_VRAM, textura constante en
+A_UNIFORM), CLUT16 como CI8 desde una copia GB8, anillo de TLUT, y evitar
+las bajadas por solape del 4444 de 64x64.
+
+Este paso solo mide (censo `rtt:` de [TIEMPOS], gx_ge.c):
+- `rtt: paleta sobre framebuffer: <dirección> ...` ahora por dirección, con
+  una segunda línea: primitivas (sprites, through), filtro lineal, clamp,
+  límites de u/v en los vértices, **última columna y fila leídas** (el
+  vecino del filtro lineal solo cuenta si pesa; ojo: si la fila máxima es
+  272 o más, el recorte tocaría el Z de 0x04110000) y el modo de alfa del
+  búfer de origen (uniforme con su valor, en VRAM o en GPU).
+- `rtt: bajadas por motivo`: textura, arrastradas por el rango de una
+  textura, solape al crear otro destino, crecer, sin sitio, copia de
+  bloques del GE, carga de paleta, otros comandos del GE (con sus códigos
+  en otra línea), capturas; cada uno con la espera a la GPU
+  (GX_DrawDone) y la conversión por separado; y las subidas VRAM->GPU.
+- `rtt: solape: X bajado al crear Y`: los pares de búferes que se pisan.
+- Cada búfer: cómo empieza cada uso (borrado completo, copia desde su
+  textura, subida desde la VRAM) y su modo de alfa.
+- `ge.cur_cmd`: el comando del GE en curso (para saber quién lee la VRAM).
+- El texto del renderizador en hle_profile_report pasa a 6 KB (estático).
+
 ### Para el siguiente chat (empezar aquí)
 
 Metodología acordada (detalle en `docs/HOJA_DE_RUTA.md`): primero medir
