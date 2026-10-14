@@ -41,6 +41,8 @@ int  gx_ge_tex_norm(void);
 
 /* Qué hizo la caché de texturas desde la última llamada (una línea) */
 void gx_ge_texture_report(char *buf, size_t size);
+/* Censo de destinos de dibujo desde la última llamada (varias líneas "rtt:") */
+void gx_ge_rtt_report(char *buf, size_t size);
 
 /* Copia a la VRAM emulada todo lo que solo está en la GPU */
 void gx_ge_sync_vram(void);

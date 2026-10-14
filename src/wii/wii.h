@@ -59,6 +59,11 @@ void video_draw_psp_frame(const char *overlay);
 int  wii_osk(const unsigned short *desc, const unsigned short *initial, unsigned short *out,
              unsigned limit, unsigned lines, unsigned inputtype);
 
+/* --- CPU del Wii (broadway.c) ---------------------------------------------- */
+
+/* Escribe en wiisp.log los BAT, HID, GQR, SDR1 y las arenas de memoria */
+void broadway_report(void);
+
 /* --- Menú (menu.c) -------------------------------------------------------- */
 
 /* Muestra el selector de archivos. Devuelve 1 y la ruta elegida, o 0 si el

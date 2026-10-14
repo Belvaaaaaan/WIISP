@@ -141,6 +141,32 @@ static float pos_off;
 static u64 prof_setup, prof_state, prof_present;
 static unsigned prof_vram_presents, prof_downloads, prof_uploads, prof_decodes;
 
+/* Censo de destinos de dibujo ([TIEMPOS] rtt: en wiisp.log). Mide, antes de
+   construir el render-to-texture en la GPU, a dónde va cada búfer que dibuja
+   el juego y quién lo consume:
+     - bajadas de la GPU a la VRAM emulada, según quién las pidió (lo que
+       estaba haciendo el emulador: buscar una textura, la CPU del juego,
+       componer la pantalla o el GE leyendo una paleta o copiando bloques),
+       con su tiempo;
+     - texturas decodificadas, según de dónde salen (un búfer dibujado, otra
+       parte de la VRAM o la RAM), con tiempo y bytes;
+     - texturas que caen dentro de un búfer dibujado: cuántas se usaron
+       directamente desde la GPU y, cuando no se pudo, por qué;
+     - los búferes con más actividad. */
+enum { RD_TEX, RD_CPU, RD_PANT, RD_GE, RD_N };
+enum { RO_FB, RO_VRAM, RO_RAM, RO_N };
+enum { RM_FMT, RM_SWZ, RM_INEXACT, RM_VRAM, RM_ALPHA, RM_NOTEX, RM_N };
+#define RTT_MAX 24
+typedef struct {
+	core_u32 addr, stride;
+	int fmt, w, h;
+	unsigned binds, dl[RD_N], gpu, dec, miss;
+} RttTarget;
+static RttTarget rtt_t[RTT_MAX];
+static int rtt_n;
+static unsigned rtt_dl[RD_N], rtt_dec[RO_N], rtt_gpu, rtt_miss[RM_N];
+static u64 rtt_dl_ticks[RD_N], rtt_dec_ticks[RO_N], rtt_dec_bytes[RO_N];
+
 static void *defer_list[64];
 static int ndefer;
 
@@ -429,15 +455,91 @@ static void save_efb(void){
 	if(cur_z && efb_z_newer){ efb_to_tex(cur_z); efb_z_newer = 0; }
 }
 
+/* Entrada del censo de un búfer (por dirección, ancho de fila y formato) */
+static RttTarget *rtt_target(core_u32 addr, core_u32 stride, int fmt){
+	int i;
+	for(i = 0; i < rtt_n; i++)
+		if(rtt_t[i].addr == addr && rtt_t[i].stride == stride && rtt_t[i].fmt == fmt) return &rtt_t[i];
+	if(rtt_n == RTT_MAX) return NULL;
+	memset(&rtt_t[rtt_n], 0, sizeof(rtt_t[rtt_n]));
+	rtt_t[rtt_n].addr = addr;
+	rtt_t[rtt_n].stride = stride;
+	rtt_t[rtt_n].fmt = fmt;
+	return &rtt_t[rtt_n++];
+}
+
+static RttTarget *rtt_surface(const Surface *s){
+	RttTarget *t = rtt_target(s->addr, s->stride, s->fmt);
+	if(t){ t->w = s->w; t->h = s->h; }
+	return t;
+}
+
+/* Quién pidió una bajada: lo dice la cubeta del desglose en curso */
+static int rtt_reason(void){
+	switch(prof_cur){
+	case PROF_TEXTURAS: return RD_TEX;
+	case PROF_CPU: case PROF_HLE: case PROF_AUDIO: case PROF_ES: return RD_CPU;
+	case PROF_PRESENTAR: return RD_PANT;
+	default: return RD_GE;
+	}
+}
+
+/* Búfer de color usado (no el de profundidad) que cubre la dirección de
+   VRAM `off`, o NULL */
+static Surface *surface_at(core_u32 off){
+	int i;
+	for(i = 0; i < MAX_SURF; i++){
+		core_u32 a, e;
+		if(!surf[i].used || surf[i].fmt == SURF_Z) continue;
+		surf_range(&surf[i], &a, &e);
+		if(off >= a && off < e) return &surf[i];
+	}
+	return NULL;
+}
+
+/* Una textura del GE: si cae dentro de un búfer dibujado, se apunta si se
+   usó desde la GPU o, si no, por qué no (las mismas condiciones que
+   texture_from_surface, en orden) */
+static void rtt_note_texture(const GeRasterState *r, int from_gpu){
+	core_u32 addr = r->texaddr[0] & PSP_ADDR_MASK, off;
+	Surface *s;
+	RttTarget *t;
+	int why;
+	if(addr < PSP_VRAM_BASE || addr >= PSP_VRAM_BASE + PSP_VRAM_SIZE) return;
+	off = addr - PSP_VRAM_BASE;
+	if(!(s = surface_at(off))) return;
+	t = rtt_surface(s);
+	if(from_gpu){
+		rtt_gpu++;
+		if(t) t->gpu++;
+		return;
+	}
+	if(r->texfmt > GE_FMT_8888) why = RM_FMT;
+	else if(r->swizzle) why = RM_SWZ;
+	else if(s->addr != off || s->stride != r->texbufw[0] || s->fmt != r->texfmt) why = RM_INEXACT;
+	else if(s->state == VRAM_NEWER) why = RM_VRAM;
+	else if(r->use_tex_alpha && s->amode != A_GPU && !(s->amode == A_UNIFORM && s->ualpha == 255) && has_alpha_fmt(s->fmt))
+		why = RM_ALPHA;
+	else why = RM_NOTEX;
+	rtt_miss[why]++;
+	if(t) t->miss++;
+}
+
 /* Contenido de la GPU -> VRAM */
 static void download(Surface *s){
 	if(s == cur_c && efb_c_newer){ efb_to_tex(s); efb_c_newer = 0; }
 	if(s == cur_z && efb_z_newer){ efb_to_tex(s); efb_z_newer = 0; }
 	if(s->has_tex){
 		core_u32 a, e;
+		int why = rtt_reason();
+		RttTarget *t = rtt_surface(s);
+		u64 t0 = gettime();
 		wait_gpu();
 		tex_to_vram(s);
 		prof_downloads++;
+		rtt_dl[why]++;
+		rtt_dl_ticks[why] += gettime() - t0;
+		if(t) t->dl[why]++;
 		/* Las texturas que estén ahí cambiaron (y empieza otro periodo,
 		   como en PPSSPP al leer un framebuffer) */
 		surf_range(s, &a, &e);
@@ -700,6 +802,10 @@ static void bind_color(Surface *s){
 	int pf;
 	if(cur_c == s) return;
 	if(cur_c && efb_c_newer){ efb_to_tex(cur_c); efb_c_newer = 0; }
+	if(s){
+		RttTarget *t = rtt_surface(s);
+		if(t) t->binds++;
+	}
 	cur_c = s;
 	restored_c = 0;
 	pf = surface_pf(s);
@@ -972,7 +1078,23 @@ static int decode_slot(TexCache *tc, void *ctx, int idx){
 	e->h = want_tex.h;
 	e->levels = want_tex.levels;
 	prof_decodes++;
-	if(!decode_texture(e, want_tex.r)){ memset(e, 0, sizeof(*e)); return 0; }
+	{
+		core_u32 addr = want_tex.r->texaddr[0] & PSP_ADDR_MASK;
+		int from = RO_RAM;
+		u64 t0 = gettime();
+		if(addr >= PSP_VRAM_BASE && addr < PSP_VRAM_BASE + PSP_VRAM_SIZE){
+			Surface *fs = surface_at(addr - PSP_VRAM_BASE);
+			from = fs ? RO_FB : RO_VRAM;
+			if(fs){
+				RttTarget *t = rtt_surface(fs);
+				if(t) t->dec++;
+			}
+		}
+		if(!decode_texture(e, want_tex.r)){ memset(e, 0, sizeof(*e)); return 0; }
+		rtt_dec[from]++;
+		rtt_dec_ticks[from] += gettime() - t0;
+		rtt_dec_bytes[from] += e->bytes;
+	}
 	return 1;
 }
 
@@ -1138,6 +1260,7 @@ static void setup_targets(void){
 	if(!writes_c) tex_on = 0;
 	if(tex_on){
 		use_rtt = r->texvalid[0] && texture_from_surface(r);
+		if(r->texvalid[0]) rtt_note_texture(r, use_rtt);
 		if(!use_rtt) cur_tex = r->texvalid[0] ? lookup_texture(r) : NULL;
 		inv_tw = tex_su / (float)(1 << r->width0_shift);
 		inv_th = tex_sv / (float)(1 << r->height0_shift);
@@ -1722,6 +1845,61 @@ void gx_ge_texture_report(char *buf, size_t size){
 	         tc_unstable_count(&tcache), lazy_textures ? "" : " (sin espaciado)");
 	tex_stats_base = *t;
 	prof_clut_hashes = 0;
+}
+
+static unsigned tk_ms(u64 t){ return (unsigned)ticks_to_millisecs(t); }
+
+/* Sin acentos: también sale en la consola del Wii. Varias líneas. */
+void gx_ge_rtt_report(char *buf, size_t size){
+	static const char *const fmts[] = { "565", "5551", "4444", "8888" };
+	size_t len;
+	int i, k, used[RTT_MAX] = { 0 };
+	unsigned misses = 0;
+	if(!size) return;
+	for(i = 0; i < RM_N; i++) misses += rtt_miss[i];
+	len = (size_t)snprintf(buf, size,
+	        "rtt: bajadas %u (%u ms): por textura %u (%u ms), por la CPU %u (%u ms), por la pantalla %u (%u ms), por el GE %u (%u ms)\n"
+	        "rtt: decodificadas %u: de framebuffers %u (%u ms, %.1f MB), otra VRAM %u (%u ms), RAM %u (%u ms, %.1f MB)\n"
+	        "rtt: texturas en un framebuffer: %u usadas desde la GPU, %u no (formato %u, swizzle %u, no exacta %u, ya en VRAM %u, alfa %u, sin copia %u)\n",
+	        rtt_dl[0] + rtt_dl[1] + rtt_dl[2] + rtt_dl[3],
+	        tk_ms(rtt_dl_ticks[0] + rtt_dl_ticks[1] + rtt_dl_ticks[2] + rtt_dl_ticks[3]),
+	        rtt_dl[RD_TEX], tk_ms(rtt_dl_ticks[RD_TEX]), rtt_dl[RD_CPU], tk_ms(rtt_dl_ticks[RD_CPU]),
+	        rtt_dl[RD_PANT], tk_ms(rtt_dl_ticks[RD_PANT]), rtt_dl[RD_GE], tk_ms(rtt_dl_ticks[RD_GE]),
+	        rtt_dec[0] + rtt_dec[1] + rtt_dec[2],
+	        rtt_dec[RO_FB], tk_ms(rtt_dec_ticks[RO_FB]), (double)rtt_dec_bytes[RO_FB] / (1024.0 * 1024.0),
+	        rtt_dec[RO_VRAM], tk_ms(rtt_dec_ticks[RO_VRAM]),
+	        rtt_dec[RO_RAM], tk_ms(rtt_dec_ticks[RO_RAM]), (double)rtt_dec_bytes[RO_RAM] / (1024.0 * 1024.0),
+	        rtt_gpu, misses, rtt_miss[RM_FMT], rtt_miss[RM_SWZ], rtt_miss[RM_INEXACT], rtt_miss[RM_VRAM],
+	        rtt_miss[RM_ALPHA], rtt_miss[RM_NOTEX]);
+	/* Los 5 búferes con más bajadas y decodificaciones */
+	for(k = 0; k < 5 && len < size; k++){
+		int best = -1;
+		unsigned bs = 0;
+		for(i = 0; i < rtt_n; i++){
+			const RttTarget *t = &rtt_t[i];
+			unsigned sc = t->dl[0] + t->dl[1] + t->dl[2] + t->dl[3] + t->dec + t->binds;
+			if(!used[i] && (best < 0 || sc > bs)){ best = i; bs = sc; }
+		}
+		if(best < 0 || !bs) break;
+		used[best] = 1;
+		{
+			const RttTarget *t = &rtt_t[best];
+			len += (size_t)snprintf(buf + len, size - len,
+			        "rtt: %08X %dx%d %s (fila %u): destino %u veces, bajado %u (textura %u, CPU %u, pantalla %u, GE %u), "
+			        "como textura: GPU %u, decodificado %u, no %u\n",
+			        (unsigned)(PSP_VRAM_BASE + t->addr), t->w, t->h, t->fmt == SURF_Z ? "Z" : fmts[t->fmt & 3],
+			        (unsigned)t->stride, t->binds, t->dl[0] + t->dl[1] + t->dl[2] + t->dl[3], t->dl[RD_TEX], t->dl[RD_CPU],
+			        t->dl[RD_PANT], t->dl[RD_GE], t->gpu, t->dec, t->miss);
+		}
+	}
+	if(len && len < size && buf[len - 1] == '\n') buf[--len] = 0;
+	/* Empieza otro periodo */
+	rtt_n = 0;
+	memset(rtt_dl, 0, sizeof(rtt_dl)); memset(rtt_dl_ticks, 0, sizeof(rtt_dl_ticks));
+	memset(rtt_dec, 0, sizeof(rtt_dec)); memset(rtt_dec_ticks, 0, sizeof(rtt_dec_ticks));
+	memset(rtt_dec_bytes, 0, sizeof(rtt_dec_bytes));
+	memset(rtt_miss, 0, sizeof(rtt_miss));
+	rtt_gpu = 0;
 }
 
 static int present_body(void *xfb, GXRModeObj *rm, int widescreen){

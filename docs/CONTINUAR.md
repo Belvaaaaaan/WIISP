@@ -566,6 +566,24 @@ dentro del vblank, que ya fallaban.
   (`guion_foto_partidas`); grabación y reproducciones parten de ahí y las
   partidas reales no se tocan.
 
+### v0.5.7.6: medir antes de optimizar (pasos 4 y 7)
+
+- Registro de la 0.5.7.5 (DBZ, grabando): menús 114 % (sin limitador),
+  escenas 2D 37-53 % (CPU 67-89 %), peleas 7-8 % (GE 30-40 %, texturas
+  36-42 %, framebuffers 8-9 %, CPU 13-17 %; "leer vertices" 15-25 % con
+  38-55 % de vértices con huesos; ~300 texturas decodificadas y ~360 bajadas
+  de framebuffer cada 30 s, ~290 "cambios con aviso").
+- Paso 4: `src/wii/broadway.c` escribe al arrancar `[BROADWAY]`: PVR, MSR,
+  HID0/1/2/4, L2CR, SDR1, los 8 DBAT/IBAT decodificados (si HID4[SBE]),
+  cuáles están libres, GQR0-7 y las arenas de MEM1/MEM2.
+- Paso 7: censo de destinos de dibujo en gx_ge.c (líneas `[TIEMPOS] rtt:`
+  cada 30 s): bajadas por quién las pidió (textura/CPU/pantalla/GE) con
+  tiempo; decodificadas por origen (framebuffer/otra VRAM/RAM) con tiempo y
+  MB; texturas dentro de un framebuffer usadas desde la GPU o por qué no
+  (formato, swizzle, no exacta, ya en VRAM, alfa, sin copia); los 5 búferes
+  con más actividad. La quién-pidió sale de la cubeta del desglose
+  (`prof_cur`).
+
 ### Para el siguiente chat (empezar aquí)
 
 Metodología acordada (detalle en `docs/HOJA_DE_RUTA.md`): primero medir

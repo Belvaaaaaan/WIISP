@@ -115,7 +115,14 @@ static void profile_hook(char *buf, size_t size){
 	if(gx_ge_enabled()){
 		len = snprintf(buf, size, "modo rapido (GX): %u bajadas y %u subidas de framebuffer, %u imagenes desde la VRAM\n",
 		               cnt[1], cnt[2], cnt[0]);
-		if(len > 0 && (size_t)len < size) gx_ge_texture_report(buf + len, size - (size_t)len);
+		if(len > 0 && (size_t)len < size){
+			gx_ge_texture_report(buf + len, size - (size_t)len);
+			len = (int)strlen(buf);
+			if((size_t)len + 2 < size){
+				buf[len++] = '\n';
+				gx_ge_rtt_report(buf + len, size - (size_t)len);
+			}
+		}
 	} else snprintf(buf, size, "modo EXACTO (dibujo por software)");
 }
 
@@ -594,6 +601,7 @@ int main(int argc, char **argv){
 	app_set_savedata_dir(savedata_normal);
 	snprintf(log_normal, sizeof(log_normal), "%s/wiisp.log", appdir[0] ? appdir : "sd:/wiisp");
 	hle_set_log_file(log_normal);
+	broadway_report();
 	/* Las capturas de los guiones necesitan la imagen en la VRAM emulada */
 	app_set_before_capture(gx_ge_sync_vram);
 	app_set_mode_text(mode_text);
