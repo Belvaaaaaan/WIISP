@@ -20,6 +20,28 @@ def leer(path):
         return [l.rstrip('\n') for l in f if l.strip() and not l.startswith('#')]
 
 
+def mapas(lineas):
+    """Líneas 'mapa cuadro N: h0 h1 ...' (un resumen por MB de RAM)."""
+    out = {}
+    for l in lineas:
+        if l.startswith('mapa cuadro '):
+            cab, _, resto = l.partition(':')
+            out[cab.split()[2]] = resto.split()
+    return out
+
+
+def zonas_distintas(a, b):
+    """Qué MB de la RAM de la PSP (desde 0x08000000) difieren en cada mapa."""
+    ma, mb = mapas(a), mapas(b)
+    for cuadro in ma:
+        if cuadro not in mb:
+            continue
+        dif = [i for i, (x, y) in enumerate(zip(ma[cuadro], mb[cuadro])) if x != y]
+        if dif:
+            zonas = ', '.join(f'{0x08000000 + (i << 20):08X}-{0x08000000 + ((i + 1) << 20) - 1:08X}' for i in dif)
+            print(f'  RAM distinta en el cuadro {cuadro}: {len(dif)} MB ({zonas})')
+
+
 def main():
     if len(sys.argv) != 3:
         print(__doc__.strip().splitlines()[2].strip())
@@ -32,6 +54,11 @@ def main():
     if not a and not b:
         print('SIN HUELLAS: ninguna corrida llego al primer punto de control')
         return 1
+    zonas_distintas(a, b)
+    cpu = [l for l in a if l.startswith('cuadro ')]
+    cpu_b = [l for l in b if l.startswith('cuadro ')]
+    if cpu and len(cpu) == len(cpu_b) and all(x.split()[:8] == y.split()[:8] for x, y in zip(cpu, cpu_b)):
+        print(f'CPU identico en las {len(cpu)} huellas (ciclos, PC y registros): el juego hizo exactamente lo mismo')
     for i, (x, y) in enumerate(zip(a, b)):
         if x != y:
             print(f'DISTINTAS desde la huella {i + 1}:')

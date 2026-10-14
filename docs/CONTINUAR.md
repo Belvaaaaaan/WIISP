@@ -584,6 +584,23 @@ dentro del vblank, que ya fallaban.
   con más actividad. La quién-pidió sale de la cubeta del desglose
   (`prof_cur`).
 
+### v0.5.7.7: primeras huellas del Wii y mapa de la RAM
+
+- Dos reproducciones de DBZ (0.5.7.6, 5047 cuadros): **CPU idéntico en las
+  85 huellas** (ciclos, PC y registros): la escena se repite. La RAM
+  muestreada difiere en 42 de 85 y la entera al final: algo que el juego no
+  usa para decidir (imagen o audio, probablemente). Ahora las huellas con
+  RAM entera llevan `mapa cuadro N:` con un resumen por MB, y
+  `comparar_huellas.py` dice qué MB difieren.
+- Corregido: la cabecera de las huellas apuntaba el renderizador antes de
+  que el frontend lo eligiera (la r1 decía "software"); ahora se escribe
+  con la primera huella.
+- `[BROADWAY]` (0.5.7.6): DBAT 2, 3, 6 y 7 libres (HID4[SBE] activo, BAT
+  0/1 = 0x80/0xC0 MEM1, 4/5 = 0x90/0xD0 MEM2), SDR1 = 0, GQR0-7 = 0, HID2
+  E0000000 (paired singles, psq y write gather activos), L2 activa, MEM1
+  libre 0x8072F000-0x81800000 (~16,8 MB), MEM2 libre 0x92206000-0x933C6F60.
+  2.5 (mem_bat) y 1.2b (psq_l) son posibles.
+
 ### Para el siguiente chat (empezar aquí)
 
 Metodología acordada (detalle en `docs/HOJA_DE_RUTA.md`): primero medir

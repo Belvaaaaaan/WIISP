@@ -268,6 +268,7 @@ static struct {
 	FILE *indice;         /* <prefijo>.capturas.txt */
 	u32 tpos;             /* siguiente línea de teclado por usar */
 	int termino;          /* el programa terminó solo (ya hay huella final) */
+	int cabecera;         /* ya se apuntaron las opciones en las huellas */
 	u32 ultima_captura;   /* para no repetir la del mismo cuadro */
 } gs;
 
@@ -294,18 +295,38 @@ static u32 fnv32(u32 h, u32 v){
    PC y en el Wii. La RAM se muestrea (una palabra cada 1 KB, empezando cada
    vez en otra posición para cubrir toda la RAM con el tiempo) para que
    cueste poco; en las capturas y al final se usa entera. */
+static void describir_modo(char *buf, size_t size);
+
 static void huella(const char *motivo, int ram_entera){
 	u32 h = 2166136261u, r = 2166136261u, i;
 	int old;
 	if(!gs.huellas) return;
 	old = prof_switch(PROF_REGISTRO);
+	if(!gs.cabecera){
+		/* Las opciones se apuntan aquí y no al abrir el archivo: el
+		   frontend elige el renderizador justo antes de arrancar */
+		char modo[400];
+		describir_modo(modo, sizeof(modo));
+		fprintf(gs.huellas, "# %s\n", modo);
+		gs.cabecera = 1;
+	}
 	for(i = 0; i < 32; i++) h = fnv32(h, cpu.r[i]);
 	h = fnv32(h, cpu.hi);
 	h = fnv32(h, cpu.lo);
 	for(i = 0; i < 32; i++) h = fnv32(h, cpu.fpr[i].u);
 	h = fnv32(h, cpu.fcr31);
-	if(ram_entera) r = fnv(r, psp_mem.ram, psp_mem.ram_size);
-	else for(i = (frames_run / HUELLA_CADA * 4) & 1023; i < psp_mem.ram_size; i += 1024) r = fnv(r, psp_mem.ram + i, 4);
+	if(!ram_entera)
+		for(i = (frames_run / HUELLA_CADA * 4) & 1023; i < psp_mem.ram_size; i += 1024) r = fnv(r, psp_mem.ram + i, 4);
+	else {
+		/* RAM entera, y un resumen por cada MB para saber qué zona cambió */
+		u32 mb[64], n = psp_mem.ram_size >> 20, k;
+		if(n > 64) n = 64;
+		for(k = 0; k < n; k++) mb[k] = fnv(2166136261u, psp_mem.ram + (k << 20), 1u << 20);
+		for(k = 0; k < n; k++) r = fnv32(r, mb[k]);
+		fprintf(gs.huellas, "mapa cuadro %u:", frames_run);
+		for(k = 0; k < n; k++) fprintf(gs.huellas, " %08X", mb[k]);
+		fprintf(gs.huellas, "\n");
+	}
 	fprintf(gs.huellas, "cuadro %u ciclos %llu pc %08X cpu %08X ram%s %08X%s%s\n", frames_run,
 	        (unsigned long long)cpu_cycles, cpu.pc, h, ram_entera ? "_entera" : "", r,
 	        motivo ? " " : "", motivo ? motivo : "");
@@ -375,11 +396,9 @@ static void grabar_linea(void){
 }
 
 static void abrir_huellas(const char *path){
-	char modo[400];
 	gs.huellas = path && path[0] ? fopen(path, "w") : NULL;
 	if(!gs.huellas) return;
-	describir_modo(modo, sizeof(modo));
-	fprintf(gs.huellas, "# huellas de WIISP " WIISP_VERSION ": una cada %u cuadros\n# %s\n", HUELLA_CADA, modo);
+	fprintf(gs.huellas, "# huellas de WIISP " WIISP_VERSION ": una cada %u cuadros\n", HUELLA_CADA);
 }
 
 /* Teclado en pantalla con guion. Grabando, se abre el teclado de verdad y
