@@ -32,6 +32,8 @@ static const struct { const char *nombre; u32 bit; } botones[] = {
 #define N_BOTONES (sizeof(botones) / sizeof(botones[0]))
 
 void guion_free(Guion *g){
+	u32 i;
+	for(i = 0; i < g->n; i++) free(g->l[i].texto);
 	free(g->l);
 	memset(g, 0, sizeof(*g));
 }
@@ -76,6 +78,34 @@ static int number(const char *w, size_t len, u32 max, u32 *out){
 	return 0;
 }
 
+/* Resto de una línea "teclado": "TEXTO" (con \" y \\) o cancelar, y nada
+   más salvo un comentario. Deja el texto en l->texto (NULL = cancelar). */
+static int teclado(const char **p, GuionLinea *l){
+	const char *s = *p, *w;
+	size_t wl, n = 0;
+	char buf[300];
+	while(*s == ' ' || *s == '\t') s++;
+	if(*s == '"'){
+		for(s++; *s && *s != '"'; s++){
+			if(*s == '\\' && (s[1] == '"' || s[1] == '\\')) s++;
+			if(n + 1 >= sizeof(buf)) return -1;
+			buf[n++] = *s;
+		}
+		if(*s != '"') return -1;
+		buf[n] = 0;
+		*p = s + 1;
+		if(word(p, &wl)) return -1;   /* algo más detrás */
+		l->texto = malloc(n + 1);
+		if(!l->texto) return -1;
+		memcpy(l->texto, buf, n + 1);
+		return 0;
+	}
+	*p = s;
+	if(!(w = word(p, &wl)) || !is_word(w, wl, "cancelar") || word(p, &wl)) return -1;
+	l->texto = NULL;
+	return 0;
+}
+
 static int fail(Guion *g, char *err, size_t errlen, u32 linea, const char *msg){
 	if(err && errlen) snprintf(err, errlen, "linea %u: %s", linea, msg);
 	guion_free(g);
@@ -111,6 +141,12 @@ int guion_parse(Guion *g, const char *texto, char *err, size_t errlen){
 			if(is_word(w, wl, "-")){ l.flags |= GUION_MANDO; continue; }
 			if(is_word(w, wl, "captura")){ l.flags |= GUION_CAPTURA; continue; }
 			if(is_word(w, wl, "fin")){ l.flags |= GUION_FIN; continue; }
+			if(is_word(w, wl, "teclado")){
+				if(l.flags) return fail(g, err, errlen, linea, "teclado va solo en su linea");
+				if(teclado(&q, &l)) return fail(g, err, errlen, linea, "teclado necesita \"TEXTO\" o cancelar");
+				l.flags = GUION_TECLADO;
+				break;
+			}
 			if(is_word(w, wl, "stick")){
 				const char *a, *b;
 				size_t al, bl;
@@ -133,7 +169,7 @@ int guion_parse(Guion *g, const char *texto, char *err, size_t errlen){
 			l.flags |= GUION_MANDO;
 		}
 		if(!l.flags) return fail(g, err, errlen, linea, "linea sin nada que hacer");
-		if(add(g, &l)) return fail(g, err, errlen, linea, "sin memoria");
+		if(add(g, &l)){ free(l.texto); return fail(g, err, errlen, linea, "sin memoria"); }
 	}
 	return 0;
 }
@@ -190,6 +226,22 @@ int guion_format(char *out, size_t size, u32 cuadro, u32 b, u8 lx, u8 ly){
 		any = 1;
 	}
 	if(len < size && !any) len += (size_t)snprintf(out + len, size - len, " -");
+	return (int)(len < size ? len : size - 1);
+}
+
+int guion_format_teclado(char *out, size_t size, u32 cuadro, const char *texto){
+	size_t len;
+	if(!size) return 0;
+	if(!texto) len = (size_t)snprintf(out, size, "%u teclado cancelar", cuadro);
+	else {
+		len = (size_t)snprintf(out, size, "%u teclado \"", cuadro);
+		for(; *texto && len + 3 < size; texto++){
+			if(*texto == '"' || *texto == '\\') out[len++] = '\\';
+			out[len++] = *texto;
+		}
+		if(len + 1 < size) out[len++] = '"';
+		out[len] = 0;
+	}
 	return (int)(len < size ? len : size - 1);
 }
 

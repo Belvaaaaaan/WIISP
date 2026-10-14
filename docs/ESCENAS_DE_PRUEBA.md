@@ -28,8 +28,10 @@ Mientras se graba:
 - Las partidas salen de `DBZ.iso.partidas`, que se vacía y se rellena con
   `partidas_base` al empezar. Así, lo que el juego guarde durante la
   prueba no cambia la siguiente corrida.
-- El teclado en pantalla no se abre (el juego recibe el texto que propone),
-  porque lo que se escribiera no quedaría en el guion.
+- El teclado en pantalla se abre normalmente y lo que escribas (o si lo
+  cancelas) queda en el guion como una línea `teclado "TEXTO"`. Al
+  reproducir, el juego recibe esos textos en el mismo orden, sin que se abra
+  el teclado.
 - El stick se redondea (zona muerta y pasos de 8) para que el guion no
   tenga una línea por cada temblor; el juego ya recibe el valor redondeado.
 - Cada 400 cuadros se guarda una captura (`DBZ.iso.guion.c000400.bmp`...).
@@ -49,7 +51,8 @@ referencia o cambiar dónde termina:
 
 Botones: `SELECT START ARRIBA DERECHA ABAJO IZQUIERDA L R TRIANGULO CIRCULO
 CRUZ CUADRADO`, `-` (nada) y `stick X Y` (0-255, 128 es el centro). El
-formato completo está en `src/frontend/guion.h`.
+teclado va en su propia línea: `4210 teclado "GOKU"` o `4210 teclado
+cancelar`. El formato completo está en `src/frontend/guion.h`.
 
 ## 2. Reproducirla desde el menú
 

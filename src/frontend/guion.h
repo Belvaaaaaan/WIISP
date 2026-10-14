@@ -24,6 +24,11 @@
  *   - "stick X Y": stick analógico, 0-255 (128 es el centro; Y = 0 arriba).
  *   - "captura": guarda la imagen en ese momento (no cambia el mando).
  *   - "fin": termina la prueba.
+ *   - teclado "TEXTO" / teclado cancelar: lo que se escribió (o canceló) en
+ *     el teclado en pantalla. Al reproducir, cada vez que el juego abre el
+ *     teclado recibe la siguiente línea de teclado, en orden (el número de
+ *     cuadro es informativo). Dentro de las comillas, \" es una comilla y
+ *     \\ una barra. Va solo en su línea.
  *
  * Este módulo solo lee y escribe guiones; quien los reproduce o graba
  * durante la emulación es app.c.
@@ -39,7 +44,8 @@
 enum {
 	GUION_MANDO = 1,     /* la línea fija botones y stick */
 	GUION_CAPTURA = 2,
-	GUION_FIN = 4
+	GUION_FIN = 4,
+	GUION_TECLADO = 8    /* texto (o NULL = cancelado) en GuionLinea.texto */
 };
 
 typedef struct {
@@ -47,6 +53,7 @@ typedef struct {
 	u32 botones;         /* APP_BTN_* */
 	u8 lx, ly;
 	u8 flags;            /* GUION_* */
+	char *texto;         /* GUION_TECLADO: lo escrito (NULL = cancelado) */
 } GuionLinea;
 
 typedef struct {
@@ -72,6 +79,10 @@ int  guion_format(char *out, size_t size, u32 cuadro, u32 botones, u8 lx, u8 ly)
    8. El juego recibe ya el valor redondeado, así que la grabación y la
    reproducción ven exactamente lo mismo. */
 u8   guion_cuantizar(u8 eje);
+
+/* Línea de teclado: 'cuadro teclado "texto"' o 'cuadro teclado cancelar'
+   (texto NULL). Sin salto de línea; devuelve la longitud. */
+int  guion_format_teclado(char *out, size_t size, u32 cuadro, const char *texto);
 
 /* Partidas de una prueba: vacía `dir` y copia dentro el contenido de `base`
    (si existe), para que cada corrida empiece con las mismas partidas.

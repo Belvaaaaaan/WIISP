@@ -1,0 +1,5 @@
+# Guion de prueba de guion_teclado.c: el teclado dentro de un guion
+0 -
+10 teclado "VEGETA"
+20 teclado cancelar
+30 teclado "con \"comillas\" # y \\ barra"

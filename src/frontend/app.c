@@ -266,6 +266,8 @@ static struct {
 	u8 lx, ly;
 	int grabado;          /* ya hay una línea de mando */
 	FILE *indice;         /* <prefijo>.capturas.txt */
+	u32 tpos;             /* siguiente línea de teclado por usar */
+	int termino;          /* el programa terminó solo (ya hay huella final) */
 	u32 ultima_captura;   /* para no repetir la del mismo cuadro */
 } gs;
 
@@ -380,6 +382,47 @@ static void abrir_huellas(const char *path){
 	fprintf(gs.huellas, "# huellas de WIISP " WIISP_VERSION ": una cada %u cuadros\n# %s\n", HUELLA_CADA, modo);
 }
 
+/* Teclado en pantalla con guion. Grabando, se abre el teclado de verdad y
+   el resultado queda en el guion; reproduciendo, la respuesta es la
+   siguiente línea "teclado" del guion. Así el juego recibe lo mismo en las
+   dos (si no, un juego que exige un nombre lo pide para siempre). */
+static int guion_osk(const unsigned short *desc, const unsigned short *initial, unsigned short *out,
+                     unsigned limit, unsigned lines, unsigned inputtype){
+	unsigned i;
+	if(gs.modo == G_GRABAR){
+		char texto[300], line[700];
+		int ok;
+		if(osk_func) ok = osk_func(desc, initial, out, limit, lines, inputtype);
+		else {
+			/* Sin teclado en este frontend: se acepta el texto inicial */
+			for(i = 0; i < limit && initial[i]; i++) out[i] = initial[i];
+			out[i] = 0;
+			ok = 1;
+		}
+		for(i = 0; ok && i < limit && i + 1 < sizeof(texto) && out[i]; i++)
+			texto[i] = out[i] >= 32 && out[i] < 127 ? (char)out[i] : '?';
+		texto[i] = 0;
+		guion_format_teclado(line, sizeof(line), frames_run, ok ? texto : NULL);
+		fprintf(gs.grabacion, "%s\n", line);
+		fflush(gs.grabacion);
+		return ok;
+	}
+	while(gs.tpos < gs.g.n && !(gs.g.l[gs.tpos].flags & GUION_TECLADO)) gs.tpos++;
+	if(gs.tpos >= gs.g.n){
+		hle_log("[GUION] el juego abrio el teclado y el guion no tiene mas lineas de teclado: se acepta el texto inicial\n");
+		for(i = 0; i < limit && initial[i]; i++) out[i] = initial[i];
+		out[i] = 0;
+		return 1;
+	}
+	{
+		const char *t = gs.g.l[gs.tpos++].texto;
+		if(!t) return 0;
+		for(i = 0; i < limit && t[i]; i++) out[i] = (unsigned char)t[i];
+		out[i] = 0;
+		return 1;
+	}
+}
+
 int app_guion_reproducir(const char *guion, const char *prefijo, char *err, size_t errlen){
 	char path[560];
 	app_guion_parar();
@@ -388,7 +431,7 @@ int app_guion_reproducir(const char *guion, const char *prefijo, char *err, size
 	snprintf(gs.prefijo, sizeof(gs.prefijo), "%s", prefijo);
 	snprintf(path, sizeof(path), "%s.huellas", prefijo);
 	abrir_huellas(path);
-	hle_set_osk(NULL);   /* el teclado no puede depender de quien mire */
+	hle_set_osk(guion_osk);   /* el texto sale del guion */
 	return 0;
 }
 
@@ -402,14 +445,14 @@ int app_guion_grabar(const char *guion){
 	snprintf(gs.prefijo, sizeof(gs.prefijo), "%s", guion);
 	snprintf(path, sizeof(path), "%s.huellas", guion);
 	abrir_huellas(path);
-	hle_set_osk(NULL);
+	hle_set_osk(guion_osk);   /* se escribe de verdad y queda en el guion */
 	return 0;
 }
 
 void app_guion_parar(void){
 	if(gs.modo == G_GRABAR && gs.grabacion){
 		fprintf(gs.grabacion, "%u fin\n", frames_run);
-		huella("fin", 1);
+		if(!gs.termino) huella("fin", 1);
 	}
 	if(gs.grabacion) fclose(gs.grabacion);
 	if(gs.huellas) fclose(gs.huellas);
@@ -455,6 +498,8 @@ int app_start(void){
 	gs.terminado = 0;
 	gs.grabado = 0;
 	gs.ultima_captura = 0;
+	gs.tpos = 0;
+	gs.termino = 0;
 	return hle_init(&module, host_dir, exec_path);
 }
 
@@ -465,7 +510,10 @@ int app_run_frame(void){
 	if((gs.modo || gs.prefijo[0]) && capturas_cada && frames_run && frames_run % capturas_cada == 0) capturar(0);
 	frames_run++;
 	r = hle_run_frame();
-	if(gs.modo && r) huella("termino", 1);
+	if(gs.modo && r){
+		huella("termino", 1);
+		gs.termino = 1;
+	}
 	else if(gs.modo && frames_run % HUELLA_CADA == 0) huella(NULL, 0);
 	return r;
 }

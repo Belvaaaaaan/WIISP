@@ -46,3 +46,7 @@ UtilsForUser sceKernelDcacheWritebackAll
 sceCtrl sceCtrlReadBufferPositive
 sceCtrl sceCtrlSetSamplingMode
 sceRtc sceRtcGetCurrentTick
+sceUtility sceUtilityOskInitStart
+sceUtility sceUtilityOskShutdownStart
+sceUtility sceUtilityOskUpdate
+sceUtility sceUtilityOskGetStatus

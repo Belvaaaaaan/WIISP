@@ -97,6 +97,37 @@ static void test_ida_y_vuelta(void){
 	guion_free(&g);
 }
 
+static void test_teclado(void){
+	static const char *const textos[] = { "VEGETA", "", "con \"comillas\"", "barra \\ y # almohadilla", NULL };
+	char texto[1024], linea[400], err[128];
+	size_t len = 0;
+	u32 i;
+	Guion g;
+	/* Lo que escribe la grabación se vuelve a leer igual */
+	for(i = 0; i < sizeof(textos) / sizeof(textos[0]); i++){
+		guion_format_teclado(linea, sizeof(linea), 100 + i, textos[i]);
+		len += (size_t)snprintf(texto + len, sizeof(texto) - len, "%s\n", linea);
+	}
+	CHECK_EQ(guion_parse(&g, texto, err, sizeof(err)), 0);
+	CHECK_EQ(g.n, sizeof(textos) / sizeof(textos[0]));
+	for(i = 0; i < g.n && i < sizeof(textos) / sizeof(textos[0]); i++){
+		CHECK_EQ(g.l[i].flags, GUION_TECLADO);
+		CHECK_EQ(g.l[i].cuadro, 100 + i);
+		if(textos[i]) CHECK(g.l[i].texto && !strcmp(g.l[i].texto, textos[i]));
+		else CHECK(g.l[i].texto == NULL);
+	}
+	guion_free(&g);
+	CHECK_EQ(guion_parse(&g, "5 teclado \"A\"  # comentario\n6 teclado cancelar\n", err, sizeof(err)), 0);
+	CHECK_EQ(g.n, 2);
+	guion_free(&g);
+	/* Errores */
+	CHECK(guion_parse(&g, "5 teclado\n", err, sizeof(err)) != 0);
+	CHECK(guion_parse(&g, "5 teclado \"sin cerrar\n", err, sizeof(err)) != 0);
+	CHECK(guion_parse(&g, "5 teclado \"A\" CRUZ\n", err, sizeof(err)) != 0);
+	CHECK(guion_parse(&g, "5 CRUZ teclado \"A\"\n", err, sizeof(err)) != 0);
+	CHECK(guion_parse(&g, "5 teclado otra\n", err, sizeof(err)) != 0);
+}
+
 static void test_cuantizar(void){
 	int v;
 	CHECK_EQ(guion_cuantizar(128), 128);
@@ -216,6 +247,7 @@ void test_guion(void){
 	test_parse();
 	test_errores();
 	test_ida_y_vuelta();
+	test_teclado();
 	test_cuantizar();
 	test_partidas();
 	test_opt();

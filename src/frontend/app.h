@@ -97,8 +97,9 @@ unsigned long long app_ge_host_ticks(void);
        "fin", app_run_frame devuelve 1 ("fin del guion").
      - grabar: lo que llega por app_set_input se escribe en el guion (con el
        stick redondeado) y las huellas van a <guion>.huellas.
-   Mientras hay guion, el teclado en pantalla devuelve el texto inicial: lo
-   que escriba alguien no quedaría grabado. */
+   El teclado en pantalla también va en el guion: grabando se abre de verdad
+   y lo escrito queda como línea "teclado"; reproduciendo, el juego recibe
+   esas líneas en orden. */
 int  app_guion_reproducir(const char *guion, const char *prefijo, char *err, size_t errlen);
 int  app_guion_grabar(const char *guion);
 /* Termina el guion (al grabar, escribe la línea "fin") */

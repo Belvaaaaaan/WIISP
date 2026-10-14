@@ -542,6 +542,21 @@ dentro del vblank, que ya fallaban.
 - Si vuelve a pasar: foto de la pantalla roja (trae PC, LR y la pila) y
   mirar si wiisp.log termina en "[WIISP] saliendo".
 
+### v0.5.7.4: el teclado dentro del guion
+
+- Registro del usuario (0.5.7.3): la salida con HOME ya llega a
+  "[WIISP] saliendo". El teclado funciona ("Enter Player Name" en DBZ), pero
+  al grabar un guion se devolvía el texto inicial (vacío) y DBZ volvía a
+  pedir el nombre sin fin: la grabación quedó atascada ahí.
+- Ahora, con guion, `guion_osk` (app.c) hace de teclado: grabando abre el
+  de verdad y escribe `N teclado "TEXTO"` (o `teclado cancelar`);
+  reproduciendo devuelve esas líneas en orden. Prueba de invitado
+  `tests/guest/guion_teclado` (incluye comillas, '#', cancelar y quedarse
+  sin líneas) e ida y vuelta grabar/reproducir con huellas idénticas.
+- Visto en ese registro, para el paso 2: con el teclado abierto el tiempo
+  real cuenta como "syscalls" (81,9 % en esos 45 s) y en los menús de DBZ
+  sale 166,7 % de velocidad: no hay limitador de cuadros.
+
 ### Para el siguiente chat (empezar aquí)
 
 Metodología acordada (detalle en `docs/HOJA_DE_RUTA.md`): primero medir
