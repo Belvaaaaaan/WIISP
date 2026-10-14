@@ -104,12 +104,17 @@ unsigned app_guion_fin(void);
 /* Se llama antes de cada captura del guion (en el Wii, bajar a la VRAM
    emulada lo que solo está en la GPU) */
 void app_set_before_capture(void (*fn)(void));
-/* Con guion (grabando o reproduciendo), una captura cada N cuadros además
-   de las que pida el guion (por defecto 400; 0 = ninguna). Cada captura se
+/* Con guion (grabando o reproduciendo) o con app_capturas_sin_guion, una
+   captura cada N cuadros además de las que pida el guion (por defecto 400;
+   0 = ninguna). Cada captura se
    apunta en <prefijo>.capturas.txt con las opciones con que corría el
    juego. Ojo: guardar un BMP en la SD tarda, así que para medir velocidad
    conviene ponerlo a 0. */
 void app_guion_capturas_cada(unsigned cuadros);
+/* Las mismas capturas periódicas jugando sin guion: <prefijo>.c<cuadro>.bmp
+   y <prefijo>.capturas.txt. Se llama después de app_load y antes de
+   app_start; app_guion_parar las termina. */
+void app_capturas_sin_guion(const char *prefijo);
 /* El frontend describe sus opciones (renderizador, MR/ME, TN/TS...) para
    las capturas y las huellas */
 void app_set_mode_text(void (*fn)(char *buf, size_t size));

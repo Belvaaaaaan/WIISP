@@ -40,6 +40,10 @@
  *     0 = ninguna, para medir velocidad), apuntada con sus opciones en
  *     <programa>.capturas.txt.
  *
+ * Capturas: al abrir un juego, -/L las activa o quita (se recuerda en
+ * wiisp.cfg). Activadas, se guarda una captura cada 400 cuadros, con o sin
+ * guion; sin guion van a <juego>.jN.c<cuadro>.bmp y <juego>.jN.capturas.txt.
+ *
  * Guiones desde el menú: al abrir un juego, +/R pasa por "guion no",
  * "GRABAR" (se juega normalmente desde el arranque y al salir queda
  * <juego>.guion, con sus partidas de prueba en <juego>.partidas) y
@@ -303,6 +307,20 @@ static int start_replay(const char *path){
 	return 0;
 }
 
+/* Capturas jugando sin guion: <juego>.jN.* (el primer N libre) */
+static char shots_prefix[580];
+
+static void start_screenshots(const char *path){
+	char probe[620];
+	int n;
+	for(n = 1; n < 1000; n++){
+		snprintf(shots_prefix, sizeof(shots_prefix), "%s.j%d", path, n);
+		snprintf(probe, sizeof(probe), "%s.capturas.txt", shots_prefix);
+		if(access(probe, F_OK) != 0) break;
+	}
+	app_capturas_sin_guion(shots_prefix);
+}
+
 static void open_file(const char *path){
 	enum { GUION_NO, GUION_GRABAR, GUION_REPRODUCIR };
 	static const char *const guion_names[] = { "no        ", "GRABAR    ", "REPRODUCIR" };
@@ -316,21 +334,25 @@ static void open_file(const char *path){
 		printf("A: ejecutar   B: volver al menu\n");
 		for(;;){
 			Input in;
-			printf("\r2/Y: renderizador %s  1/X: texturas %s  +/R: guion %s  ",
+			printf("\r2/Y: renderizador %s  1/X: texturas %s\n+/R: guion %s  -/L: capturas %s",
 			       menu_renderer_gx() ? "GX (rapido)      " : "software (exacto)",
-			       menu_lazy_textures() ? "rapidas" : "seguras", guion_names[guion_mode]);
+			       menu_lazy_textures() ? "rapidas" : "seguras", guion_names[guion_mode],
+			       menu_screenshots() ? "SI (cada 400 cuadros)" : "no                   ");
+			printf("\x1b[1A");   /* vuelve a la primera línea para repintar las dos */
 			fflush(stdout);
 			do {
 				VIDEO_WaitVSync();
 				input_read(&in);
-			} while(!(in.menu & (IN_ACCEPT | IN_BACK | IN_EXIT | IN_OPTION | IN_SWITCH | IN_EXTRA)));
+			} while(!(in.menu & (IN_ACCEPT | IN_BACK | IN_EXIT | IN_OPTION | IN_SWITCH | IN_EXTRA | IN_EXTRA2)));
 			if(in.menu & IN_OPTION){ menu_set_renderer_gx(!menu_renderer_gx()); continue; }
 			if(in.menu & IN_SWITCH){ menu_set_lazy_textures(!menu_lazy_textures()); continue; }
 			if(in.menu & IN_EXTRA){ guion_mode = (guion_mode + 1) % 3; continue; }
-			printf("\n");
+			if(in.menu & IN_EXTRA2){ menu_set_screenshots(!menu_screenshots()); continue; }
+			printf("\n\n");
 			if(in.menu & IN_ACCEPT) break;
 			return;
 		}
+		app_guion_capturas_cada(menu_screenshots() ? 400 : 0);
 		if((guion_mode == GUION_GRABAR && start_recording(path)) ||
 		   (guion_mode == GUION_REPRODUCIR && start_replay(path))){
 			guion_mode = GUION_NO;
@@ -338,7 +360,13 @@ static void open_file(const char *path){
 			wait_accept();
 			return;
 		}
+		if(guion_mode == GUION_NO && menu_screenshots()) start_screenshots(path);
 		run_program();
+		if(!app_guion_activo() && shots_prefix[0]){
+			app_guion_parar();
+			printf("Capturas en %s.c*.bmp (lista en %s.capturas.txt)\n", shots_prefix, shots_prefix);
+		}
+		shots_prefix[0] = 0;
 		if(app_guion_activo()){
 			int replay = app_guion_activo() == 1;
 			if(replay) hle_profile_report("final de la escena");

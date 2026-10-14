@@ -31,14 +31,16 @@ static char config_path[256];
 static char last_dir[FILELIST_PATH_LEN];
 static int renderer_gx = 1;
 static int lazy_textures = 1;
+static int screenshots = 1;
 
-/* wiisp.cfg: carpeta, renderizador y comprobación de texturas */
+/* wiisp.cfg: carpeta, renderizador, comprobación de texturas y capturas */
 static void save_config(void){
 	FILE *f;
 	if(!config_path[0]) return;
 	f = fopen(config_path, "w");
 	if(!f) return;
-	fprintf(f, "%s\n%s\n%s\n", last_dir, renderer_gx ? "gx" : "soft", lazy_textures ? "texturas-rapidas" : "texturas-seguras");
+	fprintf(f, "%s\n%s\n%s\n%s\n", last_dir, renderer_gx ? "gx" : "soft", lazy_textures ? "texturas-rapidas" : "texturas-seguras",
+	        screenshots ? "capturas-si" : "capturas-no");
 	fclose(f);
 }
 
@@ -52,6 +54,7 @@ void menu_set_config_path(const char *path){
 		last_dir[strcspn(last_dir, "\r\n")] = 0;
 		if(fgets(line, sizeof(line), f)) renderer_gx = strncmp(line, "soft", 4) != 0;
 		if(fgets(line, sizeof(line), f)) lazy_textures = strncmp(line, "texturas-seguras", 16) != 0;
+		if(fgets(line, sizeof(line), f)) screenshots = strncmp(line, "capturas-no", 11) != 0;
 	}
 	fclose(f);
 }
@@ -67,6 +70,13 @@ int menu_lazy_textures(void){ return lazy_textures; }
 
 void menu_set_lazy_textures(int on){
 	lazy_textures = on;
+	save_config();
+}
+
+int menu_screenshots(void){ return screenshots; }
+
+void menu_set_screenshots(int on){
+	screenshots = on;
 	save_config();
 }
 

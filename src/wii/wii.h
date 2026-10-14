@@ -20,7 +20,8 @@ enum {
 	IN_SWITCH = 1 << 6,   /* 1 / X: cambiar SD <-> USB */
 	IN_EXIT = 1 << 7,     /* HOME / START */
 	IN_OPTION = 1 << 8,   /* 2 / Y */
-	IN_EXTRA = 1 << 9     /* + / R */
+	IN_EXTRA = 1 << 9,    /* + / R */
+	IN_EXTRA2 = 1 << 10   /* - / L */
 };
 
 typedef struct {
@@ -74,5 +75,8 @@ void menu_set_renderer_gx(int on);
    (rápido); 0 = una vez por periodo, como PPSSPP (seguro) */
 int  menu_lazy_textures(void);
 void menu_set_lazy_textures(int on);
+/* 1 = una captura cada 400 cuadros al jugar o con guion (ver app.h) */
+int  menu_screenshots(void);
+void menu_set_screenshots(int on);
 
 #endif

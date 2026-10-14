@@ -19,7 +19,7 @@
 
 /* Versión de WIISP (la misma que dist/apps/wiisp/meta.xml): sale en el
    menú y al principio de wiisp.log */
-#define WIISP_VERSION "0.5.7.1"
+#define WIISP_VERSION "0.5.7.2"
 
 typedef void (*HleFunc)(void);
 

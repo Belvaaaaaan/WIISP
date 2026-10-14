@@ -117,6 +117,7 @@ void input_read(Input *in){
 	if(in->down & (WPAD_BUTTON_HOME | GC(PAD_BUTTON_START))) in->menu |= IN_EXIT;
 	if(in->down & (WPAD_BUTTON_2 | GC(PAD_BUTTON_Y))) in->menu |= IN_OPTION;
 	if(in->down & (WPAD_BUTTON_PLUS | GC(PAD_TRIGGER_R))) in->menu |= IN_EXTRA;
+	if(in->down & (WPAD_BUTTON_MINUS | GC(PAD_TRIGGER_L))) in->menu |= IN_EXTRA2;
 }
 
 /* HOME mantenido (Wiimote) o Z+START (GameCube) */

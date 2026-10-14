@@ -521,6 +521,13 @@ dentro del vblank, que ya fallaban.
   calculan la huella de 32 MB (solo las que pide el guion). Las capturas no
   cambian la emulación (mismas huellas con y sin ellas).
 
+### v0.5.7.2: capturas desde el menú
+
+- Al abrir un juego, **-/L** activa o quita las capturas cada 400 cuadros
+  (se guarda en wiisp.cfg, cuarta línea `capturas-si`/`capturas-no`). Con
+  ellas activas también se capturan las partidas normales, sin guion
+  (`<juego>.jN.*`, `app_capturas_sin_guion`).
+
 ### Para el siguiente chat (empezar aquí)
 
 Metodología acordada (detalle en `docs/HOJA_DE_RUTA.md`): primero medir

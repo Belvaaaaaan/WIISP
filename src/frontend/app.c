@@ -350,6 +350,12 @@ static void capturar(int pedida){
 void app_set_mode_text(void (*fn)(char *buf, size_t size)){ mode_text = fn; }
 void app_guion_capturas_cada(unsigned cuadros){ capturas_cada = cuadros; }
 
+void app_capturas_sin_guion(const char *prefijo){
+	if(gs.modo) return;
+	app_guion_parar();
+	snprintf(gs.prefijo, sizeof(gs.prefijo), "%s", prefijo);
+}
+
 static void grabar_linea(void){
 	char line[160];
 	int old = prof_switch(PROF_REGISTRO);
@@ -449,7 +455,7 @@ int app_run_frame(void){
 	int r;
 	if(gs.terminado) return 1;
 	if(gs.modo == G_REPRODUCIR && guion_paso()) return 1;
-	if(gs.modo && capturas_cada && frames_run && frames_run % capturas_cada == 0) capturar(0);
+	if((gs.modo || gs.prefijo[0]) && capturas_cada && frames_run && frames_run % capturas_cada == 0) capturar(0);
 	frames_run++;
 	r = hle_run_frame();
 	if(gs.modo && r) huella("termino", 1);

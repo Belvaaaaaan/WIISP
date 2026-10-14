@@ -70,6 +70,12 @@ formato completo está en `src/frontend/guion.h`.
 Si cambias MR/ME, TN/TS o el turbo durante la reproducción, las capturas
 siguientes lo apuntan.
 
+Las capturas se activan o quitan con **-** (Wiimote) o **L** (GameCube) en
+la misma pantalla (`capturas SI` / `no`); WIISP lo recuerda en `wiisp.cfg`.
+Activadas, también se toman **jugando sin guion**: van a
+`<juego>.jN.c<cuadro>.bmp` y `<juego>.jN.capturas.txt` (`j1`, `j2`... por
+partida), útil para cazar glitches mientras juegas.
+
 Las capturas son la imagen de la PSP (512x272), sin el texto de arriba.
 Guardarlas en la SD tarda un poco, así que para **medir velocidad** conviene
 quitarlas (`capturas 0` en `autotest.txt`, abajo).
