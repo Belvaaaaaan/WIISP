@@ -26,6 +26,7 @@
  *     --partidas DIR    partidas de prueba: DIR (terminado en .partidas) se
  *                       vacía y se llena con DIR_base si existe
  *     --opt NOMBRE=0|1  interruptor de optimización (core/opt.h); repetible
+ *     --capturas-guion N con guion, una captura cada N cuadros (400; 0 = no)
  *
  * En Windows, con la consola en primer plano, W A S D mueven el stick
  * analógico de la PSP y ENTER es START.
@@ -267,6 +268,12 @@ static unsigned long long framebuffer_hash(void){
 	return h;
 }
 
+/* Opciones con que corre el juego, para las capturas y las huellas */
+static void mode_text(char *buf, size_t size){
+	snprintf(buf, size, "PC %s M%c%s", null_gpu ? "sin dibujo" : "software (exacto)", app_fast_math() ? 'R' : 'E',
+	         app_turbo() ? " TURBO" : "");
+}
+
 int main(int argc, char **argv){
 	int max_imports = 16, run = 0, frames = 1800, i, exited = 0, every = 0;
 	const char *path = NULL, *imports = NULL, *screenshot = NULL;
@@ -293,6 +300,7 @@ int main(int argc, char **argv){
 		else if(!strcmp(argv[i], "--salida") && i + 1 < argc) salida = argv[++i];
 		else if(!strcmp(argv[i], "--grabar") && i + 1 < argc) grabar = argv[++i];
 		else if(!strcmp(argv[i], "--partidas") && i + 1 < argc) partidas = argv[++i];
+		else if(!strcmp(argv[i], "--capturas-guion") && i + 1 < argc) app_guion_capturas_cada((unsigned)atoi(argv[++i]));
 		else if(!strcmp(argv[i], "--opt") && i + 1 < argc){
 			if(n_opts < (int)(sizeof(opts) / sizeof(opts[0]))) opts[n_opts++] = argv[i + 1];
 			i++;
@@ -303,11 +311,12 @@ int main(int argc, char **argv){
 		fprintf(stderr, "uso: %s [--all] [--imports FILE] [--run] [--frames N] [--quiet]\n"
 		                "          [--screenshot FILE] [--capturas N] [--log FILE] [--osk TEXTO]\n"
 		                "          [--guion FILE] [--salida PREFIJO] [--grabar FILE] [--partidas DIR]\n"
-		                "          [--opt NOMBRE=0|1]...\n"
+		                "          [--opt NOMBRE=0|1]... [--capturas-guion N]\n"
 		                "          EBOOT.PBP|archivo.elf|archivo.prx|imagen.iso|imagen.cso\n", argv[0]);
 		return 2;
 	}
 	if(app_init()) return 1;
+	app_set_mode_text(mode_text);
 	for(i = 0; i < n_opts; i++){
 		int r = app_opt_set(opts[i]);
 		if(r) fprintf(stderr, "[OPT] %s: %s\n", opts[i], r > 0 ? "todavia no esta implementada" : "no se entiende");

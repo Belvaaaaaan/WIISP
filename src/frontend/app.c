@@ -258,10 +258,14 @@ static struct {
 	u32 botones;          /* último estado grabado */
 	u8 lx, ly;
 	int grabado;          /* ya hay una línea de mando */
+	FILE *indice;         /* <prefijo>.capturas.txt */
+	u32 ultima_captura;   /* para no repetir la del mismo cuadro */
 } gs;
 
 static AppOskFunc osk_func;
 static void (*before_capture)(void);
+static void (*mode_text)(char *buf, size_t size);
+static unsigned capturas_cada = 400;
 
 #define HUELLA_CADA 60    /* cuadros entre huellas */
 
@@ -300,13 +304,51 @@ static void huella(const char *motivo, int ram_entera){
 	prof_switch(old);
 }
 
-static void capturar(void){
-	char path[560];
+/* Con qué opciones corría el juego: las del frontend (renderizador, MR/ME,
+   TN/TS...) y los interruptores de optimización */
+static void describir_modo(char *buf, size_t size){
+	char opts[256];
+	size_t len = 0;
+	buf[0] = 0;
+	if(mode_text){
+		mode_text(buf, size);
+		len = strlen(buf);
+	}
+	opt_describe(opts, sizeof(opts));
+	if(len < size) snprintf(buf + len, size - len, "%s[OPT] %s", len ? " " : "", opts);
+}
+
+/* Guarda la imagen actual como <prefijo>.c<cuadro>.bmp y la apunta en
+   <prefijo>.capturas.txt con las opciones del momento. Las capturas que
+   pide el guion llevan además una huella con la RAM entera; las periódicas
+   no, porque recorrer 32 MB cada pocos segundos frenaría la escena. */
+static void capturar(int pedida){
+	char path[560], modo[400];
+	int old;
+	if(frames_run == gs.ultima_captura && frames_run) return;
+	gs.ultima_captura = frames_run;
+	old = prof_switch(PROF_REGISTRO);
 	if(before_capture) before_capture();
 	snprintf(path, sizeof(path), "%s.c%06u.bmp", gs.prefijo, frames_run);
 	app_write_bmp(path);
-	huella("captura", 1);
+	if(!gs.indice){
+		char ip[560];
+		snprintf(ip, sizeof(ip), "%s.capturas.txt", gs.prefijo);
+		gs.indice = fopen(ip, "w");
+		if(gs.indice) fprintf(gs.indice, "# capturas de WIISP: cuadro, archivo y opciones con las que corria\n");
+	}
+	if(gs.indice){
+		const char *name = strrchr(path, '/');
+		describir_modo(modo, sizeof(modo));
+		fprintf(gs.indice, "cuadro %u  %s  %s\n", frames_run, name ? name + 1 : path, modo);
+		fflush(gs.indice);
+	}
+	prof_switch(old);
+	if(pedida) huella("captura", 1);
 }
+
+void app_set_mode_text(void (*fn)(char *buf, size_t size)){ mode_text = fn; }
+void app_guion_capturas_cada(unsigned cuadros){ capturas_cada = cuadros; }
 
 static void grabar_linea(void){
 	char line[160];
@@ -318,11 +360,11 @@ static void grabar_linea(void){
 }
 
 static void abrir_huellas(const char *path){
-	char opts[256];
+	char modo[400];
 	gs.huellas = path && path[0] ? fopen(path, "w") : NULL;
 	if(!gs.huellas) return;
-	opt_describe(opts, sizeof(opts));
-	fprintf(gs.huellas, "# huellas de WIISP: una cada %u cuadros\n# [OPT] %s\n", HUELLA_CADA, opts);
+	describir_modo(modo, sizeof(modo));
+	fprintf(gs.huellas, "# huellas de WIISP " WIISP_VERSION ": una cada %u cuadros\n# %s\n", HUELLA_CADA, modo);
 }
 
 int app_guion_reproducir(const char *guion, const char *prefijo, char *err, size_t errlen){
@@ -358,6 +400,7 @@ void app_guion_parar(void){
 	}
 	if(gs.grabacion) fclose(gs.grabacion);
 	if(gs.huellas) fclose(gs.huellas);
+	if(gs.indice) fclose(gs.indice);
 	guion_free(&gs.g);
 	memset(&gs, 0, sizeof(gs));
 	hle_set_osk(osk_func);
@@ -380,7 +423,7 @@ static int guion_paso(void){
 	while(gs.pos < gs.g.n && gs.g.l[gs.pos].cuadro <= frames_run){
 		const GuionLinea *l = &gs.g.l[gs.pos++];
 		if(l->flags & GUION_MANDO) hle_set_input(l->botones, l->lx, l->ly);
-		if(l->flags & GUION_CAPTURA) capturar();
+		if(l->flags & GUION_CAPTURA) capturar(1);
 		if(l->flags & GUION_FIN){
 			huella("fin", 1);
 			gs.terminado = 1;
@@ -398,6 +441,7 @@ int app_start(void){
 	gs.pos = 0;
 	gs.terminado = 0;
 	gs.grabado = 0;
+	gs.ultima_captura = 0;
 	return hle_init(&module, host_dir, exec_path);
 }
 
@@ -405,6 +449,7 @@ int app_run_frame(void){
 	int r;
 	if(gs.terminado) return 1;
 	if(gs.modo == G_REPRODUCIR && guion_paso()) return 1;
+	if(gs.modo && capturas_cada && frames_run && frames_run % capturas_cada == 0) capturar(0);
 	frames_run++;
 	r = hle_run_frame();
 	if(gs.modo && r) huella("termino", 1);

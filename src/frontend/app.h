@@ -104,6 +104,15 @@ unsigned app_guion_fin(void);
 /* Se llama antes de cada captura del guion (en el Wii, bajar a la VRAM
    emulada lo que solo está en la GPU) */
 void app_set_before_capture(void (*fn)(void));
+/* Con guion (grabando o reproduciendo), una captura cada N cuadros además
+   de las que pida el guion (por defecto 400; 0 = ninguna). Cada captura se
+   apunta en <prefijo>.capturas.txt con las opciones con que corría el
+   juego. Ojo: guardar un BMP en la SD tarda, así que para medir velocidad
+   conviene ponerlo a 0. */
+void app_guion_capturas_cada(unsigned cuadros);
+/* El frontend describe sus opciones (renderizador, MR/ME, TN/TS...) para
+   las capturas y las huellas */
+void app_set_mode_text(void (*fn)(char *buf, size_t size));
 
 /* Partidas: carpeta que hace de ms0:/PSP/SAVEDATA */
 void app_set_savedata_dir(const char *dir);

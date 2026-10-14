@@ -36,10 +36,15 @@
  *     .v2...), para comprobar que la escena sale idéntica.
  *   - "opt NOMBRE 0|1" cambia un interruptor de optimización (core/opt.h)
  *     para los programas siguientes.
+ *   - "capturas N": con guion, una captura cada N cuadros (400 por defecto;
+ *     0 = ninguna, para medir velocidad), apuntada con sus opciones en
+ *     <programa>.capturas.txt.
  *
- * Para grabar un guion: al abrir un juego, +/R activa "grabar guion"; se
- * juega normalmente desde el arranque y al salir queda <juego>.guion junto
- * al juego, con sus partidas de prueba (<juego>.partidas).
+ * Guiones desde el menú: al abrir un juego, +/R pasa por "guion no",
+ * "GRABAR" (se juega normalmente desde el arranque y al salir queda
+ * <juego>.guion, con sus partidas de prueba en <juego>.partidas) y
+ * "REPRODUCIR" (el juego se juega solo con <juego>.guion y las salidas van a
+ * <juego>.rN.*, con N el primer número libre).
  *
  * SPDX-License-Identifier: GPL-2.0-or-later
 **/
@@ -108,6 +113,16 @@ static void profile_hook(char *buf, size_t size){
 		               cnt[1], cnt[2], cnt[0]);
 		if(len > 0 && (size_t)len < size) gx_ge_texture_report(buf + len, size - (size_t)len);
 	} else snprintf(buf, size, "modo EXACTO (dibujo por software)");
+}
+
+/* Las opciones con que corre el juego, para las capturas y las huellas:
+   renderizador, M(atemática) R(ápida)/E(xacta), T(exturas) N(ormalizadas)/
+   S(in normalizar), caché de texturas y turbo */
+static void mode_text(char *buf, size_t size){
+	if(gx_ge_enabled())
+		snprintf(buf, size, "GX M%c T%c texturas %s%s", app_fast_math() ? 'R' : 'E', gx_ge_tex_norm() ? 'N' : 'S',
+		         menu_lazy_textures() ? "rapidas" : "seguras", app_turbo() ? " TURBO" : "");
+	else snprintf(buf, size, "software (exacto)%s", app_turbo() ? " TURBO" : "");
 }
 
 /* Muestreo del desglose ([TIEMPOS] GE por dentro): una alarma cada 1 ms
@@ -204,7 +219,8 @@ static void run_program(void){
 				   N(ormalizadas) o S(in normalizar) */
 				char tag[8] = "";
 				if(gx_ge_enabled()) snprintf(tag, sizeof(tag), "M%c T%c  ", app_fast_math() ? 'R' : 'E', gx_ge_tex_norm() ? 'N' : 'S');
-				snprintf(text, sizeof(text), "%s%s%s%s", app_guion_activo() == 2 ? "GRABANDO  " : "",
+				snprintf(text, sizeof(text), "%s%s%s%s",
+				         app_guion_activo() == 2 ? "GRABANDO  " : app_guion_activo() == 1 ? "GUION  " : "",
 				         app_turbo() ? "TURBO  " : "", tag, overlay);
 			}
 			video_draw_psp_frame(text);
@@ -251,9 +267,47 @@ static int start_recording(const char *path){
 	return 0;
 }
 
+/* Reproducir <juego>.guion desde el menú: las salidas van a <juego>.rN.*
+   (el primer N libre, para poder comparar una reproducción con otra) y el
+   registro de esta corrida a <juego>.rN.log. 0 = listo. */
+static char replay_prefix[580];
+
+static int start_replay(const char *path){
+	char guion[560], partidas[560], base[580], probe[620], err[160];
+	int n;
+	snprintf(guion, sizeof(guion), "%s.guion", path);
+	if(access(guion, F_OK) != 0){
+		printf("\nNo hay guion: primero graba uno (%s)\n", guion);
+		return -1;
+	}
+	for(n = 1; n < 1000; n++){
+		snprintf(replay_prefix, sizeof(replay_prefix), "%s.r%d", path, n);
+		snprintf(probe, sizeof(probe), "%s.huellas", replay_prefix);
+		if(access(probe, F_OK) != 0) break;
+	}
+	snprintf(partidas, sizeof(partidas), "%s.partidas", path);
+	snprintf(base, sizeof(base), "%s_base", partidas);
+	if(app_preparar_partidas(partidas, base)){
+		printf("\nError: no se pudieron preparar %s\n", partidas);
+		return -1;
+	}
+	snprintf(probe, sizeof(probe), "%s.log", replay_prefix);
+	hle_set_log_file(probe);
+	if(app_guion_reproducir(guion, replay_prefix, err, sizeof(err))){
+		printf("\nGuion %s: %s\n", guion, err);
+		app_set_savedata_dir(savedata_normal);
+		hle_reopen_log_file(log_normal);
+		return -1;
+	}
+	hle_log("[GUION] reproduciendo %s hasta el cuadro %u\n", guion, app_guion_fin());
+	return 0;
+}
+
 static void open_file(const char *path){
+	enum { GUION_NO, GUION_GRABAR, GUION_REPRODUCIR };
+	static const char *const guion_names[] = { "no        ", "GRABAR    ", "REPRODUCIR" };
 	char imports[512];
-	static int record;
+	static int guion_mode;
 
 	video_clear_console();
 	app_imports_path(path, imports, sizeof(imports));
@@ -262,9 +316,9 @@ static void open_file(const char *path){
 		printf("A: ejecutar   B: volver al menu\n");
 		for(;;){
 			Input in;
-			printf("\r2/Y: renderizador %s  1/X: texturas %s  +/R: grabar guion %s  ",
+			printf("\r2/Y: renderizador %s  1/X: texturas %s  +/R: guion %s  ",
 			       menu_renderer_gx() ? "GX (rapido)      " : "software (exacto)",
-			       menu_lazy_textures() ? "rapidas" : "seguras", record ? "SI" : "no");
+			       menu_lazy_textures() ? "rapidas" : "seguras", guion_names[guion_mode]);
 			fflush(stdout);
 			do {
 				VIDEO_WaitVSync();
@@ -272,21 +326,30 @@ static void open_file(const char *path){
 			} while(!(in.menu & (IN_ACCEPT | IN_BACK | IN_EXIT | IN_OPTION | IN_SWITCH | IN_EXTRA)));
 			if(in.menu & IN_OPTION){ menu_set_renderer_gx(!menu_renderer_gx()); continue; }
 			if(in.menu & IN_SWITCH){ menu_set_lazy_textures(!menu_lazy_textures()); continue; }
-			if(in.menu & IN_EXTRA){ record = !record; continue; }
+			if(in.menu & IN_EXTRA){ guion_mode = (guion_mode + 1) % 3; continue; }
 			printf("\n");
 			if(in.menu & IN_ACCEPT) break;
 			return;
 		}
-		if(record && start_recording(path)){
+		if((guion_mode == GUION_GRABAR && start_recording(path)) ||
+		   (guion_mode == GUION_REPRODUCIR && start_replay(path))){
+			guion_mode = GUION_NO;
+			printf("Pulsa A o B para volver al menu.\n");
 			wait_accept();
 			return;
 		}
 		run_program();
 		if(app_guion_activo()){
+			int replay = app_guion_activo() == 1;
+			if(replay) hle_profile_report("final de la escena");
 			app_guion_parar();
 			app_set_savedata_dir(savedata_normal);
-			printf("Guion grabado en %s.guion\n", path);
+			if(replay){
+				hle_reopen_log_file(log_normal);
+				printf("Reproduccion guardada en %s.* (log, huellas, capturas)\n", replay_prefix);
+			} else printf("Guion grabado en %s.guion\n", path);
 		}
+		guion_mode = GUION_NO;   /* que no se vuelva a grabar encima sin querer */
 	}
 	printf("\nPulsa A o B para volver al menu.\n");
 	wait_accept();
@@ -416,6 +479,7 @@ static int autotest(const char *appdir){
 		if(!strcmp(line, "soft")){ gx_ge_enable(0); continue; }
 		if(!strncmp(line, "frames ", 7)){ max_frames = atoi(line + 7); continue; }
 		if(!strncmp(line, "veces ", 6)){ times = atoi(line + 6); if(times < 1) times = 1; continue; }
+		if(!strncmp(line, "capturas ", 9)){ app_guion_capturas_cada((unsigned)atoi(line + 9)); continue; }
 		if(!strncmp(line, "opt ", 4)){
 			int r = app_opt_set(line + 4);
 			if(r) printf("%s: %s\n", line, r > 0 ? "todavia no esta implementada" : "no se entiende");
@@ -473,6 +537,7 @@ int main(int argc, char **argv){
 	hle_set_log_file(log_normal);
 	/* Las capturas de los guiones necesitan la imagen en la VRAM emulada */
 	app_set_before_capture(gx_ge_sync_vram);
+	app_set_mode_text(mode_text);
 
 	autotest(appdir[0] ? appdir : NULL);
 

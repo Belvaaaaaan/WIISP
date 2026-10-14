@@ -173,8 +173,9 @@ optimización estaban activos (`src/core/opt.h`).
 ### Escenas de prueba repetibles
 
 Para comparar una optimización con y sin ella, se graba un guion de botones
-jugando en el Wii (al abrir el juego, **+/R**) y `autotest.txt` lo reproduce
-igual cada vez, con su registro, huellas del estado y capturas. Cómo se hace,
+jugando en el Wii (al abrir el juego, **+/R**: `GRABAR`) y se reproduce igual
+cada vez (**+/R**: `REPRODUCIR`, o varias veces con `autotest.txt`), con su
+registro, huellas del estado y una captura cada 400 cuadros. Cómo se hace,
 paso a paso: [docs/ESCENAS_DE_PRUEBA.md](docs/ESCENAS_DE_PRUEBA.md).
 
 ### En Windows

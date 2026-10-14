@@ -508,6 +508,19 @@ dentro del vblank, que ya fallaban.
   los menús de DBZ no es espera: hay que medir qué syscalls se lo llevan
   antes de decidir dónde va `PROF_ESPERA`.
 
+### v0.5.7.1: reproducir desde el menú y capturas periódicas
+
+- Al abrir un juego, **+/R** pasa por `guion no` → `GRABAR` → `REPRODUCIR`.
+  Reproducir deja `<juego>.rN.*` (primer N libre: log propio con
+  `[TIEMPOS]`, huellas, capturas) y vuelve al menú sin apagar; la opción
+  vuelve a `no` tras cada corrida para no grabar encima sin querer.
+- Con guion (grabando o reproduciendo), una captura cada 400 cuadros
+  (`capturas N` en autotest.txt, `--capturas-guion N` en el PC; 0 = no),
+  apuntada en `<prefijo>.capturas.txt` con las opciones del momento
+  (GX/software, MR/ME, TN/TS, texturas, turbo y `[OPT]`). Las periódicas no
+  calculan la huella de 32 MB (solo las que pide el guion). Las capturas no
+  cambian la emulación (mismas huellas con y sin ellas).
+
 ### Para el siguiente chat (empezar aquí)
 
 Metodología acordada (detalle en `docs/HOJA_DE_RUTA.md`): primero medir
