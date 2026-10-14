@@ -557,6 +557,15 @@ dentro del vblank, que ya fallaban.
   real cuenta como "syscalls" (81,9 % en esos 45 s) y en los menús de DBZ
   sale 166,7 % de velocidad: no hay limitador de cuadros.
 
+### v0.5.7.5: al grabar se parte de las partidas reales
+
+- El usuario no podía cargar ni guardar al grabar: `<juego>.partidas`
+  empezaba vacía (por eso DBZ pedía el nombre: perfil nuevo). Ahora, al
+  grabar en el Wii, `<juego>.partidas_base` se rehace como copia de las
+  carpetas de SAVEDATA que empiezan por el ID del juego
+  (`guion_foto_partidas`); grabación y reproducciones parten de ahí y las
+  partidas reales no se tocan.
+
 ### Para el siguiente chat (empezar aquí)
 
 Metodología acordada (detalle en `docs/HOJA_DE_RUTA.md`): primero medir

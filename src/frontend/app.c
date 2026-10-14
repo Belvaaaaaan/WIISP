@@ -473,6 +473,12 @@ int app_preparar_partidas(const char *dir, const char *base){
 }
 void app_set_savedata_dir(const char *dir){ io_set_savedata_dir(dir); }
 
+const char *app_game_id(void){ return module.disc_id; }
+
+int app_foto_partidas(const char *base, const char *savedata){
+	return guion_foto_partidas(base, savedata, module.disc_id);
+}
+
 /* Aplica las líneas del guion que tocan antes de emular este cuadro.
    Devuelve 1 si el guion terminó. */
 static int guion_paso(void){

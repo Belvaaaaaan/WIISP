@@ -10,10 +10,12 @@ mismo sitio.
 ## 1. Grabar el guion en el Wii
 
 1. Copia el juego a la SD, por ejemplo `sd:/ISO/DBZ.iso`.
-2. (Opcional) Si quieres empezar con una partida guardada, copia su carpeta
-   de `SAVEDATA` (p. ej. `ULUS10537...`) dentro de
-   `sd:/ISO/DBZ.iso.partidas_base/`. Sin ella, el juego empieza como en una
-   PSP nueva.
+2. Nada que preparar con las partidas: al empezar a grabar, WIISP copia
+   tus partidas reales de ese juego (las carpetas de `SAVEDATA` que empiezan
+   por su ID, p. ej. `ULUS10537...`) a `DBZ.iso.partidas_base/`. El guion
+   empieza desde tu progreso y se reproduce siempre con esa copia; tus
+   partidas reales no se tocan. Si quieres empezar como en una PSP nueva,
+   graba con `SAVEDATA` sin partidas de ese juego.
 3. En WIISP abre el juego y, antes de pulsar A, pulsa **+** (Wiimote) o
    **R** (GameCube) hasta que diga `guion GRABAR`. Cada pulsación pasa a la
    siguiente opción: `no` → `GRABAR` → `REPRODUCIR` → `no`.
@@ -26,8 +28,9 @@ mismo sitio.
 Mientras se graba:
 
 - Las partidas salen de `DBZ.iso.partidas`, que se vacía y se rellena con
-  `partidas_base` al empezar. Así, lo que el juego guarde durante la
-  prueba no cambia la siguiente corrida.
+  `partidas_base` al empezar. Puedes cargar y guardar normalmente, pero lo
+  que guardes va a esa carpeta de prueba (no a tus partidas reales) y se
+  borra en la siguiente corrida, para que cada una empiece igual.
 - El teclado en pantalla se abre normalmente y lo que escribas (o si lo
   cancelas) queda en el guion como una línea `teclado "TEXTO"`. Al
   reproducir, el juego recibe esos textos en el mismo orden, sin que se abra

@@ -322,3 +322,27 @@ int guion_preparar_partidas(const char *dir, const char *base){
 	if(base && base[0] && is_dir(base)) return copiar(base, dir);
 	return 0;
 }
+
+int guion_foto_partidas(const char *base, const char *origen, const char *id){
+	static const char sufijo[] = ".partidas_base";
+	size_t n = strlen(base), idlen = id ? strlen(id) : 0;
+	DIR *d;
+	struct dirent *e;
+	char a[700], b[700];
+	int copiadas = 0;
+	while(n > 1 && base[n - 1] == '/') n--;
+	if(n < sizeof(sufijo) || strncmp(base + n - (sizeof(sufijo) - 1), sufijo, sizeof(sufijo) - 1)) return -1;
+	if(is_dir(base)){
+		if(vaciar(base)) return -1;
+	} else if(mkdir(base, 0777)) return -1;
+	if(!idlen || !(d = opendir(origen))) return 0;
+	while((e = readdir(d))){
+		if(strncmp(e->d_name, id, idlen)) continue;
+		if((size_t)snprintf(a, sizeof(a), "%s/%s", origen, e->d_name) >= sizeof(a) ||
+		   (size_t)snprintf(b, sizeof(b), "%s/%s", base, e->d_name) >= sizeof(b) || !is_dir(a)) continue;
+		if((mkdir(b, 0777) && !is_dir(b)) || copiar(a, b)){ copiadas = -1; break; }
+		copiadas++;
+	}
+	closedir(d);
+	return copiadas;
+}

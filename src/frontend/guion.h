@@ -90,4 +90,10 @@ int  guion_format_teclado(char *out, size_t size, u32 cuadro, const char *texto)
    0 = correcto. */
 int  guion_preparar_partidas(const char *dir, const char *base);
 
+/* Foto de las partidas de un juego: vacía `base` (debe terminar en
+   ".partidas_base") y copia dentro las carpetas de `origen` cuyo nombre
+   empieza por `id` (p. ej. ULUS10537DAT0 para ULUS10537). Devuelve cuántas
+   copió, o -1 si falla. Con id vacío no copia nada. */
+int  guion_foto_partidas(const char *base, const char *origen, const char *id);
+
 #endif

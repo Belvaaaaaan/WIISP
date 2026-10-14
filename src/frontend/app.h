@@ -131,6 +131,12 @@ void app_set_savedata_dir(const char *dir);
 /* Partidas de prueba: vacía dir (debe terminar en ".partidas"), copia
    dentro lo que haya en base y la usa como SAVEDATA. 0 = correcto. */
 int  app_preparar_partidas(const char *dir, const char *base);
+/* Al grabar: base (terminada en ".partidas_base") pasa a ser una copia de
+   las partidas del juego cargado que hay en `savedata` (las carpetas que
+   empiezan por su ID, p. ej. ULUS10537). Devuelve cuántas copió o -1. */
+int  app_foto_partidas(const char *base, const char *savedata);
+/* ID del juego cargado (ULUS10537...), o "" si no se sabe */
+const char *app_game_id(void);
 
 /* Interruptores de optimización (core/opt.h): "nombre=0|1" o "nombre 0|1".
    0 = cambiado, -1 = nombre o valor desconocido, 1 = todavía no existe. */

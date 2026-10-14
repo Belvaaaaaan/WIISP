@@ -250,8 +250,17 @@ static void run_program(void){
    como .guion.bak). 0 = grabando. */
 static int start_recording(const char *path){
 	char guion[560], bak[580], partidas[560], base[580];
+	int fotos;
 	snprintf(partidas, sizeof(partidas), "%s.partidas", path);
 	snprintf(base, sizeof(base), "%s_base", partidas);
+	/* Se empieza desde tus partidas reales de este juego, copiadas: el guion
+	   se reproduce luego con esa misma copia y las reales no se tocan */
+	fotos = app_foto_partidas(base, savedata_normal);
+	if(fotos < 0){
+		printf("\nError: no se pudieron copiar las partidas a %s\n", base);
+		return -1;
+	}
+	printf("Partidas de %s copiadas para el guion: %d\n", app_game_id()[0] ? app_game_id() : "?", fotos);
 	if(app_preparar_partidas(partidas, base)){
 		printf("\nError: no se pudieron preparar %s\n", partidas);
 		return -1;
@@ -267,7 +276,7 @@ static int start_recording(const char *path){
 		app_set_savedata_dir(savedata_normal);
 		return -1;
 	}
-	hle_log_quiet("[GUION] grabando %s (partidas en %s)\n", guion, partidas);
+	hle_log_quiet("[GUION] grabando %s (partidas en %s, %d copiadas de %s)\n", guion, partidas, fotos, savedata_normal);
 	return 0;
 }
 

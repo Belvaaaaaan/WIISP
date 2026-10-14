@@ -200,6 +200,44 @@ static void test_partidas(void){
 	rmdir(dir);
 }
 
+/* Al grabar: copia solo las partidas del juego (las que empiezan por su ID) */
+static void test_foto(void){
+	const char *orig = "build-test-foto-SAVEDATA", *base = "build-test-foto.partidas_base";
+	static const char *const dirs[] = { "ULUS10537DAT0", "ULUS10537DAT1", "NPUH90087DAT0", "ULUS10041S0" };
+	char p[400];
+	u32 i;
+	mkdir(orig, 0777);
+	for(i = 0; i < 4; i++){
+		snprintf(p, sizeof(p), "%s/%s", orig, dirs[i]);
+		mkdir(p, 0777);
+		snprintf(p, sizeof(p), "%s/%s/DATA.BIN", orig, dirs[i]);
+		write_file(p, dirs[i]);
+	}
+	CHECK(guion_foto_partidas("build-test-foto", orig, "ULUS10537") < 0);   /* nombre no permitido */
+	CHECK_EQ(guion_foto_partidas(base, orig, "ULUS10537"), 2);
+	snprintf(p, sizeof(p), "%s/ULUS10537DAT1/DATA.BIN", base);
+	CHECK(file_is(p, "ULUS10537DAT1"));
+	snprintf(p, sizeof(p), "%s/ULUS10041S0", base);
+	CHECK(access(p, F_OK) != 0);
+	/* Otra foto reemplaza la anterior entera */
+	CHECK_EQ(guion_foto_partidas(base, orig, "ULUS10041"), 1);
+	snprintf(p, sizeof(p), "%s/ULUS10537DAT0", base);
+	CHECK(access(p, F_OK) != 0);
+	CHECK_EQ(guion_foto_partidas(base, orig, ""), 0);
+	CHECK_EQ(guion_foto_partidas(base, "no-existe", "ULUS10537"), 0);
+	/* Las originales siguen ahí */
+	snprintf(p, sizeof(p), "%s/ULUS10537DAT0/DATA.BIN", orig);
+	CHECK(file_is(p, "ULUS10537DAT0"));
+	for(i = 0; i < 4; i++){
+		snprintf(p, sizeof(p), "%s/%s/DATA.BIN", orig, dirs[i]);
+		unlink(p);
+		snprintf(p, sizeof(p), "%s/%s", orig, dirs[i]);
+		rmdir(p);
+	}
+	rmdir(orig);
+	rmdir(base);
+}
+
 static void test_opt(void){
 	char buf[256];
 	opt_reset();
@@ -250,5 +288,6 @@ void test_guion(void){
 	test_teclado();
 	test_cuantizar();
 	test_partidas();
+	test_foto();
 	test_opt();
 }
