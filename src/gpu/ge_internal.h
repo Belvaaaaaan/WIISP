@@ -237,6 +237,11 @@ typedef struct {
 
 const GeRasterState *ge_raster_state(void);
 
+/* Para las pruebas: posición y normal de un vértice de formato vt tal como
+   las decodifica el GE (morph y skinning incluidos, con ge.bone y los pesos
+   de morph de ge.cmd) */
+void ge_test_decode_vertex(u32 vt, const u8 *p, float *pos, float *nrm);
+
 /* Texels del nivel `level` de la textura actual (estado de ge_raster_begin)
    en RGBA de 8 bits (rojo en el byte bajo), fila a fila con `pitch` texels
    por fila. Lee la memoria como el muestreador del GE. */

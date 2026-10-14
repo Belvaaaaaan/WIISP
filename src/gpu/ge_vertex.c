@@ -25,6 +25,7 @@
 #include "gpu/ge_math.h"
 #include "core/memory.h"
 #include "core/prof.h"
+#include "core/opt.h"
 
 /* --- Formato de vértice ---------------------------------------------------- */
 
@@ -231,6 +232,31 @@ static void ge_skin(const VFormat *f, const u8 *in, float *pos, float *nrm){
 	}
 }
 
+/* ge_skin_rapido, con la matemática rápida del backend por hardware: las
+   matrices de los huesos se mezclan por su peso en float normal y se aplica
+   una sola, en vez de la aritmética exacta del GE término a término (12
+   productos de 24 bits por hueso y un acumulador con su redondeo). El
+   resultado difiere del exacto en el último bit de float24, como el resto de
+   la geometría rápida. */
+static void fast_skin(const VFormat *f, const u8 *in, float *pos, float *nrm){
+	float m[12] = { 0.0f }, src[3];
+	int b, k, c;
+	for(b = 0; b < f->nweights; b++){
+		float w = component(f, in, f->off_w, b, RD_WEIGHT, f->wt);
+		const float *bm = ge.bone[b];
+		if(w == 0.0f) continue;
+		for(k = 0; k < 12; k++) m[k] += w * bm[k];
+	}
+	if(f->pos){
+		for(c = 0; c < 3; c++) src[c] = component(f, in, f->off_pos, c, RD_COMP, f->pos);
+		for(c = 0; c < 3; c++) pos[c] = m[9 + c] + src[0] * m[c] + src[1] * m[3 + c] + src[2] * m[6 + c];
+	}
+	if(f->nrm){
+		for(c = 0; c < 3; c++) src[c] = component(f, in, f->off_nrm, c, RD_COMP, f->nrm);
+		for(c = 0; c < 3; c++) nrm[c] = src[0] * m[c] + src[1] * m[3 + c] + src[2] * m[6 + c];
+	}
+}
+
 /* NaN e infinitos de una posición float quedan finitos (como SSE en x86) */
 static inline float clean_nan_inf(float x){
 	if(isnan(x)) return FLT_MAX;
@@ -329,7 +355,8 @@ static void decode_vertex(const VFormat *f, const u8 *p, DecVertex *d){
 	}
 
 	if(f->wt){
-		ge_skin(f, p, d->pos, d->nrm);
+		if(ge_fast_math && opt_on[OPT_GE_SKIN_RAPIDO]) fast_skin(f, p, d->pos, d->nrm);
+		else ge_skin(f, p, d->pos, d->nrm);
 		return;
 	}
 	if(f->nmorph > 1){
@@ -1585,6 +1612,16 @@ static void submit_primitive_body(const VSource *vr, u32 prim_type, int vertex_c
 static void load_morph_weights(void){
 	int i;
 	for(i = 0; i < 8; i++) morph_weights[i] = ge_f24(ge.cmd[GE_MORPHWEIGHT0 + i]);
+}
+
+void ge_test_decode_vertex(u32 vt, const u8 *p, float *pos, float *nrm){
+	VFormat f;
+	DecVertex d;
+	vformat_setup(&f, vt);
+	load_morph_weights();
+	decode_vertex(&f, p, &d);
+	memcpy(pos, d.pos, sizeof(d.pos));
+	memcpy(nrm, d.nrm, sizeof(d.nrm));
 }
 
 static void setup_uv_prescale(const VFormat *f){

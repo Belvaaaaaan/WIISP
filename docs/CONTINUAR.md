@@ -626,6 +626,22 @@ dentro del vblank, que ya fallaban.
   desplazamiento, máscara, offset, paleta y tamaño, para decidir si se puede
   hacer en la GPU (copia de un canal del EFB + TLUT).
 
+### v0.5.8: skinning rápido (`ge_skin_rapido`)
+
+- Medido con r5/r6 (0.5.7.9): peleas de 9,5 % a 10,4 %, escena de 330 s a
+  307 s; textura de framebuffer de 15,7 a 7,1 ms. Lo que más pesa ahora en
+  las peleas: "leer vertices" 30 % (47 % de vértices con huesos), bajadas de
+  framebuffer ~9 %, decodificar ~9 %.
+- Censo de paletas de DBZ: CLUT32 sobre 8888 con desplazamiento 24 y
+  máscara 7F (el alfa, 7 bits; paleta 565), CLUT16 sobre 565 con
+  desplazamiento 5 y máscara FF (mezcla verde y rojo: no es un canal de GX)
+  y CLUT16 sobre 4444 de 64x64 con un solo bit. El paso a la GPU con copia
+  de un canal + TLUT no encaja directo: el alfa del EFB es de 6 bits y el
+  565 no se separa por canales. Se queda en la CPU por ahora.
+- `fast_skin` (ge_vertex.c) con ge_fast_math: matrices mezcladas por peso
+  en float y una sola multiplicación. Modo exacto (ME) sin cambios.
+  `ge_test_decode_vertex` expone la decodificación para tests/test_skin.c.
+
 ### Para el siguiente chat (empezar aquí)
 
 Metodología acordada (detalle en `docs/HOJA_DE_RUTA.md`): primero medir

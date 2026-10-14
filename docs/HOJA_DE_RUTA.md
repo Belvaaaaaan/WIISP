@@ -113,6 +113,13 @@ una vez (paleta convertida una vez, índice con desplazamiento/máscara/offset
 y tabla); idéntica bit a bit al decodificador genérico (tests/test_texclut.c,
 400 casos). Ataca el ~34 % del tiempo de las peleas de DBZ.
 
+Hecha (v0.5.8): `ge_skin_rapido`, solo con la matemática rápida (MR, el
+modo GX normal): las matrices de los huesos se mezclan por peso en float y
+se aplica una sola. En el PC, 10-19 veces más rápido por vértice con huesos;
+diferencia con el exacto de 2e-5 de la suma de los términos (el redondeo de
+float24), tests/test_skin.c con 600 vértices al azar. En DBZ "leer vertices"
+era el 30 % de las peleas con el 47 % de vértices con huesos.
+
 Primera tanda acordada (todas "más barato", verificables en el PC):
 0.1 `prof_espera`, **skinning rápido** (`ge_skin_rapido`), **matrices al
 cambiar** (`ge_mtx_cache`), **color constante** (`ge_color_const`), 2.1

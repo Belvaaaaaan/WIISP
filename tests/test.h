@@ -36,6 +36,8 @@ void test_guion(void);
 void test_texclut(void);
 /* tests/test_gxtiles.c: texturas de GX por franjas */
 void test_gxtiles(void);
+/* tests/test_skin.c: skinning rápido contra el exacto */
+void test_skin(void);
 /* tests/test_vfpu.c: caminos rápidos de la VFPU contra el general */
 void test_vfpu(void);
 /* tests/test_texcache.c: avisos de escritura y caché de texturas */
