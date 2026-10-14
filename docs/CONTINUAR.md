@@ -611,6 +611,21 @@ dentro del vblank, que ya fallaban.
   defecto; `opt ge_tex_clut 0` vuelve al camino de antes.
 - Tiempos de r1 y r2 a menos de 0,2 puntos: la escena sirve para medir.
 
+### v0.5.7.9: ge_tex_clut, segunda parte, y censo de paletas
+
+- Medido con r3/r4 (0.5.7.8): peleas de 7,6 % a 9,5 %, escena entera de
+  386 s a 330 s, CPU idéntico. Las texturas de framebuffers bajaron de 38 a
+  15,7 ms cada una: el resto era escribir los tiles texel a texel y borrar
+  antes ~640 KB. RAM distinta entre corridas: 3 MB (0x08B, 0x08C, 0x08E),
+  las direcciones de la mezcla de sceSas y de Atrac: audio.
+- Ahora: CLUT16/CLUT32 por franjas de 4 filas (`ge_clut16_32_prepare` +
+  `_rows`) escritas con `gx_tile_band_rgba8` (src/wii/gx_tiles.h, dcbz en
+  el Wii) y sin memset cuando todos los niveles miden múltiplos de 4.
+  tests/test_gxtiles.c compara con la escritura texel a texel.
+- Censo: `rtt: paleta sobre framebuffer:` con formato, búfer leído,
+  desplazamiento, máscara, offset, paleta y tamaño, para decidir si se puede
+  hacer en la GPU (copia de un canal del EFB + TLUT).
+
 ### Para el siguiente chat (empezar aquí)
 
 Metodología acordada (detalle en `docs/HOJA_DE_RUTA.md`): primero medir

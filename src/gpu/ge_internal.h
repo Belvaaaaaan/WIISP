@@ -244,6 +244,10 @@ void ge_texture_decode(int level, u32 *out, int w, int h, int pitch);
 /* Lo mismo para CLUT16/CLUT32 desde las filas ya sin swizzle (src, con
    `pitch` bytes por fila), sin pasar texel a texel por el muestreador */
 void ge_texture_decode_clut16_32(const u8 *src, u32 pitch, int w, int h, u32 *out, int out_pitch);
+/* Lo mismo en dos pasos, para decodificar por franjas: prepare convierte la
+   paleta del estado actual y rows decodifica filas con ella */
+void ge_clut16_32_prepare(void);
+void ge_clut16_32_rows(const u8 *src, u32 pitch, int w, int h, u32 *out, int out_pitch);
 
 /* --- Renderizador por hardware (opcional) ----------------------------- */
 

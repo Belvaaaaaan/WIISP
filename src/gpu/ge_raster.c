@@ -881,25 +881,44 @@ static inline u32 sample_texel(int u, int v, int level){
    cabe en 512 entradas) se convierte a 8888 una sola vez y cada texel es
    desplazar, enmascarar y mirar en la tabla. Mismo resultado que
    ge_texture_decode para esos formatos, sin pasar por fetch_texel en cada
-   texel. src son las filas del nivel ya sin swizzle. */
-void ge_texture_decode_clut16_32(const u8 *src, u32 pitch, int w, int h, u32 *out, int out_pitch){
-	static u32 pal[512];
-	u32 i, shift = 0, mask = 0xFF, offset = 0;
-	int x, y, bits32 = rs.texfmt == GE_TFMT_CLUT32;
-	for(i = 0; i < 512; i++) pal[i] = lookup_color(i, 0);
+   texel. */
+static struct {
+	u32 pal[512];
+	u32 shift, mask, offset;
+	int bits32;
+} clutq;
+
+void ge_clut16_32_prepare(void){
+	u32 i;
+	for(i = 0; i < 512; i++) clutq.pal[i] = lookup_color(i, 0);
+	clutq.bits32 = rs.texfmt == GE_TFMT_CLUT32;
+	clutq.shift = 0;
+	clutq.mask = 0xFF;
+	clutq.offset = 0;
 	if(rs.has_clut_shift || rs.has_clut_mask || rs.has_clut_offset){
-		shift = (rs.clutformat >> 2) & 0x1F;
-		mask = (rs.clutformat >> 8) & 0xFF;
-		offset = (((rs.clutformat >> 16) & 0x1F) << 4) & (rs.clut_fmt == GE_FMT_8888 ? 0xFF : 0x1FF);
+		clutq.shift = (rs.clutformat >> 2) & 0x1F;
+		clutq.mask = (rs.clutformat >> 8) & 0xFF;
+		clutq.offset = (((rs.clutformat >> 16) & 0x1F) << 4) & (rs.clut_fmt == GE_FMT_8888 ? 0xFF : 0x1FF);
 	}
+}
+
+void ge_clut16_32_rows(const u8 *src, u32 pitch, int w, int h, u32 *out, int out_pitch){
+	const u32 *pal = clutq.pal;
+	u32 shift = clutq.shift, mask = clutq.mask, offset = clutq.offset;
+	int x, y;
 	for(y = 0; y < h; y++){
 		const u8 *row = src + (u32)y * pitch;
 		u32 *o = out + y * out_pitch;
-		if(bits32)
+		if(clutq.bits32)
 			for(x = 0; x < w; x++) o[x] = pal[((rd_le32(row + (u32)x * 4) >> shift) & mask) | offset];
 		else
 			for(x = 0; x < w; x++) o[x] = pal[((rd_le16(row + (u32)x * 2) >> shift) & mask) | offset];
 	}
+}
+
+void ge_texture_decode_clut16_32(const u8 *src, u32 pitch, int w, int h, u32 *out, int out_pitch){
+	ge_clut16_32_prepare();
+	ge_clut16_32_rows(src, pitch, w, h, out, out_pitch);
 }
 
 void ge_texture_decode(int level, u32 *out, int w, int h, int pitch){

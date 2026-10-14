@@ -64,6 +64,7 @@
 #include <gccore.h>
 #include <ogc/lwp_watchdog.h>
 #include "wii/gx_ge.h"
+#include "wii/gx_tiles.h"
 
 #define EFB_W 640
 #define EFB_H 528
@@ -165,6 +166,16 @@ typedef struct {
 } RttTarget;
 static RttTarget rtt_t[RTT_MAX];
 static int rtt_n;
+/* Cómo lee el juego un framebuffer como textura con paleta: decide si se
+   puede hacer en la GPU (copia de un canal del EFB + TLUT de GX) */
+#define RTT_PAL_MAX 8
+typedef struct {
+	int texfmt, surf_fmt, clut_fmt, tw, th, bufw;
+	core_u32 shift, mask, offset;
+	unsigned n;
+} RttPal;
+static RttPal rtt_pal[RTT_PAL_MAX];
+static int rtt_npal;
 static unsigned rtt_dl[RD_N], rtt_dec[RO_N], rtt_gpu, rtt_miss[RM_N];
 static u64 rtt_dl_ticks[RD_N], rtt_dec_ticks[RO_N], rtt_dec_bytes[RO_N];
 
@@ -515,7 +526,25 @@ static void rtt_note_texture(const GeRasterState *r, int from_gpu){
 		if(t) t->gpu++;
 		return;
 	}
-	if(r->texfmt > GE_FMT_8888) why = RM_FMT;
+	if(r->texfmt > GE_FMT_8888){
+		core_u32 cf = r->clutformat;
+		RttPal k;
+		int i;
+		why = RM_FMT;
+		memset(&k, 0, sizeof(k));
+		k.texfmt = r->texfmt; k.surf_fmt = s->fmt; k.clut_fmt = r->clut_fmt;
+		k.tw = 1 << r->width0_shift; k.th = 1 << r->height0_shift; k.bufw = r->texbufw[0];
+		k.shift = (cf >> 2) & 0x1F; k.mask = (cf >> 8) & 0xFF; k.offset = (cf >> 16) & 0x1F;
+		for(i = 0; i < rtt_npal; i++){
+			RttPal *p = &rtt_pal[i];
+			if(p->texfmt == k.texfmt && p->surf_fmt == k.surf_fmt && p->clut_fmt == k.clut_fmt && p->tw == k.tw &&
+			   p->th == k.th && p->bufw == k.bufw && p->shift == k.shift && p->mask == k.mask && p->offset == k.offset){
+				p->n++;
+				break;
+			}
+		}
+		if(i == rtt_npal && rtt_npal < RTT_PAL_MAX){ k.n = 1; rtt_pal[rtt_npal++] = k; }
+	}
 	else if(r->swizzle) why = RM_SWZ;
 	else if(s->addr != off || s->stride != r->texbufw[0] || s->fmt != r->texfmt) why = RM_INEXACT;
 	else if(s->state == VRAM_NEWER) why = RM_VRAM;
@@ -981,6 +1010,16 @@ static int decode_into(const GeRasterState *r, int level, u8 *data, int w, int h
 		/* ge_tex_clut: los framebuffers que el juego lee como textura con
 		   paleta (efectos) llegan aquí y con el camino genérico costaban
 		   ~38 ms cada uno en el Wii */
+		if(!(w & 3) && !(h & 3) && tw == w){
+			/* Por franjas de 4 filas: las 4 filas lineales caben en la
+			   caché y cada tile se escribe entero de una vez */
+			ge_clut16_32_prepare();
+			for(y = 0; y < h; y += 4){
+				ge_clut16_32_rows(src + (u32)y * pitch, pitch, w, 4, decode_buf, w);
+				gx_tile_band_rgba8(data, tw, y, decode_buf, w);
+			}
+			return GX_TF_RGBA8;
+		}
 		ge_texture_decode_clut16_32(src, pitch, w, h, decode_buf, w);
 		for(y = 0; y < h; y++)
 			for(x = 0; x < w; x++) put_rgba8(tile_ptr(data, tw, x, y), decode_buf[y * w + x]);
@@ -1049,7 +1088,13 @@ static int decode_texture(TexEntry *e, const GeRasterState *r){
 	}
 	data = memalign(32, bytes);
 	if(!data) return 0;
-	memset(data, 0, bytes);
+	/* Con ancho y alto múltiplos de 4, cada nivel escribe todos sus tiles:
+	   borrar antes es escribir 2 veces (las texturas de los framebuffers
+	   ocupan ~640 KB y se rehacen en cada imagen) */
+	for(i = 0; i < e->levels; i++){
+		int lw = w >> i ? w >> i : 1, lh = h >> i ? h >> i : 1;
+		if((lw & 3) || (lh & 3)){ memset(data, 0, bytes); break; }
+	}
 	for(i = 0; i < e->levels; i++){
 		int lw = w >> i ? w >> i : 1, lh = h >> i ? h >> i : 1;
 		gxfmt = decode_into(r, i, data + off, lw, lh, round4(lw), e->levels == 1);
@@ -1882,6 +1927,28 @@ void gx_ge_rtt_report(char *buf, size_t size){
 	        rtt_dec[RO_RAM], tk_ms(rtt_dec_ticks[RO_RAM]), (double)rtt_dec_bytes[RO_RAM] / (1024.0 * 1024.0),
 	        rtt_gpu, misses, rtt_miss[RM_FMT], rtt_miss[RM_SWZ], rtt_miss[RM_INEXACT], rtt_miss[RM_VRAM],
 	        rtt_miss[RM_ALPHA], rtt_miss[RM_NOTEX]);
+	/* Paletas sobre framebuffers, de más a menos usadas */
+	{
+		static const char *const tf[] = { "565", "5551", "4444", "8888", "CLUT4", "CLUT8", "CLUT16", "CLUT32",
+		                                  "DXT1", "DXT3", "DXT5" };
+		int usedp[RTT_PAL_MAX] = { 0 };
+		for(k = 0; k < 4 && len < size; k++){
+			int best = -1;
+			for(i = 0; i < rtt_npal; i++)
+				if(!usedp[i] && (best < 0 || rtt_pal[i].n > rtt_pal[best].n)) best = i;
+			if(best < 0) break;
+			usedp[best] = 1;
+			{
+				const RttPal *p = &rtt_pal[best];
+				len += (size_t)snprintf(buf + len, size - len,
+				        "rtt: paleta sobre framebuffer: %s leyendo un %s (desplazamiento %u, mascara %02X, offset %u, "
+				        "paleta %s) %dx%d fila %d: %u veces\n",
+				        tf[p->texfmt < 11 ? p->texfmt : 0], p->surf_fmt == SURF_Z ? "Z" : fmts[p->surf_fmt & 3],
+				        (unsigned)p->shift, (unsigned)p->mask, (unsigned)p->offset, fmts[p->clut_fmt & 3],
+				        p->tw, p->th, p->bufw, p->n);
+			}
+		}
+	}
 	/* Los 5 búferes con más bajadas y decodificaciones */
 	for(k = 0; k < 5 && len < size; k++){
 		int best = -1;
@@ -1906,6 +1973,7 @@ void gx_ge_rtt_report(char *buf, size_t size){
 	if(len && len < size && buf[len - 1] == '\n') buf[--len] = 0;
 	/* Empieza otro periodo */
 	rtt_n = 0;
+	rtt_npal = 0;
 	memset(rtt_dl, 0, sizeof(rtt_dl)); memset(rtt_dl_ticks, 0, sizeof(rtt_dl_ticks));
 	memset(rtt_dec, 0, sizeof(rtt_dec)); memset(rtt_dec_ticks, 0, sizeof(rtt_dec_ticks));
 	memset(rtt_dec_bytes, 0, sizeof(rtt_dec_bytes));
