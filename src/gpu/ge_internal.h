@@ -244,6 +244,8 @@ const GeRasterState *ge_raster_state(void);
    las decodifica el GE (morph y skinning incluidos, con ge.bone y los pesos
    de morph de ge.cmd) */
 void ge_test_decode_vertex(u32 vt, const u8 *p, float *pos, float *nrm);
+/* Pruebas: lo que una llamada de dibujo deja a la siguiente, a cero */
+void ge_vertex_test_reset(void);
 
 /* Texels del nivel `level` de la textura actual (estado de ge_raster_begin)
    en RGBA de 8 bits (rojo en el byte bajo), fila a fila con `pitch` texels

@@ -971,7 +971,10 @@ static float texgen_component(const float *v, const float *m, int c){
    desplazamiento actuales se aplican al usarla. */
 static float last_uv[2], last_normal[3];
 
-static void read_vertex(const VFormat *f, const DecVertex *d, GeClipVertex *out){
+/* El cuerpo de read_vertex, en línea: fast es constante en cada uso (el
+   camino por lotes de ge_vdec_esp usa exactamente estas mismas expresiones,
+   así que el compilador hace las mismas operaciones y salen los mismos bits) */
+static inline __attribute__((always_inline)) void read_vertex_body(const VFormat *f, const DecVertex *d, GeClipVertex *out, const int fast){
 	GeVertex *v = &out->v;
 	float pos[3], normal[3];
 	int i;
@@ -983,7 +986,7 @@ static void read_vertex(const VFormat *f, const DecVertex *d, GeClipVertex *out)
 	{
 		float tc[2];
 		tc[0] = last_uv[0]; tc[1] = last_uv[1];
-		if(ts.ge_uv_scale && ge_fast_math){
+		if(ts.ge_uv_scale && fast){
 			for(i = 0; i < 2; i++) tc[i] = tc[i] * ts.uv_scale[i] + ts.uv_offset[i];
 		} else if(ts.ge_uv_scale){
 			/* El decodificador solo las normalizó (8 y 16 bits sin signo) */
@@ -1006,7 +1009,7 @@ static void read_vertex(const VFormat *f, const DecVertex *d, GeClipVertex *out)
 
 	if(ts.enable_transform){
 		float sx, sy, sz, worldnormal[3] = { 0, 0, 0 }, n_rsqrt = 1.0f;
-		if(ge_fast_math){
+		if(fast){
 			/* Float normal: la profundidad y los bordes pueden variar en 1
 			   respecto al GE, pero igual en todas las pasadas */
 			const float *m = ts.matrix;
@@ -1029,7 +1032,7 @@ static void read_vertex(const VFormat *f, const DecVertex *d, GeClipVertex *out)
 			return;
 		}
 
-		if(ts.enable_fog && ts.fog_ge && !ge_fast_math){
+		if(ts.enable_fog && ts.fog_ge && !fast){
 			GeRowTerm t[4];
 			float vz, fz;
 			t[0] = ge_product(ge_trunc24(pos[0]), ts.view_z_col[0]);
@@ -1056,7 +1059,7 @@ static void read_vertex(const VFormat *f, const DecVertex *d, GeClipVertex *out)
 			worldnormal[1] = vdot(normal, c1);
 			worldnormal[2] = vdot(normal, c2);
 			len2 = vdot(worldnormal, worldnormal);
-			if(len2 > 0.0f && isfinite(len2)) n_rsqrt = ge_fast_math ? ge_fast_rsqrt(len2) : ge_rsqrt(len2);
+			if(len2 > 0.0f && isfinite(len2)) n_rsqrt = fast ? ge_fast_rsqrt(len2) : ge_rsqrt(len2);
 			else if(len2 != 0.0f){ worldnormal[0] = 0.0f; worldnormal[1] = 0.0f; worldnormal[2] = 1.0f; }
 			/* Una normal nula sigue nula: ni difusa ni especular (gpu/probe exp173) */
 		}
@@ -1070,7 +1073,7 @@ static void read_vertex(const VFormat *f, const DecVertex *d, GeClipVertex *out)
 			default: memcpy(src, normal, sizeof(src)); break;
 			}
 			/* Aquí no se usan la escala ni el desplazamiento de uv */
-			if(ge_fast_math){
+			if(fast){
 				const float *m = ge.tgen;
 				for(i = 0; i < 3; i++) r[i] = src[0] * m[i] + src[1] * m[3 + i] + src[2] * m[6 + i] + m[9 + i];
 			} else for(i = 0; i < 3; i++) r[i] = texgen_component(src, ge.tgen, i);
@@ -1081,12 +1084,10 @@ static void read_vertex(const VFormat *f, const DecVertex *d, GeClipVertex *out)
 		}
 
 		if(ts.enable_lighting){
-			GE_PROF_T0;
 			ge_stats.vertices_lit++;
 			ge_stats.lights += ts_nlights;
-			if(ge_fast_math) lighting_process_fast(v, pos, worldnormal, n_rsqrt, &ts.light);
+			if(fast) lighting_process_fast(v, pos, worldnormal, n_rsqrt, &ts.light);
 			else lighting_process(v, pos, worldnormal, n_rsqrt, &ts.light);
-			GE_PROF_ADD(4);
 		}
 	} else {
 		v->x = ge_f2i(pos[0] * 16.0f);
@@ -1095,6 +1096,11 @@ static void read_vertex(const VFormat *f, const DecVertex *d, GeClipVertex *out)
 		v->clipw = 1.0f;
 		v->fogdepth = 1.0f;
 	}
+}
+
+static void read_vertex(const VFormat *f, const DecVertex *d, GeClipVertex *out){
+	if(ge_fast_math) read_vertex_body(f, d, out, 1);
+	else read_vertex_body(f, d, out, 0);
 }
 
 /* --- Recorte (Clipper.cpp) -------------------------------------------------- */
@@ -1417,6 +1423,7 @@ typedef struct {
 	const VFormat *f;
 	u32 vaddr, iaddr;
 	int use_indices, use_cache, zero;
+	int batch;                 /* sin índices: todos ya calculados en cache */
 	u32 lower, upper;
 	const DecVertex *list;     /* vértices ya decodificados (curvas) */
 	const u16 *idx_list;       /* sus índices */
@@ -1439,18 +1446,15 @@ static u32 index_at(const VSource *s, int i){
 static void read_raw(const VSource *s, u32 index, GeClipVertex *out){
 	DecVertex d;
 	int phase = prof_ge_enter(GEF_LEER);
-	GE_PROF_T0;
 	if(s->list) d = s->list[index];
 	else if(s->zero) memset(&d, 0, sizeof(d));
 	else decode_vertex(s->f, mem_ptr_r(s->vaddr + index * s->f->size, s->f->size), &d);
-	GE_PROF_ADD(5);
 	prof_ge_enter(GEF_TRANSFORMAR);
 	read_vertex(s->f, &d, out);
 	ge_stats.vertices++;
 	if(s->f->through) ge_stats.vertices_through++;
 	else if(s->f->wt) ge_stats.vertices_skinned++;
 	else if(s->f->nmorph > 1) ge_stats.vertices_morph++;
-	GE_PROF_ADD(0);
 	prof_ge_leave(phase);
 }
 
@@ -1460,7 +1464,54 @@ static void vsource_read(const VSource *s, int vtx, GeClipVertex *out){
 		u32 idx = index_at(s, vtx);
 		if(s->use_cache){ *out = s->cache[idx - s->lower]; return; }
 		read_raw(s, idx, out);
-	} else read_raw(s, (u32)vtx, out);
+	} else if(s->batch) *out = s->cache[vtx];
+	else read_raw(s, (u32)vtx, out);
+}
+
+/* ge_vdec_esp: con la matemática rápida, los vértices de una llamada sin
+   índices (o el rango de una con índices repetidos) se calculan todos de una
+   vez y en orden, antes de ensamblar: un solo puntero a la RAM, sin cambiar
+   de fase del perfil ni pasar por read_raw en cada uno. Mismo orden que al
+   leerlos uno a uno (la uv y la normal que arrastra cada vértice no
+   cambian) y las mismas expresiones (read_vertex_body), así que salen los
+   mismos bits: tests/test_vdec.c. Solo la RAM: leer de la VRAM puede bajar
+   un framebuffer. */
+static int batch_range(const VSource *s, u32 first, int n, GeClipVertex *dst){
+	const VFormat *f = s->f;
+	const u8 *p;
+	u32 size = f->size, off;
+	int i;
+	if(!opt_on[OPT_GE_VDEC_ESP] || !ge_fast_math || f->through || f->nmorph > 1 || s->zero || s->list || n <= 0)
+		return 0;
+	off = ((s->vaddr + first * size) & PSP_ADDR_MASK) - PSP_RAM_BASE;
+	if(off >= psp_mem.ram_size || (u64)size * (u32)n > psp_mem.ram_size - off) return 0;
+	p = psp_mem.ram + off;
+	for(i = 0; i < n; i++, p += size){
+		DecVertex d;
+		decode_vertex(f, p, &d);
+		read_vertex_body(f, &d, &dst[i], 1);
+	}
+	ge_stats.vertices += (u32)n;
+	if(f->wt) ge_stats.vertices_skinned += (u32)n;
+	return 1;
+}
+
+static int vcache_reserve(int n){
+	if(n > vcache_cap){
+		GeClipVertex *nc = realloc(vcache, (size_t)n * sizeof(GeClipVertex));
+		if(!nc) return 0;
+		vcache = nc;
+		vcache_cap = n;
+	}
+	return 1;
+}
+
+static void vsource_batch(VSource *s, int count){
+	if(s->use_indices || !opt_on[OPT_GE_VDEC_ESP] || !vcache_reserve(count)) return;
+	if(batch_range(s, 0, count, vcache)){
+		s->batch = 1;
+		s->cache = vcache;
+	}
 }
 
 static void vsource_init(VSource *s, const VFormat *f, u32 vaddr, u32 iaddr, int count){
@@ -1488,14 +1539,10 @@ static void vsource_init(VSource *s, const VFormat *f, u32 vaddr, u32 iaddr, int
 	s->use_cache = s->use_indices && count > (int)(s->upper - s->lower + 1);
 	if(s->use_cache){
 		int n = (int)(s->upper - s->lower + 1);
-		if(n > vcache_cap){
-			GeClipVertex *nc = realloc(vcache, (size_t)n * sizeof(GeClipVertex));
-			if(!nc){ s->use_cache = 0; return; }
-			vcache = nc;
-			vcache_cap = n;
-		}
+		if(!vcache_reserve(n)){ s->use_cache = 0; return; }
 		s->cache = vcache;
-		for(i = 0; i < n; i++) read_raw(s, s->lower + (u32)i, &s->cache[i]);
+		if(!batch_range(s, s->lower, n, s->cache))
+			for(i = 0; i < n; i++) read_raw(s, s->lower + (u32)i, &s->cache[i]);
 	}
 }
 
@@ -1643,6 +1690,15 @@ static void load_morph_weights(void){
 	for(i = 0; i < 8; i++) morph_weights[i] = ge_f24(ge.cmd[GE_MORPHWEIGHT0 + i]);
 }
 
+/* Pruebas: lo que una llamada deja a la siguiente, como al arrancar */
+void ge_vertex_test_reset(void){
+	last_uv[0] = last_uv[1] = 0.0f;
+	last_normal[0] = last_normal[1] = last_normal[2] = 0.0f;
+	data_index_ = 0;
+	prev_prim_ = GE_PRIM_POINTS;
+	mc.valid = 0;
+}
+
 void ge_test_decode_vertex(u32 vt, const u8 *p, float *pos, float *nrm){
 	VFormat f;
 	DecVertex d;
@@ -1744,6 +1800,7 @@ void ge_draw_prim(u32 prim, u32 count){
 		compute_transform_state(&f);
 		phase = prof_ge_enter(GEF_LEER);
 		vsource_init(&vr, &f, vaddr, iaddr, (int)count);
+		vsource_batch(&vr, (int)count);
 		prof_ge_leave(phase);
 		ge_stats.draws++;
 		ge_stats.draws_prim[prim & 7]++;

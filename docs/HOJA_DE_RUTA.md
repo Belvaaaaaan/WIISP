@@ -150,6 +150,10 @@ una matriz: casi todo el 11 % de "comandos") y `registro_diferido` (las
 líneas de diagnóstico no fuerzan un fsync en la SD). Las tres idénticas
 bit a bit.
 
+Hecha (v0.5.11.1): 0.2 `prof_pmc` (PMC1-4 del Broadway por cubeta y fase
+del GE). Hecha (v0.5.12): primera parte de 1.2, `ge_vdec_esp` (vértices
+por lotes en MR, idénticos bit a bit: tests/test_vdec.c).
+
 Primera tanda acordada (todas "más barato", verificables en el PC):
 0.1 `prof_espera`, **skinning rápido** (`ge_skin_rapido`), **matrices al
 cambiar** (`ge_mtx_cache`), **color constante** (`ge_color_const`), 2.1

@@ -478,10 +478,10 @@ static void autotest_run(const char *path, const char *prefix, int max_frames){
 			        (unsigned)ticks_to_millisecs(app_ge_host_ticks() - ge0), (unsigned)ticks_to_millisecs(ps),
 			        (unsigned)ticks_to_millisecs(pst), (unsigned)ticks_to_millisecs(pp), cnt[0], cnt[1], cnt[2], cnt[3]);
 #ifdef WIISP_PROF
-			fprintf(st, "   prof: vertices %u ms, backend %u ms, draw_prim %u ms (preparar %u ms), luces %u ms, decodificar %u ms\n",
-			        (unsigned)ticks_to_millisecs(ge_prof[0]), (unsigned)ticks_to_millisecs(ge_prof[1]),
-			        (unsigned)ticks_to_millisecs(ge_prof[2]), (unsigned)ticks_to_millisecs(ge_prof[3]),
-			        (unsigned)ticks_to_millisecs(ge_prof[4]), (unsigned)ticks_to_millisecs(ge_prof[5]));
+			/* Por vértice y por primitiva ya no se mide con el reloj (costaba
+			   ~3 lecturas por vértice): eso lo dan el muestreo y prof_pmc */
+			fprintf(st, "   prof: draw_prim %u ms (preparar %u ms)\n",
+			        (unsigned)ticks_to_millisecs(ge_prof[2]), (unsigned)ticks_to_millisecs(ge_prof[3]));
 			memset(ge_prof, 0, sizeof(ge_prof));
 #endif
 			fclose(st);

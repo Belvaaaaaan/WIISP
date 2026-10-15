@@ -849,6 +849,35 @@ que mide un poco de más: va encendido en las dos corridas del autotest.
 tests/test_guion.c lo prueba con un lector falso (incluida la vuelta de
 los contadores de 32 bits).
 
+### v0.5.12: vértices por lotes (`ge_vdec_esp`, primera parte de 1.2)
+
+- `ge_vdec_esp`: con la matemática rápida (MR), los vértices de una
+  llamada sin índices (y el rango de una con índices repetidos) se
+  decodifican y transforman todos de una vez, en orden, antes de
+  ensamblar (`batch_range`, ge_vertex.c): un solo puntero a la RAM, sin
+  `read_raw` ni cambios de fase del perfil por vértice. `read_vertex` es
+  ahora un cuerpo en línea (`read_vertex_body`, con `fast` constante)
+  que usan los dos caminos: mismas expresiones, mismas `fmadds`, mismos
+  bits. Solo RAM (leer la VRAM puede bajar un framebuffer); through y
+  morph siguen uno a uno. Con él, "leer vertices" incluye la
+  transformación de esas llamadas.
+- Verificación: tests/test_vdec.c, 3000 tandas de tres llamadas al azar
+  (formatos, índices, huesos, morph, through, luces, niebla, generación
+  de uv, descarte de caras, recorte de profundidad) con un renderizador
+  que apunta todo: lo que llega a GX y los contadores, iguales bit a bit;
+  detecta los fallos metidos a propósito. Pasa en x86 y en PowerPC bajo
+  qemu (con `fmadds`). pspautotests A/B en MR: 0 diferencias (gpu/ con el
+  binario PowerPC; gpu/complex varía entre corridas por las fechas de
+  los archivos que crea, no por esto).
+- Medición: en las corridas del autotest se medía cada vértice y cada
+  primitiva con el reloj (`GE_PROF`, ~3 lecturas por vértice, solo para
+  el `.stats`); quitado, lo dan el muestreo y `prof_pmc`. El `.stats`
+  solo dice ya draw_prim y preparar.
+- Siguiente (con los PMC de esta prueba): decodificadores por formato
+  (los del censo de DBZ), psq_l para los componentes de 8 bits (los de 16
+  son little-endian: hay que darles la vuelta antes), y el ensamblado y
+  el envío a GX por triángulo.
+
 ### Para el siguiente chat (empezar aquí)
 
 Metodología acordada (detalle en `docs/HOJA_DE_RUTA.md`): primero medir

@@ -44,6 +44,8 @@ void test_vfpu(void);
 void test_texcache(void);
 /* tests/test_interp.c: el intérprete contra el de referencia */
 void test_interp(void);
+/* tests/test_vdec.c: el camino de los vértices del GE con y sin interruptor */
+void test_vdec(void);
 /* tests/test_wiimote.c: el Wiimote en horizontal como mando de PSP */
 void test_wiimote(void);
 
