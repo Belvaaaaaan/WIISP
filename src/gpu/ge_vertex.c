@@ -1444,7 +1444,7 @@ static void read_raw(const VSource *s, u32 index, GeClipVertex *out){
 	else if(s->zero) memset(&d, 0, sizeof(d));
 	else decode_vertex(s->f, mem_ptr_r(s->vaddr + index * s->f->size, s->f->size), &d);
 	GE_PROF_ADD(5);
-	prof_ge_phase = GEF_TRANSFORMAR;
+	prof_ge_enter(GEF_TRANSFORMAR);
 	read_vertex(s->f, &d, out);
 	ge_stats.vertices++;
 	if(s->f->through) ge_stats.vertices_through++;

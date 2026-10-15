@@ -13,7 +13,7 @@
 /* Al implementar una optimización: lista = 1 y su valor por defecto */
 const OptInfo opt_info[OPT_N] = {
 	[OPT_PROF_ESPERA]    = { "prof_espera",    0, 0 },
-	[OPT_PROF_PMC]       = { "prof_pmc",       0, 0 },
+	[OPT_PROF_PMC]       = { "prof_pmc",       1, 0 },
 	[OPT_GE_SKIN_RAPIDO] = { "ge_skin_rapido", 1, 1 },
 	[OPT_GE_MTX_CACHE]   = { "ge_mtx_cache",   1, 1 },
 	[OPT_GE_COLOR_CONST] = { "ge_color_const", 0, 0 },

@@ -48,6 +48,22 @@ extern volatile int prof_cur;   /* volatile: lo lee el temporizador del muestreo
 /* Reloj del anfitrión (ticks y ticks por segundo); sin él no se mide */
 void prof_set_clock(u64 (*clock)(void), u64 hz);
 
+/* --- Contadores del procesador (0.2, prof_pmc) -----------------------------
+   Con el interruptor y un anfitrión que los tenga (el Broadway del Wii), en
+   cada cambio de cubeta o de fase del GE se leen cuatro contadores (ciclos,
+   instrucciones terminadas, fallos de la caché de datos L1 y saltos mal
+   predichos) y lo contado desde la lectura anterior se suma a lo que se
+   estaba haciendo: cada cubeta y, dentro del GE, cada fase. Da los ciclos
+   exactos por vértice, por triángulo o por instrucción de la PSP. */
+enum { PMC_CICLOS, PMC_INSTR, PMC_FALLOS_L1D, PMC_SALTOS_MAL, PMC_N };
+#define PROF_PMC_SLOTS (PROF_N + 7)   /* las cubetas y las fases del GE (GEF_N) */
+
+extern int prof_pmc_on;                   /* hay contadores y están encendidos */
+extern void (*prof_pmc_read)(u32 *out);   /* del anfitrión: PMC_N valores */
+extern u64 prof_pmc_acc[PROF_PMC_SLOTS][PMC_N];
+void prof_pmc_account(void);              /* lo contado, a la cubeta o fase actual */
+void prof_pmc_enable(int on);             /* sin prof_pmc_read no hace nada */
+
 /* Pasa a contar en la cubeta b; devuelve la anterior para volver a ella */
 static inline int prof_switch(int b){
 	int old = prof_cur;
@@ -56,6 +72,7 @@ static inline int prof_switch(int b){
 		prof_acc[old] += now - prof_last;
 		prof_last = now;
 	}
+	if(prof_pmc_on) prof_pmc_account();
 	prof_cur = b;
 	return old;
 }
@@ -83,17 +100,22 @@ enum {
 	GEF_CURVAS,       /* teselar curvas (bezier/spline) */
 	GEF_N
 };
+typedef char prof_pmc_slots_ok[PROF_PMC_SLOTS == PROF_N + GEF_N ? 1 : -1];
 
 extern volatile int prof_ge_phase;
 extern volatile u32 prof_samples[PROF_N], prof_ge_samples[GEF_N];
 
 static inline int prof_ge_enter(int f){
 	int old = prof_ge_phase;
+	if(prof_pmc_on) prof_pmc_account();
 	prof_ge_phase = f;
 	return old;
 }
 
-static inline void prof_ge_leave(int old){ prof_ge_phase = old; }
+static inline void prof_ge_leave(int old){
+	if(prof_pmc_on) prof_pmc_account();
+	prof_ge_phase = old;
+}
 
 /* Desde el temporizador (interrupción o hilo aparte) */
 void prof_sample(void);

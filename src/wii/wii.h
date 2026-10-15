@@ -63,6 +63,8 @@ int  wii_osk(const unsigned short *desc, const unsigned short *initial, unsigned
 
 /* Escribe en wiisp.log los BAT, HID, GQR, SDR1 y las arenas de memoria */
 void broadway_report(void);
+/* Prepara los contadores de rendimiento para prof_pmc (core/prof.h) */
+void broadway_pmc_init(void);
 
 /* --- Menú (menu.c) -------------------------------------------------------- */
 

@@ -19,6 +19,7 @@
 #include "frontend/guion.h"
 #include "frontend/app.h"
 #include "core/opt.h"
+#include "core/prof.h"
 
 static void test_parse(void){
 	Guion g;
@@ -280,12 +281,54 @@ static void test_opt(void){
 	opt_reset();
 }
 
+/* prof_pmc con un lector falso: lo contado entre dos cambios va a la cubeta
+   o a la fase del GE que estaba en marcha, también si el contador de 32
+   bits da la vuelta */
+static u32 fake_pmc[PMC_N];
+static void fake_read(u32 *out){ memcpy(out, fake_pmc, sizeof(fake_pmc)); }
+static void advance(u32 c){ int i; for(i = 0; i < PMC_N; i++) fake_pmc[i] += c * (u32)(i + 1); }
+
+static void test_pmc(void){
+	u64 base[PROF_PMC_SLOTS][PMC_N];
+	int old, ph, k;
+	void (*saved)(u32 *) = prof_pmc_read;
+	memcpy(base, prof_pmc_acc, sizeof(base));
+	fake_pmc[0] = 0xFFFFFF00u;   /* da la vuelta enseguida */
+	prof_pmc_read = fake_read;
+	prof_pmc_enable(1);
+	CHECK(prof_pmc_on);
+	old = prof_switch(PROF_CPU);
+	advance(1000);
+	prof_switch(PROF_GE);
+	ph = prof_ge_enter(GEF_LEER);
+	advance(70);
+	prof_ge_enter(GEF_TRANSFORMAR);
+	advance(30);
+	prof_ge_leave(ph);
+	advance(5);
+	prof_switch(PROF_TEXTURAS);
+	advance(200);
+	prof_switch(old);
+	for(k = 0; k < PMC_N; k++){
+		CHECK_EQ(prof_pmc_acc[PROF_CPU][k] - base[PROF_CPU][k], 1000u * (k + 1));
+		CHECK_EQ(prof_pmc_acc[PROF_N + GEF_LEER][k] - base[PROF_N + GEF_LEER][k], 70u * (k + 1));
+		CHECK_EQ(prof_pmc_acc[PROF_N + GEF_TRANSFORMAR][k] - base[PROF_N + GEF_TRANSFORMAR][k], 30u * (k + 1));
+		CHECK_EQ(prof_pmc_acc[PROF_N + ph][k] - base[PROF_N + ph][k], 5u * (k + 1));
+		CHECK_EQ(prof_pmc_acc[PROF_TEXTURAS][k] - base[PROF_TEXTURAS][k], 200u * (k + 1));
+		CHECK_EQ(prof_pmc_acc[PROF_GE][k] - base[PROF_GE][k], 0);
+	}
+	prof_pmc_enable(0);
+	CHECK(!prof_pmc_on);
+	prof_pmc_read = saved;
+}
+
 void test_guion(void){
 	printf("Guion de botones e interruptores\n");
 	test_parse();
 	test_errores();
 	test_ida_y_vuelta();
 	test_teclado();
+	test_pmc();
 	test_cuantizar();
 	test_partidas();
 	test_foto();

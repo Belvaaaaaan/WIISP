@@ -829,6 +829,26 @@ sin descarte de caras (se procesan en los dos sentidos) y los formatos de
 vértice más usados (`Formatos de vertice`: vtype, componentes, % de
 vértices, llamadas y primitivas). Es para diseñar 1.2/1.2b.
 
+### v0.5.11.1: contadores del Broadway (`prof_pmc`, 0.2)
+
+Con `opt prof_pmc 1` (apagado por defecto), en cada cambio de cubeta y de
+fase del GE se leen PMC1-4 del Broadway (MMCR0/MMCR1, eventos del manual
+del 750CL: ciclos, instrucciones terminadas, fallos de la L1 de datos y
+saltos mal predichos; `broadway_pmc_init`, wii/broadway.c) y lo contado
+se suma a lo que se estaba haciendo (`prof_pmc_account`, core/prof.c).
+Líneas nuevas en `[TIEMPOS]`:
+- `PMC: N M ciclos; CPU x% (IPC, L1D y saltos por 1000 instrucciones)...`
+  por cubeta;
+- `PMC de la CPU`: ciclos e instrucciones del Broadway por instrucción de
+  la PSP;
+- `PMC del GE`: ciclos por llamada (comandos, estado), por vértice (leer,
+  transformar), por triángulo recibido (ensamblar) y por primitiva
+  dibujada (enviar), y por comando.
+Cuesta unas pocas instrucciones por cambio de fase (~3 por vértice), así
+que mide un poco de más: va encendido en las dos corridas del autotest.
+tests/test_guion.c lo prueba con un lector falso (incluida la vuelta de
+los contadores de 32 bits).
+
 ### Para el siguiente chat (empezar aquí)
 
 Metodología acordada (detalle en `docs/HOJA_DE_RUTA.md`): primero medir

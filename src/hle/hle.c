@@ -377,6 +377,7 @@ static struct {
 	u64 clock, acc[PROF_N], instr, cycles, syscalls, flips, switches, guest_calls;
 	u32 vblanks;
 	u32 samples[PROF_N], ge_samples[GEF_N];
+	u64 pmc[PROF_PMC_SLOTS][PMC_N];
 	GeStats ge;
 } prof_base;
 static u32 prof_vblanks;   /* hle_run_frame lleva la cuenta */
@@ -397,6 +398,8 @@ static void profile_snapshot(void){
 	prof_base.vblanks = prof_vblanks;
 	memcpy(prof_base.samples, (const void *)prof_samples, sizeof(prof_base.samples));
 	memcpy(prof_base.ge_samples, (const void *)prof_ge_samples, sizeof(prof_base.ge_samples));
+	if(prof_pmc_on) prof_pmc_account();
+	memcpy(prof_base.pmc, prof_pmc_acc, sizeof(prof_base.pmc));
 	ge_get_stats(&prof_base.ge);
 }
 
@@ -457,6 +460,73 @@ static void profile_ge_lines(const GeStats *g, const GeStats *b, u32 vblanks){
 	hle_log("[TIEMPOS] %s\n", line);
 }
 
+/* prof_pmc (0.2): ciclos del procesador por cubeta (con IPC, fallos de la
+   L1 de datos y saltos mal predichos por cada 1000 instrucciones) y lo que
+   cuesta cada fase del GE por unidad */
+static void profile_pmc_lines(const GeStats *g, const GeStats *b, u64 instr){
+	static const char *const bn[PROF_N] = {
+		"otros", "CPU", "syscalls", "GE", "rasterizar", "texturas", "framebuffers", "presentar", "esperar GX", "E/S",
+		"audio", "registro"
+	};
+	static const char *const fn[GEF_N] = { "comandos", "leer", "transformar", "ensamblar", "enviar", "estado", "curvas" };
+	u64 d[PROF_PMC_SLOTS][PMC_N], total = 0, ge_c = 0;
+	char line[1024];
+	size_t len;
+	int i, k;
+	u32 draws = g->draws - b->draws, verts = g->vertices - b->vertices, tris = g->tris - b->tris;
+	u32 prims = g->primitives - b->primitives, cmds = g->commands - b->commands;
+	if(prof_pmc_on) prof_pmc_account();
+	for(i = 0; i < PROF_PMC_SLOTS; i++)
+		for(k = 0; k < PMC_N; k++){
+			d[i][k] = prof_pmc_acc[i][k] - prof_base.pmc[i][k];
+			if(k == PMC_CICLOS) total += d[i][k];
+		}
+	if(!total) return;
+	for(i = 0; i < GEF_N; i++) ge_c += d[PROF_N + i][PMC_CICLOS];
+	len = (size_t)snprintf(line, sizeof(line), "[TIEMPOS] PMC: %.0f M ciclos;", (double)total / 1e6);
+	for(i = 0; i < PROF_PMC_SLOTS && len + 96 < sizeof(line); i++){
+		u64 c = d[i][PMC_CICLOS], n = d[i][PMC_INSTR];
+		if(i == PROF_GE){
+			/* El GE va por fases: aquí su suma */
+			u64 gi = 0;
+			for(k = 0; k < GEF_N; k++) gi += d[PROF_N + k][PMC_INSTR];
+			c = ge_c; n = gi;
+		} else if(i >= PROF_N) break;
+		if(c * 200 < total) continue;   /* menos del 0,5 % */
+		len += (size_t)snprintf(line + len, sizeof(line) - len, " %s %.1f%% (IPC %.2f", bn[i], 100.0 * (double)c / (double)total,
+		                        c ? (double)n / (double)c : 0.0);
+		if(i != PROF_GE && n)
+			len += (size_t)snprintf(line + len, sizeof(line) - len, ", L1D %.1f, saltos %.1f",
+			                        1000.0 * (double)d[i][PMC_FALLOS_L1D] / (double)n, 1000.0 * (double)d[i][PMC_SALTOS_MAL] / (double)n);
+		len += (size_t)snprintf(line + len, sizeof(line) - len, ")");
+	}
+	hle_log("%s\n", line);
+	if(instr)
+		hle_log("[TIEMPOS] PMC de la CPU: %.1f ciclos y %.1f instrucciones del Broadway por instruccion de la PSP\n",
+		        (double)d[PROF_CPU][PMC_CICLOS] / (double)instr, (double)d[PROF_CPU][PMC_INSTR] / (double)instr);
+	if(ge_c){
+		/* Cada fase por su unidad: llamada de dibujo, vértice, triángulo recibido, primitiva dibujada */
+		static const int unit[GEF_N] = { 0, 1, 1, 2, 3, 0, 0 };
+		static const char *const un[4] = { "llamada", "vertice", "triangulo", "primitiva" };
+		u32 per[4];
+		per[0] = draws; per[1] = verts; per[2] = tris; per[3] = prims;
+		len = (size_t)snprintf(line, sizeof(line), "[TIEMPOS] PMC del GE (ciclos por unidad, IPC, fallos L1D y saltos mal por 1000 instr):");
+		for(i = 0; i < GEF_N && len + 128 < sizeof(line); i++){
+			u64 c = d[PROF_N + i][PMC_CICLOS], n = d[PROF_N + i][PMC_INSTR];
+			u32 u = per[unit[i]];
+			if(!c) continue;
+			len += (size_t)snprintf(line + len, sizeof(line) - len, " %s %.0f por %s (IPC %.2f, L1D %.1f, saltos %.1f)",
+			                        fn[i], u ? (double)c / (double)u : 0.0, un[unit[i]], n ? (double)n / (double)c : 0.0,
+			                        n ? 1000.0 * (double)d[PROF_N + i][PMC_FALLOS_L1D] / (double)n : 0.0,
+			                        n ? 1000.0 * (double)d[PROF_N + i][PMC_SALTOS_MAL] / (double)n : 0.0);
+		}
+		if(cmds && len + 64 < sizeof(line))
+			snprintf(line + len, sizeof(line) - len, "; comandos %.0f ciclos por comando",
+			         (double)d[PROF_N + GEF_COMANDOS][PMC_CICLOS] / (double)cmds);
+		hle_log("%s\n", line);
+	}
+}
+
 /* Velocidad, a dónde va el tiempo real, el GE por dentro y qué dibujó, y lo
    que añada el renderizador. Sin acentos: también sale en la consola del
    Wii. */
@@ -502,6 +572,7 @@ void hle_profile_report(const char *why){
 	        (unsigned long long)(kernel_stat_switches - prof_base.switches),
 	        (unsigned long long)(kernel_stat_guest_calls - prof_base.guest_calls));
 	profile_ge_lines(&ge, &prof_base.ge, prof_vblanks - prof_base.vblanks);
+	profile_pmc_lines(&ge, &prof_base.ge, cpu_executed - prof_base.instr);
 	/* Lo del renderizador (una línea por cada \n) */
 	extra[0] = 0;
 	if(profile_hook) profile_hook(extra, sizeof(extra));
@@ -521,6 +592,7 @@ void hle_profile_report(const char *why){
 
 static void profile_tick(void){
 	if(!prof_clock || !prof_hz) return;
+	if(opt_on[OPT_PROF_PMC] != prof_pmc_on) prof_pmc_enable(opt_on[OPT_PROF_PMC]);
 	if(!prof_base.valid){ profile_snapshot(); return; }
 	if(prof_clock() - prof_base.clock >= (u64)HLE_PROFILE_SECONDS * prof_hz) hle_profile_report(NULL);
 }

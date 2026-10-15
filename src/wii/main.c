@@ -614,6 +614,7 @@ int main(int argc, char **argv){
 	snprintf(log_normal, sizeof(log_normal), "%s/wiisp.log", appdir[0] ? appdir : "sd:/wiisp");
 	hle_set_log_file(log_normal);
 	broadway_report();
+	broadway_pmc_init();
 	/* Las capturas de los guiones necesitan la imagen en la VRAM emulada */
 	app_set_before_capture(gx_ge_sync_vram);
 	app_set_mode_text(mode_text);

@@ -20,8 +20,10 @@
 #include <gccore.h>
 #include "wii/wii.h"
 #include "hle/hle.h"
+#include "core/prof.h"
 
 #define MFSPR(n) ({ u32 v_; __asm__ volatile("mfspr %0, %1" : "=r"(v_) : "i"(n)); v_; })
+#define MTSPR(n, v) __asm__ volatile("mtspr %0, %1" : : "i"(n), "r"((u32)(v)))
 
 #ifndef HID4_SBE
 #define HID4_SBE 0x02000000u   /* bit 6: BAT 4-7 activos */
@@ -83,4 +85,25 @@ void broadway_report(void){
 	hle_log_quiet("[BROADWAY] MEM1 libre %08X-%08X, MEM2 libre %08X-%08X\n",
 	              (u32)SYS_GetArena1Lo(), (u32)SYS_GetArena1Hi(), (u32)SYS_GetArena2Lo(), (u32)SYS_GetArena2Hi());
 	hle_log_sync();
+}
+
+/* --- Contadores de rendimiento (prof_pmc, 0.2) ------------------------------
+   MMCR0 (SPR 952) elige los eventos de PMC1 (bits 19-25) y PMC2 (26-31);
+   MMCR1 (956) los de PMC3 (0-4) y PMC4 (5-9). Eventos del manual del
+   750CL: PMC1 1 = ciclos, PMC2 2 = instrucciones terminadas, PMC3 5 =
+   fallos de la caché de datos L1, PMC4 8 = saltos mal predichos. Todo
+   corre en modo supervisor, así que se leen los registros directamente. */
+static void pmc_read(u32 *out){
+	out[PMC_CICLOS] = MFSPR(953);
+	out[PMC_INSTR] = MFSPR(954);
+	out[PMC_FALLOS_L1D] = MFSPR(957);
+	out[PMC_SALTOS_MAL] = MFSPR(958);
+}
+
+void broadway_pmc_init(void){
+	MTSPR(952, 0x80000000u);   /* FC: parados mientras se configuran */
+	MTSPR(953, 0); MTSPR(954, 0); MTSPR(957, 0); MTSPR(958, 0);
+	MTSPR(956, (5u << 27) | (8u << 22));
+	MTSPR(952, (1u << 6) | 2u);
+	prof_pmc_read = pmc_read;
 }
