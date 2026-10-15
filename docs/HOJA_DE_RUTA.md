@@ -132,6 +132,16 @@ de 54 a 24 instrucciones del Broadway (de 20 a 5 accesos a memoria), un lw
 de ~66 a 29; bajo qemu-ppc, x2,2 MIPS. Queda el despacho por `switch`
 (dos saltos indirectos para SPECIAL): eso es 2.2.
 
+Hecha (v0.5.10): las texturas con paleta que leen framebuffers (la parte
+de 1.1 que DBZ necesita), en tres interruptores: `ge_fb_relleno` (accesos
+al relleno de las filas no bajan el búfer), `ge_rtt_gpu` (CLUT32 por alfa
+desde una copia A8 del EFB y CLUT16 sobre 565 con índices CI8 de la copia
+RGBA8, con TLUT 565 de GX; comprobación por primitiva de que no lee fuera
+del búfer) y `ge_fb_hueco` (un búfer pequeño encima de unas filas de otro
+no lo saca de la GPU). Según el censo de la 0.5.9.2, quita ~10 s de cada
+30 s de pelea (bajadas, subidas y decodificación). Detalle en
+docs/CONTINUAR.md.
+
 Primera tanda acordada (todas "más barato", verificables en el PC):
 0.1 `prof_espera`, **skinning rápido** (`ge_skin_rapido`), **matrices al
 cambiar** (`ge_mtx_cache`), **color constante** (`ge_color_const`), 2.1

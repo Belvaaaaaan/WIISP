@@ -36,6 +36,8 @@
  *     .v2...), para comprobar que la escena sale idéntica.
  *   - "opt NOMBRE 0|1" cambia un interruptor de optimización (core/opt.h)
  *     para los programas siguientes.
+ *   - "sufijo X": las salidas de los programas siguientes llevan ".X" (para
+ *     correr el mismo juego con otras opciones; "sufijo" solo lo quita);
  *   - "capturas N": con guion, una captura cada N cuadros (400 por defecto;
  *     0 = ninguna, para medir velocidad), apuntada con sus opciones en
  *     <programa>.capturas.txt.
@@ -503,6 +505,7 @@ static int autotest(const char *appdir){
 	FILE *list, *done;
 	char base[300], line[256], path[600], prefix[620];
 	int count = 0, max_frames = 1200, times = 1;
+	char suffix[40] = "";
 	snprintf(base, sizeof(base), "sd:/wiisp");
 	snprintf(path, sizeof(path), "%s/autotest.txt", base);
 	list = fopen(path, "r");
@@ -524,6 +527,13 @@ static int autotest(const char *appdir){
 		if(!strncmp(line, "frames ", 7)){ max_frames = atoi(line + 7); continue; }
 		if(!strncmp(line, "veces ", 6)){ times = atoi(line + 6); if(times < 1) times = 1; continue; }
 		if(!strncmp(line, "capturas ", 9)){ app_guion_capturas_cada((unsigned)atoi(line + 9)); continue; }
+		if(!strncmp(line, "sufijo", 6)){
+			/* Para correr el mismo juego con otras opciones sin pisar las salidas */
+			const char *v = line + 6;
+			while(*v == ' ') v++;
+			snprintf(suffix, sizeof(suffix), "%.39s", v);
+			continue;
+		}
 		if(!strncmp(line, "opt ", 4)){
 			int r = app_opt_set(line + 4);
 			if(r) printf("%s: %s\n", line, r > 0 ? "todavia no esta implementada" : "no se entiende");
@@ -533,8 +543,10 @@ static int autotest(const char *appdir){
 		if(strstr(line, ":/")) snprintf(path, sizeof(path), "%s", line);
 		else snprintf(path, sizeof(path), "%s/autotest/%s", base, line);
 		for(k = 1; k <= times; k++){
-			if(times > 1) snprintf(prefix, sizeof(prefix), "%s.v%d", path, k);
-			else snprintf(prefix, sizeof(prefix), "%s", path);
+			char base_prefix[sizeof(prefix) - 8];
+			snprintf(base_prefix, sizeof(base_prefix), "%s%s%s", path, suffix[0] ? "." : "", suffix);
+			if(times > 1) snprintf(prefix, sizeof(prefix), "%s.v%d", base_prefix, k);
+			else snprintf(prefix, sizeof(prefix), "%s", base_prefix);
 			printf("%s%s\n", line, times > 1 ? (k == 1 ? " (vez 1)" : " (otra vez)") : "");
 			autotest_run(path, prefix, max_frames);
 			count++;

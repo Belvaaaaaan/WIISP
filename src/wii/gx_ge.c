@@ -95,7 +95,23 @@ typedef struct {
 	int state;
 	int amode;               /* A_* */
 	int ualpha;
+	unsigned tex_gen;        /* sube cada vez que cambia tex */
+	/* Texturas con paleta desde la GPU (ge_rtt_gpu): índices CI8 de GX de
+	   ci_width() columnas (potencia de 2, como la textura de la PSP que lo
+	   lee), con una fila de tiles de más para el vecino del filtro */
+	u8 *ci;
+	int ci_kind;             /* CI_A8 (copia del alfa del EFB) o CI_565 */
+	unsigned ci_gen;         /* tex_gen del que salió (CI_565) */
+	u32 ci_key;              /* desplazamiento y máscara (CI_565) */
+	int ci_valid;
+	int a8_want;             /* copiar el alfa en cada efb_to_tex */
+	int gpu_bad;             /* primitivas que leían fuera; con 4, no se intenta más */
+	/* Hueco (ge_fb_hueco): filas [hole0, hole0 + hole_n) en las que manda la
+	   VRAM porque otro búfer más pequeño se dibujó encima */
+	int hole0, hole_n;
 } Surface;
+
+enum { CI_NONE, CI_A8, CI_565 };
 
 /* Una textura decodificada; cuándo vale la decide texcache.c (misma casilla) */
 typedef struct {
@@ -138,6 +154,19 @@ static int tex_on, tex_proj, through, flat;
 static float inv_tw, inv_th, tex_su = 1.0f, tex_sv = 1.0f;
 static GXTexObj rtt_obj;
 static int use_rtt;                     /* la textura es un framebuffer en la GPU */
+static GXTexObj clut_obj;
+static int use_clut_gpu;                /* textura con paleta desde la GPU (ge_rtt_gpu) */
+static Surface *clut_src;               /* su búfer de origen */
+/* TLUT de GX en anillo: GX_LoadTlut lee la memoria cuando la GPU llega al
+   comando, así que un búfer no se reescribe hasta después de un
+   GX_DrawDone (wait_gpu) */
+#define TLUT_RING 64
+static u16 tlut_ring[TLUT_RING][256] __attribute__((aligned(32)));
+static GXTlutObj tlut_obj;
+static int tlut_pos, tlut_used, tlut_loaded = -1;
+/* Censo de este camino */
+static unsigned clut_gpu_uses[3], clut_gpu_fallbacks, clut_ci_builds, clut_tlut_loads;
+static u64 clut_ci_ticks;
 static float pos_off;
 
 /* Perfilado (ticks del Wii) */
@@ -232,6 +261,9 @@ typedef struct {
 } RttClut;
 static RttClut rtt_clut[RTT_CLUT_MAX];
 static int rtt_nclut;
+static unsigned rtt_pad_skips;          /* accesos al relleno que no bajaron nada */
+static unsigned hole_made, hole_filled, hole_rows_dl, hole_rows_up, hole_skips;
+static u64 hole_ticks;
 /* El primer dibujo tras usar un destino, si es un sprite */
 static const GeVertex *first_v0, *first_v1;
 static int dl_force = -1;               /* motivo que fija quien llama */
@@ -282,6 +314,7 @@ static void wait_gpu(void){
 static void wait_gpu_body(void){
 	GX_DrawDone();
 	flush_deferred();
+	tlut_used = 0;    /* la GPU ya leyó todas las TLUT encoladas */
 }
 
 /* Libera memoria que la GPU aún puede estar leyendo */
@@ -368,20 +401,24 @@ static int visible_w(const Surface *s){
 }
 
 /* tex (GPU) -> VRAM, fila a fila y por formato */
-static void tex_to_vram_body(const Surface *s);
+static void tex_to_vram_body(const Surface *s, int y0, int y1);
+
+static int in_hole_row(const Surface *s, int y){ return s->hole_n && y >= s->hole0 && y < s->hole0 + s->hole_n; }
 
 static void tex_to_vram(const Surface *s){
 	int old = prof_switch(PROF_FB);
-	tex_to_vram_body(s);
+	tex_to_vram_body(s, 0, s->h - 1);
 	prof_switch(old);
 }
 
-static void tex_to_vram_body(const Surface *s){
+/* Las filas [y0, y1]; las del hueco no (ahí manda la VRAM) */
+static void tex_to_vram_body(const Surface *s, int y0, int y1){
 	int x, y, w = visible_w(s), keep_a = s->amode == A_VRAM;
 	u32 ua = (u32)s->ualpha;
 	DCInvalidateRange(s->tex, (u32)(s->w * s->h * 4));
-	for(y = 0; y < s->h; y++){
+	for(y = y0; y <= y1; y++){
 		const u8 *trow = s->tex + (u32)(((y >> 2) * (s->w >> 2)) << 6) + (u32)((y & 3) << 3);
+		if(in_hole_row(s, y)) continue;
 		if(s->fmt == SURF_Z){
 			for(x = 0; x < w; x++){
 				const u8 *t = trow + ((x >> 2) << 6) + ((x & 3) << 1);
@@ -514,6 +551,34 @@ static void vram_to_tex_body(Surface *s){
 	DCFlushRange(s->tex, (u32)(s->w * s->h * 4));
 	GX_InvalidateTexAll();
 	s->has_tex = 1;
+	s->tex_gen++;
+	s->hole_n = 0;
+	if(s->ci_kind == CI_A8) s->ci_valid = 0;   /* el alfa ya no es el del EFB */
+}
+
+/* Solo las filas [y0, y1] de la VRAM a tex (las del hueco), sin tocar el
+   resto ni el modo de alfa. Solo búferes de color. */
+static void vram_to_tex_rows(Surface *s, int y0, int y1){
+	int x, y, w = visible_w(s), bpp = surf_bpp(s->fmt);
+	u32 lo = (u32)(((y0 >> 2) * (s->w >> 2)) << 6), hi = (u32)((((y1 >> 2) + 1) * (s->w >> 2)) << 6);
+	int old = prof_switch(PROF_FB);
+	/* Las demás filas de esos tiles las escribió la GPU: se leen de la
+	   memoria antes de cambiar estas */
+	wait_gpu();
+	DCInvalidateRange(s->tex + lo, hi - lo);
+	for(y = y0; y <= y1; y++)
+		for(x = 0; x < w; x++){
+			const u8 *q = vram_color(s, x, y, bpp);
+			u8 *t = tile_ptr(s->tex, s->w, x, y);
+			core_u32 c = bpp == 4 ? (core_u32)q[0] | ((core_u32)q[1] << 8) | ((core_u32)q[2] << 16) | ((core_u32)q[3] << 24)
+			                      : vram16_to_8888(s->fmt, (core_u32)q[0] | ((core_u32)q[1] << 8));
+			t[0] = (u8)(c >> 24); t[1] = (u8)c; t[32] = (u8)(c >> 8); t[33] = (u8)(c >> 16);
+		}
+	DCFlushRange(s->tex + lo, hi - lo);
+	GX_InvalidateTexAll();
+	s->tex_gen++;
+	if(s->ci_kind == CI_A8) s->ci_valid = 0;
+	prof_switch(old);
 }
 
 /* EFB -> tex (sin esperar a la GPU) */
@@ -525,11 +590,45 @@ static void efb_to_tex(Surface *s){
 	prof_switch(old);
 }
 
+/* Ancho de los índices CI8 de un búfer: la potencia de 2 que lo cubre,
+   como la textura de la PSP que lo lee (512 para 480) */
+static int ci_width(const Surface *s){
+	int w = 8;
+	while(w < s->w) w <<= 1;
+	return w;
+}
+
+/* Memoria de los índices CI8 (a cero; una fila de tiles de más: la que lee
+   el filtro con peso 0 justo debajo de la última) */
+static int ensure_ci(Surface *s){
+	u32 bytes;
+	if(s->ci) return 1;
+	if(ci_width(s) > MAX_TEX_SIZE || ci_width(s) > EFB_W) return 0;
+	bytes = (u32)ci_width(s) * (u32)(s->h + 4);
+	s->ci = memalign(32, bytes);
+	if(!s->ci) return 0;
+	memset(s->ci, 0, bytes);
+	DCFlushRange(s->ci, bytes);
+	s->ci_valid = 0;
+	return 1;
+}
+
 static void efb_to_tex_body(Surface *s){
 	copy_filter_none();
 	GX_SetTexCopySrc(0, 0, (u16)s->w, (u16)s->h);
 	GX_SetTexCopyDst((u16)s->w, (u16)s->h, s->fmt == SURF_Z ? GX_TF_Z24X8 : GX_TF_RGBA8, GX_FALSE);
 	GX_CopyTex(s->tex, GX_FALSE);
+	s->tex_gen++;
+	if(s->a8_want && s->fmt == GE_FMT_8888 && s->amode == A_GPU && ensure_ci(s)){
+		/* El alfa (6 bits del EFB, a 8 como en la copia RGBA8) como
+		   índices CI8 de un CLUT32 que lo lee (ge_rtt_gpu) */
+		int cw = ci_width(s);
+		GX_SetTexCopySrc(0, 0, (u16)cw, (u16)s->h);
+		GX_SetTexCopyDst((u16)cw, (u16)s->h, GX_CTF_A8, GX_FALSE);
+		GX_CopyTex(s->ci, GX_FALSE);
+		s->ci_kind = CI_A8;
+		s->ci_valid = 1;
+	} else if(s->ci_kind == CI_A8) s->ci_valid = 0;
 	GX_PixModeSync();
 	GX_InvalidateTexAll();
 	s->has_tex = 1;
@@ -596,10 +695,12 @@ static void rtt_note_texture(const GeRasterState *r, int from_gpu){
 	off = addr - PSP_VRAM_BASE;
 	if(!(s = surface_at(off))) return;
 	t = rtt_surface(s);
+	/* 1: copia directa del búfer; 2: con paleta desde la GPU (también se
+	   apunta en el censo de paletas) */
 	if(from_gpu){
 		rtt_gpu++;
 		if(t) t->gpu++;
-		return;
+		if(from_gpu == 1) return;
 	}
 	if(r->texfmt > GE_FMT_8888){
 		core_u32 cf = r->clutformat;
@@ -649,6 +750,7 @@ static void rtt_note_texture(const GeRasterState *r, int from_gpu){
 	else if(r->use_tex_alpha && s->amode != A_GPU && !(s->amode == A_UNIFORM && s->ualpha == 255) && has_alpha_fmt(s->fmt))
 		why = RM_ALPHA;
 	else why = RM_NOTEX;
+	if(from_gpu) return;
 	rtt_miss[why]++;
 	if(t) t->miss++;
 }
@@ -752,7 +854,9 @@ static void drop_surface(Surface *s){
 	if(s->state == GPU_NEWER) download(s);
 	if(s == cur_c){ cur_c = NULL; efb_c_newer = 0; restored_c = 0; }
 	if(s == cur_z){ cur_z = NULL; efb_z_newer = 0; restored_z = 0; }
+	if(s == clut_src){ clut_src = NULL; use_clut_gpu = 0; targets_dirty = 1; }
 	defer_free(s->tex);
+	defer_free(s->ci);
 	memset(s, 0, sizeof(*s));
 }
 
@@ -782,6 +886,25 @@ static void rtt_note_clut(const Surface *s, core_u32 off, core_u32 len){
 	c->n++;
 }
 
+static int only_hole(const Surface *s, core_u32 off, core_u32 len);
+
+/* ¿[off, off+len) solo toca el relleno de una fila del búfer (las columnas
+   desde el ancho dibujado)? GX nunca escribe ahí: en esos bytes manda
+   siempre la VRAM, así que leerlos o escribirlos no necesita bajar el
+   búfer ni invalidarlo (DBZ guarda una paleta en el relleno de la primera
+   fila de su framebuffer y la carga en cada imagen) */
+static int only_padding(const Surface *s, core_u32 off, core_u32 len){
+	core_u32 bpp, rowb, vis, a, e;
+	if(s->fmt == SURF_Z || !len || off < s->addr) return 0;
+	bpp = (core_u32)surf_bpp(s->fmt);
+	rowb = s->stride * bpp;
+	vis = (core_u32)visible_w(s) * bpp;
+	if(!rowb || vis >= rowb) return 0;
+	a = off - s->addr;
+	e = a + len - 1;
+	return a / rowb == e / rowb && a % rowb >= vis;
+}
+
 static void vram_hook(core_u32 off, core_u32 len, int write){
 	int i;
 	const Surface *clut_s = NULL;
@@ -793,12 +916,18 @@ static void vram_hook(core_u32 off, core_u32 len, int write){
 		if(!s->used || s->state == VRAM_NEWER) continue;
 		surf_range(s, &a, &e);
 		if(off >= e || off + len <= a) continue;
+		if(opt_on[OPT_GE_FB_RELLENO] && only_padding(s, off, len)){
+			rtt_pad_skips++;
+			continue;
+		}
+		if(only_hole(s, off, len)) continue;
 		if(s->state == GPU_NEWER) download(s);
 		if(!write && ge.cur_cmd == GE_LOADCLUT && prof_cur != PROF_TEXTURAS && s->fmt != SURF_Z) clut_s = s;
 		if(write){
 			RttTarget *t = rtt_surface(s);
 			if(t) t->vram_writes++;
 			s->state = VRAM_NEWER;
+			s->hole_n = 0;
 			if(s == cur_c){ restored_c = 0; efb_c_newer = 0; }
 			if(s == cur_z){ restored_z = 0; efb_z_newer = 0; }
 			targets_dirty = 1;
@@ -820,6 +949,68 @@ static Surface *find_surface(core_u32 addr, core_u32 stride, int fmt){
 	return NULL;
 }
 
+/* --- Huecos (ge_fb_hueco) ------------------------------------------------------- */
+
+/* DBZ dibuja en cada imagen un búfer 4444 de 64x64 encima de las 8 primeras
+   filas de su 565 de 480x272, y después vuelve al 565: tirar el 565 de la
+   GPU obligaba a bajarlo y a subirlo entero en cada imagen. Con el hueco,
+   el grande se queda en la GPU; solo sus filas pisadas van y vuelven por la
+   VRAM (bajar antes de que el pequeño se suba desde ahí, subir cuando el
+   grande se vuelve a usar). En las filas del hueco manda la VRAM: no se
+   bajan, y el búfer no se usa como textura ni se muestra hasta llenarlo. */
+
+/* ¿El acceso solo toca filas del hueco del búfer? (no es asunto suyo) */
+static int only_hole(const Surface *s, core_u32 off, core_u32 len){
+	int r0, r1, pad;
+	if(!s->hole_n || !rows_touched(s, off, len, &r0, &r1, &pad)) return 0;
+	return off >= s->addr && r0 >= s->hole0 && r1 < s->hole0 + s->hole_n &&
+	       off + len <= s->addr + s->stride * (core_u32)s->h * (core_u32)surf_bpp(s->fmt);
+}
+
+/* Las filas [y0, y1] de la GPU a la VRAM; el resto sigue en la GPU */
+static void download_rows(Surface *s, int y0, int y1){
+	core_u32 rowb = s->stride * (core_u32)surf_bpp(s->fmt);
+	int old;
+	if(s == cur_c && efb_c_newer){ efb_to_tex(s); efb_c_newer = 0; }
+	if(!s->has_tex) return;
+	wait_gpu();
+	old = prof_switch(PROF_FB);
+	tex_to_vram_body(s, y0, y1);
+	prof_switch(old);
+	mem_note_write(PSP_VRAM_BASE + s->addr + (core_u32)y0 * rowb, (core_u32)(y1 - y0 + 1) * rowb);
+	ge_sync_domain++;
+	hole_rows_dl += (unsigned)(y1 - y0 + 1);
+}
+
+/* Se va a crear un búfer de formato fmt en [a, e) encima del búfer o:
+   ¿basta con un hueco en o? Si sí, lo deja hecho. */
+static int keep_with_hole(Surface *o, int fmt, core_u32 a, core_u32 e){
+	int r0, r1, pad, h0, h1;
+	u64 t0;
+	if(!opt_on[OPT_GE_FB_HUECO] || fmt == SURF_Z || o->fmt == SURF_Z || o == cur_z) return 0;
+	if(o->state == VRAM_NEWER || !o->has_tex) return 0;
+	/* El alfa de las filas que vuelvan de la VRAM tiene que valer tal cual */
+	if(o->fmt != GE_FMT_565 && o->amode != A_GPU && o->amode != A_VRAM) return 0;
+	if(a < o->addr) a = o->addr;
+	if(!rows_touched(o, a, e - a, &r0, &r1, &pad)) return 0;
+	h0 = r0; h1 = r1;
+	if(o->hole_n){
+		if(o->hole0 < h0) h0 = o->hole0;
+		if(o->hole0 + o->hole_n - 1 > h1) h1 = o->hole0 + o->hole_n - 1;
+	}
+	if((h1 - h0 + 1) * 4 > o->h) return 0;
+	t0 = gettime();
+	/* Todo el hueco nuevo baja (las filas que ya eran hueco se saltan): si
+	   se une a uno anterior, también las que quedan entre los dos */
+	if(o->state == GPU_NEWER) download_rows(o, h0, h1);
+	o->hole0 = h0;
+	o->hole_n = h1 - h0 + 1;
+	if(o == clut_src){ clut_src = NULL; use_clut_gpu = 0; }
+	hole_made++;
+	hole_ticks += gettime() - t0;
+	return 1;
+}
+
 /* Búfer de la PSP de al menos need_w x need_h. NULL si no se puede. */
 static Surface *get_surface(core_u32 addr, core_u32 stride, int fmt, int need_w, int need_h){
 	Surface *s = find_surface(addr, stride, fmt), *slot = NULL;
@@ -833,7 +1024,28 @@ static Surface *get_surface(core_u32 addr, core_u32 stride, int fmt, int need_w,
 	if(need_w <= 0 || need_h <= 0) return NULL;
 
 	if(s){
-		if(s->w >= need_w && s->h >= need_h) return s;
+		if(s->w >= need_w && s->h >= need_h){
+			if(s->hole_n){
+				/* Vuelve: lo que se dibujó encima de su hueco baja a la VRAM
+				   (y desde ahí, el hueco se sube al restaurar) */
+				core_u32 sa = s->addr, se = s->addr + s->stride * (core_u32)s->h * (core_u32)surf_bpp(s->fmt);
+				dl_new_addr = addr; dl_new_fmt = fmt; dl_new_w = s->w; dl_new_h = s->h;
+				dl_force = DX_SOLAPE;
+				for(i = 0; i < MAX_SURF; i++){
+					Surface *o = &surf[i];
+					core_u32 oa, oe;
+					if(!o->used || o == s) continue;
+					oa = o->addr;
+					oe = o->addr + o->stride * (core_u32)o->h * (core_u32)surf_bpp(o->fmt);
+					if(sa < oe && oa < se){
+						rtt_note_pair(o, sa > oa ? sa : oa, se < oe ? se : oe);
+						drop_surface(o);
+					}
+				}
+				dl_force = -1;
+			}
+			return s;
+		}
 		/* Crece: la VRAM pasa a mandar y se vuelve a subir */
 		w = s->w > need_w ? s->w : need_w;
 		h = s->h > need_h ? s->h : need_h;
@@ -863,7 +1075,7 @@ static Surface *get_surface(core_u32 addr, core_u32 stride, int fmt, int need_w,
 		oe = o->addr + o->stride * (core_u32)o->h * (core_u32)surf_bpp(o->fmt);
 		if(a < oe && oa < e){
 			rtt_note_pair(o, a > oa ? a : oa, e < oe ? e : oe);
-			drop_surface(o);
+			if(!keep_with_hole(o, fmt, a, e)) drop_surface(o);
 		}
 		if(!o->used && !slot) slot = o;
 	}
@@ -1007,6 +1219,14 @@ static void restore_color(void){
 
 static void restore_color_body(void){
 	Surface *s = cur_c;
+	if(s->hole_n && s->state != VRAM_NEWER && s->has_tex){
+		u64 t0 = gettime();
+		vram_to_tex_rows(s, s->hole0, s->hole0 + s->hole_n - 1);
+		hole_rows_up += (unsigned)s->hole_n;
+		hole_filled++;
+		hole_ticks += gettime() - t0;
+		s->hole_n = 0;
+	}
 	if(s->state == VRAM_NEWER || !s->has_tex){
 		u64 t0 = gettime();
 		wait_gpu();
@@ -1082,8 +1302,11 @@ static void promote_alpha(void){
 			}
 		DCFlushRange(s->tex, (u32)(s->w * s->h * 4));
 		GX_InvalidateTexAll();
+		s->tex_gen++;
 		const_alpha = -1;
 	}
+	/* El EFB pasa a RGBA6: hasta la próxima copia no hay alfa copiado */
+	if(s->ci_kind == CI_A8) s->ci_valid = 0;
 	s->amode = A_GPU;
 	set_pf(GX_PF_RGBA6_Z24);
 	blit(s, NULL, 1, 1, 0.0f, 0.0f, (float)s->w, (float)s->h, 1.0f, 1.0f, 0, const_alpha);
@@ -1457,7 +1680,7 @@ static int texture_from_surface(const GeRasterState *r){
 	Surface *ts;
 	if(r->texfmt > GE_FMT_8888 || r->swizzle || addr < PSP_VRAM_BASE || addr >= PSP_VRAM_BASE + PSP_VRAM_SIZE) return 0;
 	ts = find_surface(addr - PSP_VRAM_BASE, r->texbufw[0], r->texfmt);
-	if(!ts || ts->state == VRAM_NEWER) return 0;
+	if(!ts || ts->state == VRAM_NEWER || ts->hole_n) return 0;
 	/* El alfa del búfer solo está en la GPU en modo A_GPU */
 	if(r->use_tex_alpha && ts->amode != A_GPU && !(ts->amode == A_UNIFORM && ts->ualpha == 255) && has_alpha_fmt(ts->fmt))
 		return 0;
@@ -1467,6 +1690,175 @@ static int texture_from_surface(const GeRasterState *r){
 	tex_su = (float)(1 << r->width0_shift) / (float)ts->w;
 	tex_sv = (float)(1 << r->height0_shift) / (float)ts->h;
 	return 1;
+}
+
+/* --- Texturas con paleta desde la GPU (ge_rtt_gpu) ----------------------------- */
+
+/* Carga la TLUT (256 entradas RGB565 de GX) en GX_TLUT0 si no es la que ya
+   está */
+static void load_tlut(const u16 *tl){
+	if(tlut_loaded >= 0 && !memcmp(tlut_ring[tlut_loaded], tl, sizeof(tlut_ring[0]))) return;
+	if(tlut_used >= TLUT_RING) wait_gpu();
+	memcpy(tlut_ring[tlut_pos], tl, sizeof(tlut_ring[0]));
+	DCFlushRange(tlut_ring[tlut_pos], sizeof(tlut_ring[0]));
+	GX_InitTlutObj(&tlut_obj, tlut_ring[tlut_pos], GX_TL_RGB565, 256);
+	GX_LoadTlut(&tlut_obj, GX_TLUT0);
+	tlut_loaded = tlut_pos;
+	tlut_pos = (tlut_pos + 1) % TLUT_RING;
+	tlut_used++;
+	clut_tlut_loads++;
+}
+
+/* Índices CI8 de un búfer 565 a partir de su copia RGBA8 */
+static int build_ci565(Surface *ts, u32 shift, u32 mask){
+	int old = prof_switch(PROF_TEXTURAS);
+	u64 t0 = gettime();
+	int cw = ci_width(ts);
+	if(!ensure_ci(ts)){ prof_switch(old); return 0; }
+	wait_gpu();   /* la copia de efb_to_tex puede no haber terminado */
+	DCInvalidateRange(ts->tex, (u32)(ts->w * ts->h * 4));
+	gx_ci8_from_rgba8_565(ts->ci, cw, ts->tex, ts->w, ts->h, shift, mask);
+	DCFlushRange(ts->ci, (u32)cw * (u32)ts->h);
+	GX_InvalidateTexAll();
+	ts->ci_kind = CI_565;
+	ts->ci_gen = ts->tex_gen;
+	ts->ci_key = shift | (mask << 8);
+	ts->ci_valid = 1;
+	clut_ci_builds++;
+	clut_ci_ticks += gettime() - t0;
+	prof_switch(old);
+	return 1;
+}
+
+/* Una textura con paleta que lee un framebuffer que está en la GPU: la GPU
+   busca en la paleta (TLUT 565) con índices CI8 sacados de la copia del
+   EFB, sin bajar el búfer ni decodificarlo en la CPU:
+     - CLUT32 que lee el alfa (desplazamiento >= 24) de un 8888 con el alfa
+       en la GPU: los índices son una copia A8 del EFB (efb_to_tex);
+     - CLUT16 sobre un 565: los índices salen de la copia RGBA8.
+   Solo con paleta 565 (la TLUT RGB565 da el mismo color que la PSP), sin
+   mipmaps ni swizzle y con clamp. La textura de GX es del tamaño de la de
+   la PSP, con las mismas coordenadas que el camino de la CPU; cada
+   primitiva comprueba antes que no lee más allá del búfer (clut_gpu_*),
+   donde la PSP leería otra memoria, y si no, vuelve al camino de la CPU. */
+static int clut_from_surface(const GeRasterState *r){
+	core_u32 addr = r->texaddr[0] & PSP_ADDR_MASK, shift, mask, offset;
+	const u32 *pal;
+	Surface *ts;
+	u16 tl[256];
+	int tw = 1 << r->width0_shift, th = 1 << r->height0_shift, i, kind;
+	if(!opt_on[OPT_GE_RTT_GPU]) return 0;
+	if(r->texfmt != GE_TFMT_CLUT16 && r->texfmt != GE_TFMT_CLUT32) return 0;
+	if(r->clut_fmt != GE_FMT_565 || r->swizzle || !r->clamp_s || !r->clamp_t || r->texture_proj || r->max_tex_level > 0)
+		return 0;
+	if(addr < PSP_VRAM_BASE || addr >= PSP_VRAM_BASE + PSP_VRAM_SIZE) return 0;
+	ts = find_surface(addr - PSP_VRAM_BASE, r->texbufw[0], r->texfmt == GE_TFMT_CLUT32 ? GE_FMT_8888 : GE_FMT_565);
+	if(!ts || ts->gpu_bad >= 4 || ts->state == VRAM_NEWER || ts->hole_n) return 0;
+	if(tw != ci_width(ts) || th < ts->h || tw > MAX_TEX_SIZE || th > MAX_TEX_SIZE) return 0;
+	kind = r->texfmt == GE_TFMT_CLUT32 ? CI_A8 : CI_565;
+	if(kind == CI_A8 && ts->amode != A_GPU) return 0;
+	ge_clut16_32_prepare();
+	pal = ge_clut16_32_info(&shift, &mask, &offset);
+	if(kind == CI_A8 && shift < 24) return 0;
+	if(ts == cur_c && efb_c_newer){ efb_to_tex(ts); efb_c_newer = 0; }
+	if(!ts->has_tex) return 0;
+	if(kind == CI_A8){
+		/* La copia del alfa se hace al sacar el búfer del EFB: desde la
+		   próxima vez */
+		if(!ts->a8_want){ ts->a8_want = 1; return 0; }
+		if(ts->ci_kind != CI_A8 || !ts->ci_valid) return 0;
+		for(i = 0; i < 256; i++) tl[i] = gx_tlut565(pal[((((u32)i << 24) >> shift) & mask) | offset]);
+	} else {
+		if(!(ts->ci_kind == CI_565 && ts->ci_valid && ts->ci_gen == ts->tex_gen && ts->ci_key == (shift | (mask << 8))) &&
+		   !build_ci565(ts, shift, mask))
+			return 0;
+		for(i = 0; i < 256; i++) tl[i] = gx_tlut565(pal[(u32)i | offset]);
+	}
+	load_tlut(tl);
+	GX_InitTexObjCI(&clut_obj, ts->ci, (u16)tw, (u16)th, GX_TF_CI8, GX_CLAMP, GX_CLAMP, GX_FALSE, GX_TLUT0);
+	clut_src = ts;
+	clut_gpu_uses[kind]++;
+	return 1;
+}
+
+/* Último texel leído a lo largo de un eje de un sprite, contando solo los
+   píxeles que se dibujan (dentro de [clip_lo, clip_hi]) y el vecino del
+   filtro lineal solo si pesa; -1 si no dibuja nada */
+static int axis_last_texel(float p0, float p1, float c0, float c1, int linear, int clip_lo, int clip_hi){
+	float lo = p0 < p1 ? p0 : p1, hi = p0 < p1 ? p1 : p0;
+	float first = ceilf(lo - 0.5f) + 0.5f, last = ceilf(hi - 0.5f) - 0.5f, a, b, m, f;
+	int i;
+	if(first < (float)clip_lo + 0.5f) first = (float)clip_lo + 0.5f;
+	if(last > (float)clip_hi + 0.5f) last = (float)clip_hi + 0.5f;
+	if(last < first || p1 == p0) return -1;
+	a = c0 + (first - p0) * (c1 - c0) / (p1 - p0);
+	b = c0 + (last - p0) * (c1 - c0) / (p1 - p0);
+	m = a > b ? a : b;
+	if(!(m < 65536.0f)) return 1 << 20;
+	if(!linear) return (int)floorf(m);
+	f = m - 0.5f;
+	i = (int)floorf(f);
+	return f > (float)i ? i + 1 : i;
+}
+
+/* Zona que se dibuja (tijera dentro del destino), como en apply_gx */
+static void draw_clip(int *x1, int *y1, int *x2, int *y2){
+	const GeRasterState *r = ge_raster_state();
+	*x1 = r->sc_x1 / 16; *y1 = r->sc_y1 / 16;
+	*x2 = r->sc_x2 / 16; *y2 = r->sc_y2 / 16;
+	if(*x2 >= cur_c->w) *x2 = cur_c->w - 1;
+	if(*y2 >= cur_c->h) *y2 = cur_c->h - 1;
+}
+
+static float clut_texel(const GeVertex *v, int t){
+	float c = t ? v->t : v->s;
+	if(!through) c *= (float)(1 << (t ? ge_raster_state()->height0_shift : ge_raster_state()->width0_shift));
+	return c;
+}
+
+/* ¿El sprite solo lee texels del búfer de origen? */
+static int clut_gpu_sprite_ok(const GeVertex *v0, const GeVertex *v1){
+	const GeRasterState *r = ge_raster_state();
+	int linear = r->mag_filt || r->min_filt, swap = (v0->x < v1->x) != (v0->y < v1->y), x1, y1, x2, y2, c, w;
+	float px0 = (float)v0->x / 16.0f, px1 = (float)v1->x / 16.0f, py0 = (float)v0->y / 16.0f, py1 = (float)v1->y / 16.0f;
+	float s0 = clut_texel(v0, 0), s1 = clut_texel(v1, 0), t0 = clut_texel(v0, 1), t1 = clut_texel(v1, 1);
+	if(!through) return 0;   /* la perspectiva de los sprites no es lineal */
+	draw_clip(&x1, &y1, &x2, &y2);
+	if(swap){
+		c = axis_last_texel(py0, py1, s0, s1, linear, y1, y2);
+		w = axis_last_texel(px0, px1, t0, t1, linear, x1, x2);
+	} else {
+		c = axis_last_texel(px0, px1, s0, s1, linear, x1, x2);
+		w = axis_last_texel(py0, py1, t0, t1, linear, y1, y2);
+	}
+	return c < clut_src->w && w < clut_src->h;
+}
+
+/* Triángulos: el muestreo no sale de los vértices; con filtro lineal, el
+   vecino del último texel pesa 0 si la coordenada no pasa de su centro */
+static int clut_gpu_triangle_ok(const GeVertex *const *v){
+	const GeRasterState *r = ge_raster_state();
+	float lim_s = (float)clut_src->w, lim_t = (float)clut_src->h;
+	int i;
+	if(r->mag_filt || r->min_filt){ lim_s -= 0.5f; lim_t -= 0.5f; }
+	for(i = 0; i < 3; i++){
+		float s = clut_texel(v[i], 0), t = clut_texel(v[i], 1);
+		if(r->mag_filt || r->min_filt){ if(!(s <= lim_s && t <= lim_t)) return 0; }
+		else if(!(s < lim_s && t < lim_t)) return 0;
+	}
+	return 1;
+}
+
+/* Esta primitiva leería fuera del búfer: de aquí al final del dibujo, el
+   camino de la CPU (si le pasa a menudo a un búfer, ya no se intenta) */
+static void clut_gpu_fallback(void){
+	const GeRasterState *r = ge_raster_state();
+	if(clut_src) clut_src->gpu_bad++;
+	use_clut_gpu = 0;
+	clut_src = NULL;
+	clut_gpu_fallbacks++;
+	cur_tex = lookup_texture(r);
+	gx_dirty = 1;
 }
 
 /* --- Estado de GX a partir del GE ---------------------------------------------- */
@@ -1534,14 +1926,17 @@ static void setup_targets(void){
 	tex_on = r->enable_textures;
 	cur_tex = NULL;
 	use_rtt = 0;
+	use_clut_gpu = 0;
+	clut_src = NULL;
 	tex_su = tex_sv = 1.0f;
 	if(!writes_c) tex_on = 0;
 	if(tex_on){
 		core_u32 ta = r->texaddr[0] & PSP_ADDR_MASK;
 		rtt_tex_off = ta >= PSP_VRAM_BASE && ta < PSP_VRAM_BASE + PSP_VRAM_SIZE ? ta - PSP_VRAM_BASE : 0xFFFFFFFFu;
 		use_rtt = r->texvalid[0] && texture_from_surface(r);
-		if(r->texvalid[0]) rtt_note_texture(r, use_rtt);
-		if(!use_rtt) cur_tex = r->texvalid[0] ? lookup_texture(r) : NULL;
+		if(!use_rtt && r->texvalid[0]) use_clut_gpu = clut_from_surface(r);
+		if(r->texvalid[0]) rtt_note_texture(r, use_rtt ? 1 : use_clut_gpu ? 2 : 0);
+		if(!use_rtt && !use_clut_gpu) cur_tex = r->texvalid[0] ? lookup_texture(r) : NULL;
 		if(rtt_cur){
 			rtt_cur->linear += r->mag_filt || r->min_filt;
 			rtt_cur->clamp_s += r->clamp_s != 0;
@@ -1753,6 +2148,9 @@ static void apply_gx(void){
 		if(use_rtt){
 			GX_InitTexObjFilterMode(&rtt_obj, r->min_filt ? GX_LINEAR : GX_NEAR, r->mag_filt ? GX_LINEAR : GX_NEAR);
 			GX_LoadTexObj(&rtt_obj, GX_TEXMAP0);
+		} else if(use_clut_gpu){
+			GX_InitTexObjFilterMode(&clut_obj, r->min_filt ? GX_LINEAR : GX_NEAR, r->mag_filt ? GX_LINEAR : GX_NEAR);
+			GX_LoadTexObj(&clut_obj, GX_TEXMAP0);
 		} else if(cur_tex){
 			GX_InitTexObjWrapMode(&cur_tex->obj, r->clamp_s ? GX_CLAMP : GX_REPEAT, r->clamp_t ? GX_CLAMP : GX_REPEAT);
 			if(cur_tex->levels > 1){
@@ -1884,6 +2282,7 @@ static int prepare_targets(int full){
 		RttTarget *t = rtt_surface(cur_c);
 		if(full & 1){
 			restored_c = 1;
+			if(cur_c->hole_n){ cur_c->hole_n = 0; hole_skips++; }   /* se borra entero */
 			if(t) t->first_clear++;
 		} else {
 			if(t){
@@ -2102,6 +2501,13 @@ static void gx_triangle(const GeVertex *v0, const GeVertex *v1, const GeVertex *
 	const GeVertex *c;
 	float k;
 	if(!prepare(0)) return;
+	if(use_clut_gpu && tex_on){
+		const GeVertex *vv[3] = { v0, v1, v2 };
+		if(!clut_gpu_triangle_ok(vv)){
+			clut_gpu_fallback();
+			prepare_state();
+		}
+	}
 	if(rtt_cur && tex_on) rtt_note_triangle(v0, v1, v2);
 	c = flat ? v2 : NULL;
 	k = tex_on && !through && tex_norm ? tex_scale3(v0, v1, v2) : 1.0f;
@@ -2150,6 +2556,10 @@ static void gx_rect(const GeVertex *v0, const GeVertex *v1){
 	ok = prepare(0);
 	first_v0 = first_v1 = NULL;
 	if(!ok) return;
+	if(use_clut_gpu && tex_on && !clut_gpu_sprite_ok(v0, v1)){
+		clut_gpu_fallback();
+		prepare_state();
+	}
 	if(rtt_cur && tex_on) rtt_note_sprite(v0, v1);
 	draw_sprite(v0, v1);
 	drawn();
@@ -2203,6 +2613,7 @@ static void gx_clear_rect(const GeVertex *v0, const GeVertex *v1){
    PSP pinta el píxel cuya esquina es esa coordenada: medio píxel más */
 static void gx_line(const GeVertex *v0, const GeVertex *v1){
 	if(!prepare(0)) return;
+	if(use_clut_gpu && tex_on){ clut_gpu_fallback(); prepare_state(); }   /* sin comprobación de límites */
 	pos_off = 0.5f;
 	GX_Begin(GX_LINES, GX_VTXFMT0, 2);
 	put_vertex(v0, flat ? v1 : v0, 1.0f);
@@ -2214,6 +2625,7 @@ static void gx_line(const GeVertex *v0, const GeVertex *v1){
 
 static void gx_point(const GeVertex *v0){
 	if(!prepare(0)) return;
+	if(use_clut_gpu && tex_on){ clut_gpu_fallback(); prepare_state(); }
 	pos_off = 0.5f;
 	GX_Begin(GX_POINTS, GX_VTXFMT0, 1);
 	put_vertex(v0, v0, 1.0f);
@@ -2331,6 +2743,15 @@ void gx_ge_rtt_report(char *buf, size_t size){
 			if(len < size) len += (size_t)snprintf(buf + len, size - len, "\n");
 		}
 	}
+	/* Los caminos que evitan bajar y decodificar */
+	if(len < size)
+		len += (size_t)snprintf(buf + len, size - len,
+		        "rtt: paleta desde la GPU (ge_rtt_gpu): CLUT32 por alfa %u, CLUT16 sobre 565 %u, vueltas a la CPU %u; "
+		        "indices CI8 calculados %u (%u ms), TLUT cargadas %u | relleno sin bajar (ge_fb_relleno) %u | "
+		        "huecos (ge_fb_hueco): hechos %u, llenados %u, borrados %u, filas bajadas %u y subidas %u (%u ms)\n",
+		        clut_gpu_uses[CI_A8], clut_gpu_uses[CI_565], clut_gpu_fallbacks, clut_ci_builds, tk_ms(clut_ci_ticks),
+		        clut_tlut_loads, rtt_pad_skips, hole_made, hole_filled, hole_skips, hole_rows_dl, hole_rows_up,
+		        tk_ms(hole_ticks));
 	/* Cargas de paleta dentro de búferes dibujados */
 	for(i = 0; i < rtt_nclut && len < size; i++){
 		const RttClut *c = &rtt_clut[i];
@@ -2451,6 +2872,12 @@ void gx_ge_rtt_report(char *buf, size_t size){
 	memset(rtt_dx_pad, 0, sizeof(rtt_dx_pad));
 	rtt_nclut = 0;
 	rtt_npair = 0;
+	memset(clut_gpu_uses, 0, sizeof(clut_gpu_uses));
+	clut_gpu_fallbacks = clut_ci_builds = clut_tlut_loads = 0;
+	clut_ci_ticks = 0;
+	rtt_pad_skips = 0;
+	hole_made = hole_filled = hole_skips = hole_rows_dl = hole_rows_up = 0;
+	hole_ticks = 0;
 	rtt_uploads = 0;
 	rtt_up_ticks = 0;
 	rtt_cur = NULL;
@@ -2470,7 +2897,7 @@ static int present_body(void *xfb, GXRModeObj *rm, int widescreen){
 
 	if(enabled && addr >= PSP_VRAM_BASE && addr < PSP_VRAM_BASE + PSP_VRAM_SIZE){
 		s = find_surface(addr - PSP_VRAM_BASE, fb.stride, (int)fb.format);
-		if(s && (s->state == VRAM_NEWER || s->w < 480 || s->h < 272)) s = NULL;
+		if(s && (s->state == VRAM_NEWER || s->hole_n || s->w < 480 || s->h < 272)) s = NULL;
 		if(s && s == cur_c && efb_c_newer){ efb_to_tex(s); efb_c_newer = 0; }
 		if(s && !s->has_tex) s = NULL;
 	}
@@ -2561,7 +2988,10 @@ void gx_ge_reset(void){
 	int i;
 	wait_gpu();
 	for(i = 0; i < MAX_SURF; i++)
-		if(surf[i].used){ free(surf[i].tex); memset(&surf[i], 0, sizeof(surf[i])); }
+		if(surf[i].used){ free(surf[i].tex); free(surf[i].ci); memset(&surf[i], 0, sizeof(surf[i])); }
+	clut_src = NULL;
+	use_clut_gpu = 0;
+	tlut_loaded = -1;
 	for(i = 0; i < TC_MAX; i++)
 		if(texc[i].data){ free(texc[i].data); memset(&texc[i], 0, sizeof(texc[i])); }
 	tc_init(&tcache);

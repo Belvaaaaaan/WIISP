@@ -741,6 +741,55 @@ Lo que añade este censo (líneas `rtt:`):
 - Por búfer: si el primer dibujo es un sprite que lo tapa entero (opaco o
   con mezcla), escrituras de la VRAM y ms de bajar, subir y decodificar.
 
+### v0.5.10: las texturas de framebuffer de DBZ sin bajar ni decodificar
+
+Lo que dijo el censo de la 0.5.9.2 (r6, pelea, 30 s): la cadena costaba
+~10,7 s (36 %). Por búfer: el 565 de 0x04158000 se bajaba (1,5 s), se
+subía entero en cada imagen (1,8 s) y se decodificaba (1,4 s); 0x04088000
+se bajaba (0,9 s) y decodificaba (1,9 s); 0x04000000 se bajaba por una
+**paleta de 16 bytes en el relleno de su fila 0** (0x04000780, columnas
+480-483, casi siempre los mismos bytes) y se decodificaba (0,9 s); el Z se
+bajaba entero (1,1 s) solo porque caía en el MB de la textura de
+0x04088000. Los sprites del efecto: CLUT32 en tiras de 32x272 (1:1 y
+desplazadas ~0,7 texel), CLUT16 en tiras de 32x128 con ±1 texel; dentro de
+lo que se dibuja (tijera) nadie lee la fila 272 ni la columna 480. El 4444
+de 64x64 pisa las filas 0-7 del 565.
+
+Tres optimizaciones, cada una con su interruptor (activadas):
+- `ge_fb_relleno`: un acceso que solo toca el relleno de una fila de un
+  búfer (columnas desde el ancho dibujado, que GX nunca escribe) no lo baja
+  ni lo invalida (`only_padding` en el gancho de la VRAM). Exacto.
+- `ge_rtt_gpu`: texturas con paleta 565 que leen un framebuffer que está en
+  la GPU, con CI8 + TLUT de GX (`clut_from_surface`):
+  - CLUT32 que lee el alfa (desplazamiento >= 24) de un 8888 con el alfa en
+    la GPU (A_GPU): los índices son una copia A8 del EFB que `efb_to_tex`
+    hace junto a la RGBA8 (desde el segundo uso, `a8_want`);
+  - CLUT16 sobre un 565: índices CI8 calculados de la copia RGBA8 (solo la
+    línea de verde y azul de cada tile; `gx_ci8_from_rgba8_565`,
+    wii/gx_tiles.h), una vez por cada cambio del búfer;
+  - TLUT RGB565 en un anillo de 64 (GX_LoadTlut lee la memoria cuando la
+    GPU llega al comando);
+  - la textura de GX tiene el tamaño de la de la PSP (512x512, mismas
+    coordenadas que el camino de la CPU) y cada primitiva comprueba antes
+    que no lee más allá del búfer de origen (`clut_gpu_sprite_ok`,
+    `clut_gpu_triangle_ok`; líneas y puntos siempre por la CPU): si lee,
+    vuelve al camino de la CPU, donde la PSP leería otra memoria.
+  - tests/test_gxtiles.c: los índices + TLUT expandida como GX dan el mismo
+    color que bajar y decodificar como antes (400 casos, bit a bit). Falta
+    confirmar en el Wii que GX expande la TLUT 565 por réplica de bits y
+    que la copia A8 da el mismo alfa que la RGBA8 (capturas sin/con).
+- `ge_fb_hueco`: cuando se crea un búfer encima de pocas filas (<= 1/4) de
+  otro, el grande no sale de la GPU: esas filas se bajan y quedan como
+  hueco (manda la VRAM: no se bajan, el búfer no se usa como textura ni se
+  muestra); cuando el grande vuelve, se tira lo que pisa el hueco y al
+  restaurar solo se suben esas filas (`keep_with_hole`, `vram_to_tex_rows`).
+
+Además: cada captura apunta la huella de la imagen en `.capturas.txt`
+(`tools/comparar_capturas.py` compara dos corridas) y `autotest.txt` tiene
+`sufijo X` para correr el mismo juego con otras opciones. Línea nueva del
+censo: `rtt: paleta desde la GPU ...` con usos, vueltas a la CPU, índices
+calculados, TLUT cargadas, accesos al relleno y huecos.
+
 ### Para el siguiente chat (empezar aquí)
 
 Metodología acordada (detalle en `docs/HOJA_DE_RUTA.md`): primero medir
@@ -748,11 +797,14 @@ Metodología acordada (detalle en `docs/HOJA_DE_RUTA.md`): primero medir
 
 - Hechos: pasos 1, 3, 4 y 5 (guion de DBZ grabado en el Wii; registros del
   Broadway en wiisp.log; línea base r1-r8), `ge_tex_clut` (0.5.7.8),
-  `ge_skin_rapido` (0.5.8) y 2.1 `cpu_sin_extra` (0.5.9).
-- Siguiente: que el usuario reproduzca dos veces el guion de DBZ con la
-  0.5.9 (r9/r10) para medir 2.1; después el paso 7 (render a textura) y el
-  8 (1.2/1.2b), o lo que digan las mediciones (bajadas de framebuffer por
-  franjas, `ge_mtx_cache`, limitador de cuadros en los menús).
+  `ge_skin_rapido` (0.5.8), 2.1 `cpu_sin_extra` (0.5.9) y las texturas de
+  framebuffer (`ge_rtt_gpu`, `ge_fb_relleno`, `ge_fb_hueco`, 0.5.10).
+- Siguiente: que el usuario corra el `autotest.txt` "sin/con" de
+  docs/ESCENAS_DE_PRUEBA.md con la 0.5.10 y mande los `.capturas.txt` y
+  los `.log`: comprobar que las imágenes son idénticas y medir. Después,
+  1.2/1.2b (decodificadores de vértices), el limitador de cuadros, las
+  fechas de las partidas (huellas de RAM idénticas) o lo que digan las
+  mediciones.
 
 Pendiente de antes: la primera tanda del GE (skinning rápido, matrices al
 cambiar, color constante; ver el carrito) entra en los pasos 6-11 con su

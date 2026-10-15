@@ -71,7 +71,7 @@ cancelar`. El formato completo está en `src/frontend/guion.h`.
 | `<juego>.rN.log` | registro de esa corrida, con `[OPT]` y `[TIEMPOS]` cada 30 s |
 | `<juego>.rN.huellas` | huella del estado cada 60 cuadros |
 | `<juego>.rN.c<cuadro>.bmp` | una captura cada 400 cuadros y las que pida el guion |
-| `<juego>.rN.capturas.txt` | cada captura con las opciones con que corría (GX/software, MR/ME, TN/TS, texturas, turbo, `[OPT]`) |
+| `<juego>.rN.capturas.txt` | cada captura con la huella de la imagen (`imagen XXXXXXXX`) y las opciones con que corría (GX/software, MR/ME, TN/TS, texturas, turbo, `[OPT]`) |
 
 Si cambias MR/ME, TN/TS o el turbo durante la reproducción, las capturas
 siguientes lo apuntan.
@@ -106,6 +106,9 @@ sd:/ISO/SFA3.iso
   que siguen (nombres en `src/core/opt.h` y en `docs/HOJA_DE_RUTA.md`).
 - `capturas N` toma una captura cada N cuadros (400 por defecto; `capturas
   0` para medir velocidad sin escribir en la SD).
+- `sufijo X` hace que las salidas de los juegos siguientes lleven `.X`
+  (`DBZ.iso.X.log`, `DBZ.iso.X.capturas.txt`...): sirve para correr el mismo
+  juego con otras opciones sin pisar las salidas. `sufijo` solo lo quita.
 - `gx` / `soft` eligen el renderizador; `frames N` es el límite para los
   programas sin guion.
 
@@ -119,6 +122,32 @@ pero con `.vN` en vez de `.rN`, y además:
 |---|---|
 | `<juego>.vN.gx.bmp` | la última imagen |
 | `<juego>.vN.stats` | FPS, MIPS y tiempos del GE de la corrida |
+
+### Comprobar que una optimización no cambia la imagen
+
+Con `sufijo` y `opt`, el mismo guion sin y con la optimización:
+
+```
+gx
+capturas 400
+sufijo sin
+opt ge_rtt_gpu 0
+opt ge_fb_relleno 0
+opt ge_fb_hueco 0
+usb:/Dragon Ball Z - Tenkaichi Tag Team.iso
+sufijo con
+opt ge_rtt_gpu 1
+opt ge_fb_relleno 1
+opt ge_fb_hueco 1
+usb:/Dragon Ball Z - Tenkaichi Tag Team.iso
+```
+
+Basta con mandar los dos `.capturas.txt` (y los `.log`): cada captura lleva
+la huella de la imagen y se comparan con
+
+```sh
+python3 tools/comparar_capturas.py DBZ.iso.sin.capturas.txt DBZ.iso.con.capturas.txt
+```
 
 ## 4. Comprobar que la escena se repite
 

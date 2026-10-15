@@ -242,6 +242,23 @@ int app_write_bmp(const char *path){
 	return 0;
 }
 
+/* Huella de la imagen visible (480x272, los mismos píxeles que la captura):
+   dos corridas con las mismas imágenes dan la misma */
+static u32 image_hash(void){
+	HleFramebuffer fb;
+	u32 y, x, bpp, h = 2166136261u;
+	hle_get_framebuffer(&fb);
+	if(!fb.addr) return 0;
+	bpp = fb.format == 3 ? 4 : 2;
+	for(y = 0; y < 272; y++)
+		for(x = 0; x < 480; x++){
+			const u8 *p = mem_ptr_r(fb.addr + (y * fb.stride + x) * bpp, bpp);
+			u32 v = p ? bmp_pixel(p, fb.format) & 0xFFFFFF : 0, k;
+			for(k = 0; k < 3; k++){ h ^= (v >> (8 * k)) & 0xFF; h *= 16777619u; }
+		}
+	return h;
+}
+
 static void on_screenshot(void){
 	if(screenshot_path[0]) app_write_bmp(screenshot_path);
 }
@@ -367,12 +384,12 @@ static void capturar(int pedida){
 		char ip[560];
 		snprintf(ip, sizeof(ip), "%s.capturas.txt", gs.prefijo);
 		gs.indice = fopen(ip, "w");
-		if(gs.indice) fprintf(gs.indice, "# capturas de WIISP: cuadro, archivo y opciones con las que corria\n");
+		if(gs.indice) fprintf(gs.indice, "# capturas de WIISP: cuadro, archivo, huella de la imagen y opciones con las que corria\n");
 	}
 	if(gs.indice){
 		const char *name = strrchr(path, '/');
 		describir_modo(modo, sizeof(modo));
-		fprintf(gs.indice, "cuadro %u  %s  %s\n", frames_run, name ? name + 1 : path, modo);
+		fprintf(gs.indice, "cuadro %u  %s  imagen %08X  %s\n", frames_run, name ? name + 1 : path, image_hash(), modo);
 		fflush(gs.indice);
 	}
 	prof_switch(old);

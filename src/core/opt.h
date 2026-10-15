@@ -32,7 +32,12 @@ enum {
 	OPT_GE_COLOR_CONST,   /* color constante sin luces */
 	OPT_GE_TEX_CLUT,      /* texturas CLUT16/CLUT32 decodificadas de una vez */
 	/* Fase 1: GE */
-	OPT_GE_RTT_GPU,       /* 1.1 render-to-texture en la GPU */
+	OPT_GE_RTT_GPU,       /* 1.1 render-to-texture en la GPU (texturas con
+	                         paleta desde la copia del EFB: CI8 + TLUT) */
+	OPT_GE_FB_RELLENO,    /* leer/escribir el relleno de las filas de un
+	                         framebuffer no lo baja ni lo invalida */
+	OPT_GE_FB_HUECO,      /* un búfer pequeño encima de unas filas de otro
+	                         no lo saca de la GPU (hueco) */
 	OPT_GE_VDEC_ESP,      /* 1.2 decodificadores de vértices por vtype */
 	OPT_GE_VDEC_PSQ,      /* 1.2b conversión con psq_l y GQR */
 	OPT_GE_BBOX,          /* 1.3 descarte por caja envolvente */

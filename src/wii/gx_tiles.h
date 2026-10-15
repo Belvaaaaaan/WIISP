@@ -56,4 +56,64 @@ static inline void gx_tile_band_rgba8(uint8_t *data, int tw, int y0, const uint3
 	}
 }
 
+/* --- Texturas con paleta desde la copia del EFB (CI8 + TLUT) -------------- */
+
+/* Índices CI8 de GX (tiles de 8x4 bytes; dst_w columnas, múltiplo de 8) a
+   partir de la copia RGBA8 de GX de un búfer 565 de src_w x h texels
+   (src_w múltiplo de 4 y <= dst_w, h múltiplo de 4). Cada índice es el que
+   daría un CLUT16 de la PSP leyendo ese búfer ya bajado a la VRAM: el 565
+   de la bajada, (R >> 3) | (G >> 2) << 5 | (B >> 3) << 11, desplazado y con
+   la máscara (el offset va en la TLUT). Las columnas desde src_w quedan a
+   0. dst alineado a 32 bytes. */
+static inline void gx_ci8_from_rgba8_565(uint8_t *dst, int dst_w, const uint8_t *src, int src_w, int h,
+                                         unsigned shift, unsigned mask){
+	int tiles8 = dst_w >> 3, src_tiles = src_w >> 2, ty, tx, r, c, k;
+	for(ty = 0; ty < h >> 2; ty++){
+		const uint8_t *srow = src + ((ty * src_tiles) << 6);
+		uint8_t *d = dst + ((ty * tiles8) << 5);
+		for(tx = 0; tx < tiles8; tx++, d += 32){
+#ifdef GEKKO
+			/* El tile CI8 es una línea de caché que se escribe entera */
+			__asm__ volatile("dcbz 0, %0" : : "r"(d) : "memory");
+#endif
+			/* Un tile CI8 (8x4) son dos tiles RGBA8 (4x4) seguidos */
+			for(k = 0; k < 2; k++){
+				int x0 = tx * 8 + k * 4;
+				if(x0 >= src_w){
+					for(r = 0; r < 4; r++) for(c = 0; c < 4; c++) d[r * 8 + k * 4 + c] = 0;
+					continue;
+				}
+				{
+					const uint8_t *ar = srow + ((x0 >> 2) << 6), *gb = ar + 32;
+					if(shift >= 5){
+						/* Sin el rojo: solo la línea de verde y azul, seguida */
+						for(r = 0; r < 4; r++)
+							for(c = 0; c < 4; c++){
+								unsigned g = gb[(r * 4 + c) * 2], b = gb[(r * 4 + c) * 2 + 1];
+								unsigned v = ((g >> 2) << 5) | ((b >> 3) << 11);
+								d[r * 8 + k * 4 + c] = (uint8_t)((v >> shift) & mask);
+							}
+					} else {
+						for(r = 0; r < 4; r++)
+							for(c = 0; c < 4; c++){
+								unsigned i2 = (unsigned)(r * 4 + c) * 2;
+								unsigned v = (unsigned)(ar[i2 + 1] >> 3) | ((unsigned)(gb[i2] >> 2) << 5) |
+								             ((unsigned)(gb[i2 + 1] >> 3) << 11);
+								d[r * 8 + k * 4 + c] = (uint8_t)((v >> shift) & mask);
+							}
+					}
+				}
+			}
+		}
+	}
+}
+
+/* Color 8888 de la PSP (rojo en el byte bajo) salido de una paleta 565 ->
+   entrada RGB565 de una TLUT de GX (rojo arriba). GX lo devuelve a 8 bits
+   repitiendo los bits altos, como la PSP: sale el mismo color, con alfa
+   255 igual que la paleta 565. */
+static inline uint16_t gx_tlut565(uint32_t c){
+	return (uint16_t)(((c & 0xF8u) << 8) | (((c >> 8) & 0xFCu) << 3) | ((c >> 19) & 0x1Fu));
+}
+
 #endif

@@ -902,6 +902,13 @@ void ge_clut16_32_prepare(void){
 	}
 }
 
+const u32 *ge_clut16_32_info(u32 *shift, u32 *mask, u32 *offset){
+	*shift = clutq.shift;
+	*mask = clutq.mask;
+	*offset = clutq.offset;
+	return clutq.pal;
+}
+
 void ge_clut16_32_rows(const u8 *src, u32 pitch, int w, int h, u32 *out, int out_pitch){
 	const u32 *pal = clutq.pal;
 	u32 shift = clutq.shift, mask = clutq.mask, offset = clutq.offset;

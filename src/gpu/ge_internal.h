@@ -256,6 +256,10 @@ void ge_texture_decode_clut16_32(const u8 *src, u32 pitch, int w, int h, u32 *ou
    paleta del estado actual y rows decodifica filas con ella */
 void ge_clut16_32_prepare(void);
 void ge_clut16_32_rows(const u8 *src, u32 pitch, int w, int h, u32 *out, int out_pitch);
+/* Tras ge_clut16_32_prepare: el color 8888 de cada índice ya transformado
+   (512) y el desplazamiento, la máscara y el offset con que se calcula:
+   índice = ((texel >> shift) & mask) | offset */
+const u32 *ge_clut16_32_info(u32 *shift, u32 *mask, u32 *offset);
 
 /* --- Renderizador por hardware (opcional) ----------------------------- */
 
