@@ -15,7 +15,9 @@ import re, sys
 def leer(path):
     caps = {}
     for line in open(path, encoding='utf-8', errors='replace'):
-        m = re.match(r'cuadro (\d+)\s+(\S+)\s+imagen ([0-9A-F]{8})\s+(.*)', line)
+        # El nombre del archivo puede llevar espacios (el de la ISO): se
+        # toma todo hasta la palabra "imagen".
+        m = re.match(r'cuadro (\d+)\s+(.+?)\s+imagen ([0-9A-F]{8})\s+(.*)', line)
         if m:
             caps[int(m.group(1))] = (m.group(3), m.group(2), m.group(4).strip())
     return caps

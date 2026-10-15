@@ -790,6 +790,45 @@ Además: cada captura apunta la huella de la imagen en `.capturas.txt`
 censo: `rtt: paleta desde la GPU ...` con usos, vueltas a la CPU, índices
 calculados, TLUT cargadas, accesos al relleno y huecos.
 
+### v0.5.11: profundidad, matrices y registro
+
+Resultado de la 0.5.10 en el Wii (sin/con): las 12 capturas con la misma
+huella de imagen; la escena de 209,4 s a 158,1 s y las peleas del ~15 % al
+21-27 %. En las peleas con la 0.5.10: GE 55-61 %, CPU 24-32 %, texturas
+~3 %, framebuffers 1-5 %. `tools/comparar_capturas.py` no leía los nombres
+con espacios (arreglado).
+
+Tres cosas nuevas, cada una con su interruptor (activadas):
+- `ge_z_rango`: el rango vigilado de un búfer de profundidad era su rango
+  lineal ±64 KB (por el swizzle). La textura CLUT16 de 64x64 de
+  0x04158000 (detrás del Z de 0x04110000-0x04154000) lo bajaba entero en
+  cada imagen: 192 bajadas, 1,3 s de cada 30 s de pelea. Ahora el rango
+  se redondea al bloque del que el swizzle no saca ningún byte
+  (`mem_vram_swizzle_block`, memory.h: 0x800 sin traducción, 0x2000 <<
+  k con ella; 16 KB con la de arranque, así que para DBZ es el rango
+  exacto). tests/test_main.c lo comprueba para todas las traducciones
+  y todos los offsets (y que el bloque no es más grande de lo necesario).
+- `ge_mtx_cache` (de la primera tanda): `compute_transform_state` hacía en
+  cada llamada de dibujo dos productos 4x4 con la aritmética del GE
+  (~5400 instrucciones del Broadway, según objdump); con ~362.000
+  llamadas cada 30 s de pelea, eso era casi todo el 11 % de "comandos".
+  Ahora guarda (mundo*vista)*proyección, mundo*vista y la dirección de
+  vista con las tres matrices de entrada y solo rehace los productos si
+  alguna cambió (memcmp). Mismos bits: las pspautotests dan las mismas
+  huellas, salida e imágenes con 0 y 1 (exacto y MR).
+- `registro_diferido`: cada línea del registro en un segundo nuevo hacía
+  un fsync en la SD (10-40 ms parado). Las líneas `[MANDO]` (los 300
+  primeros cambios de botón de cada juego, también jugando) costaban así
+  el 2-9 % de cada bloque. Ahora las de diagnóstico (`hle_log_quiet`:
+  `[MANDO]`, `[BROADWAY]`...) no lo piden: llegan a la tarjeta con la
+  siguiente sincronización o en `log_tick` como mucho a los 10 s. Las
+  normales y `[CPU]` siguen como antes (1 s / en el acto).
+
+Censo nuevo en `[TIEMPOS]`: matrices calculadas y reutilizadas, triángulos
+sin descarte de caras (se procesan en los dos sentidos) y los formatos de
+vértice más usados (`Formatos de vertice`: vtype, componentes, % de
+vértices, llamadas y primitivas). Es para diseñar 1.2/1.2b.
+
 ### Para el siguiente chat (empezar aquí)
 
 Metodología acordada (detalle en `docs/HOJA_DE_RUTA.md`): primero medir
@@ -797,14 +836,19 @@ Metodología acordada (detalle en `docs/HOJA_DE_RUTA.md`): primero medir
 
 - Hechos: pasos 1, 3, 4 y 5 (guion de DBZ grabado en el Wii; registros del
   Broadway en wiisp.log; línea base r1-r8), `ge_tex_clut` (0.5.7.8),
-  `ge_skin_rapido` (0.5.8), 2.1 `cpu_sin_extra` (0.5.9) y las texturas de
-  framebuffer (`ge_rtt_gpu`, `ge_fb_relleno`, `ge_fb_hueco`, 0.5.10).
-- Siguiente: que el usuario corra el `autotest.txt` "sin/con" de
-  docs/ESCENAS_DE_PRUEBA.md con la 0.5.10 y mande los `.capturas.txt` y
-  los `.log`: comprobar que las imágenes son idénticas y medir. Después,
-  1.2/1.2b (decodificadores de vértices), el limitador de cuadros, las
-  fechas de las partidas (huellas de RAM idénticas) o lo que digan las
-  mediciones.
+  `ge_skin_rapido` (0.5.8), 2.1 `cpu_sin_extra` (0.5.9), las texturas de
+  framebuffer (`ge_rtt_gpu`, `ge_fb_relleno`, `ge_fb_hueco`, 0.5.10) y
+  `ge_z_rango`, `ge_mtx_cache` y `registro_diferido` (0.5.11).
+- Siguiente: que el usuario corra el `autotest.txt` "sin/con" de la
+  0.5.11 (sin: `ge_z_rango`, `ge_mtx_cache` y `registro_diferido` a 0) y
+  mande los `.capturas.txt` y los `.log`: imágenes idénticas, cuánto se
+  reutilizan las matrices y qué formatos de vértice usa DBZ. Con eso,
+  1.2/1.2b: un camino por vértice para MR sin memsets ni switch por
+  componente, con psq_l/GQR para 8/16 bits y la salida (x, y, z) en float
+  para no convertir de entero a float otra vez en `put_vertex`; verificado
+  vértice a vértice contra el actual. Después: el 4444 de 64x64 de DBZ
+  (subida, hueco y decodificación, ~0,4 s de cada 30), los índices CI8
+  con dcbt (0,55 s), el limitador de cuadros y las fechas de las partidas.
 
 Pendiente de antes: la primera tanda del GE (skinning rápido, matrices al
 cambiar, color constante; ver el carrito) entra en los pasos 6-11 con su

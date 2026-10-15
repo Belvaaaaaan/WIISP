@@ -19,6 +19,7 @@
 
 #include <math.h>
 #include <float.h>
+#include <stdio.h>
 #include <limits.h>
 #include <stdlib.h>
 #include "gpu/ge_internal.h"
@@ -814,6 +815,17 @@ typedef struct {
 static TState ts;
 static u32 ts_nlights;   /* luces encendidas (ge_stats) */
 
+/* ge_mtx_cache: (mundo * vista) * proyección y la dirección de vista solo
+   dependen de las tres matrices. Con las mismas entradas la aritmética del
+   GE da los mismos bits, así que se guardan y se comparan las matrices en
+   cada llamada en vez de rehacer dos productos 4x4 exactos (~5000
+   instrucciones del Broadway cada vez). */
+static struct {
+	int valid;
+	float world[12], view[12], proj[16];
+	float worldview[16], matrix[16], view_dir[3];
+} mc;
+
 static void to4x4(const float *m43, float *out){
 	int r, c;
 	for(r = 0; r < 4; r++){
@@ -844,16 +856,32 @@ static void compute_transform_state(const VFormat *f){
 			lighting_compute_state(&ts.light, f->col != 0);
 			for(ts_nlights = 0, l = 0; l < 4; l++) ts_nlights += ts.light.lights[l].enabled != 0;
 		} else ts.light.uses_world_normal = ts.uv_gen_mode == 2;
-		/* El observador en el infinito por +z de vista, normalizado como el GE */
-		vd[0] = ge.view[2]; vd[1] = ge.view[5]; vd[2] = ge.view[8];
-		if(ge_normalize(vd) == 0.0f){ vd[0] = 0.0f; vd[1] = 0.0f; vd[2] = 1.0f; }
-		memcpy(ts.light.view_dir, vd, sizeof(vd));
+		if(opt_on[OPT_GE_MTX_CACHE] && mc.valid && !memcmp(mc.world, ge.world, sizeof(mc.world)) &&
+		   !memcmp(mc.view, ge.view, sizeof(mc.view)) && !memcmp(mc.proj, ge.proj, sizeof(mc.proj))){
+			memcpy(vd, mc.view_dir, sizeof(vd));
+			memcpy(worldview, mc.worldview, sizeof(worldview));
+			memcpy(ts.matrix, mc.matrix, sizeof(ts.matrix));
+			ge_stats.mtx_reused++;
+		} else {
+			/* El observador en el infinito por +z de vista, normalizado como el GE */
+			vd[0] = ge.view[2]; vd[1] = ge.view[5]; vd[2] = ge.view[8];
+			if(ge_normalize(vd) == 0.0f){ vd[0] = 0.0f; vd[1] = 0.0f; vd[2] = 1.0f; }
 
-		to4x4(ge.view, view);
-		to4x4(ge.world, world);
-		ge_combine_matrices(worldview, world, view);
-		/* (mundo * vista) * proyección, como el GE */
-		ge_combine_matrices(ts.matrix, worldview, ge.proj);
+			to4x4(ge.view, view);
+			to4x4(ge.world, world);
+			ge_combine_matrices(worldview, world, view);
+			/* (mundo * vista) * proyección, como el GE */
+			ge_combine_matrices(ts.matrix, worldview, ge.proj);
+			ge_stats.mtx_combined++;
+			memcpy(mc.world, ge.world, sizeof(mc.world));
+			memcpy(mc.view, ge.view, sizeof(mc.view));
+			memcpy(mc.proj, ge.proj, sizeof(mc.proj));
+			memcpy(mc.view_dir, vd, sizeof(vd));
+			memcpy(mc.worldview, worldview, sizeof(worldview));
+			memcpy(mc.matrix, ts.matrix, sizeof(ts.matrix));
+			mc.valid = 1;
+		}
+		memcpy(ts.light.view_dir, vd, sizeof(vd));
 
 		if(ts.enable_fog){
 			float fog_end = ge_f24(ge.cmd[GE_FOG1]), fog_slope = ge_f24(ge.cmd[GE_FOG2]);
@@ -1368,6 +1396,7 @@ static void send_triangle(int cull, const GeClipVertex *v, int provoking, int re
 	u32 drawn = ge_stats.primitives;
 	ge_tri_flags = 0;
 	if(cull == CULL_OFF){
+		ge_stats.tris_cull_off++;
 		process_triangle(&v[0], &v[1], &v[2], &v[provoking], reversed);
 		process_triangle(&v[2], &v[1], &v[0], &v[provoking], !reversed);
 	} else if(cull == CULL_CW){
@@ -1634,6 +1663,68 @@ static void setup_uv_prescale(const VFormat *f){
 	uv_ps_off[1] = ge_f24(ge.cmd[GE_TEXOFFSETV]);
 }
 
+/* --- Censo de formatos de vértice ([TIEMPOS]) ------------------------------ */
+
+#define VT_CENSUS 24
+static struct { u32 vtype, verts, draws, prims; } vt_census[VT_CENSUS];
+static int vt_n, vt_last;
+static u32 vt_other;
+
+static void vtype_note(u32 vt, u32 prim, u32 count){
+	int i = vt_last;
+	if(i >= vt_n || vt_census[i].vtype != vt){
+		for(i = 0; i < vt_n && vt_census[i].vtype != vt; i++){}
+		if(i == vt_n){
+			if(vt_n == VT_CENSUS){ vt_other += count; return; }
+			memset(&vt_census[vt_n++], 0, sizeof(vt_census[0]));
+			vt_census[i].vtype = vt;
+		}
+		vt_last = i;
+	}
+	vt_census[i].verts += count;
+	vt_census[i].draws++;
+	vt_census[i].prims |= 1u << (prim & 7);
+}
+
+void ge_vtype_census(char *buf, size_t size){
+	static const char *const tc[4] = { "", " uv8", " uv16", " uvf" };
+	static const char *const col[8] = { "", "", "", "", " c565", " c5551", " c4444", " c8888" };
+	static const char *const nrm[4] = { "", " n8", " n16", " nf" };
+	static const char *const pos[4] = { " p-", " p8", " p16", " pf" };
+	static const char *const wt[4] = { "", " w8", " w16", " wf" };
+	static const char *const idx[4] = { "", " i8", " i16", " i32" };
+	static const char *const pn[8] = { "pt", "ln", "lt", "tri", "tira", "abanico", "sprite", "?" };
+	u32 total = vt_other;
+	size_t len;
+	int i, j, k;
+	for(i = 0; i < vt_n; i++) total += vt_census[i].verts;
+	len = (size_t)snprintf(buf, size, "Formatos de vertice (%d):", vt_n);
+	for(k = 0; k < 8 && len + 96 < size; k++){
+		int best = -1;
+		for(i = 0; i < vt_n; i++)
+			if(vt_census[i].verts && (best < 0 || vt_census[i].verts > vt_census[best].verts)) best = i;
+		if(best < 0) break;
+		{
+			u32 vt = vt_census[best].vtype;
+			len += (size_t)snprintf(buf + len, size - len, " %s%06X%s%s%s%s%s", k ? "| " : "", (unsigned)vt,
+			                        tc[vt & 3], col[(vt >> 2) & 7], nrm[(vt >> 5) & 3], pos[(vt >> 7) & 3], wt[(vt >> 9) & 3]);
+			if((vt >> 9) & 3) len += (size_t)snprintf(buf + len, size - len, "x%u", (unsigned)(((vt >> 14) & 7) + 1));
+			if(len < size) len += (size_t)snprintf(buf + len, size - len, "%s%s%s", idx[(vt >> 11) & 3],
+			                                        (vt >> 18) & 7 ? " morph" : "", (vt >> 23) & 1 ? " 2D" : "");
+			if(len < size)
+				len += (size_t)snprintf(buf + len, size - len, ": %.1f%% (%u llamadas,", total ? 100.0 * vt_census[best].verts / total : 0.0,
+				                        (unsigned)vt_census[best].draws);
+			for(j = 0; j < 8 && len + 16 < size; j++)
+				if(vt_census[best].prims & (1u << j)) len += (size_t)snprintf(buf + len, size - len, " %s", pn[j]);
+			if(len < size) len += (size_t)snprintf(buf + len, size - len, ")");
+		}
+		vt_census[best].verts = 0;
+	}
+	vt_n = 0;
+	vt_last = 0;
+	vt_other = 0;
+}
+
 void ge_draw_prim(u32 prim, u32 count){
 	VFormat f;
 	VSource vr;
@@ -1656,6 +1747,7 @@ void ge_draw_prim(u32 prim, u32 count){
 		prof_ge_leave(phase);
 		ge_stats.draws++;
 		ge_stats.draws_prim[prim & 7]++;
+		vtype_note(f.vtype, prim, count);
 		if(vr.use_indices) ge_stats.draws_indexed++;
 		if(vr.use_cache) ge_stats.draws_reuse++;
 		GE_PROF_ADD(3);

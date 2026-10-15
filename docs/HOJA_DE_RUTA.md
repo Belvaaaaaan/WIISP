@@ -142,6 +142,14 @@ no lo saca de la GPU). Según el censo de la 0.5.9.2, quita ~10 s de cada
 30 s de pelea (bajadas, subidas y decodificación). Detalle en
 docs/CONTINUAR.md.
 
+Hecha (v0.5.11): `ge_z_rango` (la profundidad se vigila solo en los bytes
+del bloque del swizzle: la textura pegada detrás del Z de DBZ ya no lo baja
+en cada imagen, ~1,3 s de cada 30 s de pelea), `ge_mtx_cache` (las dos
+multiplicaciones 4x4 exactas de cada llamada de dibujo solo cuando cambia
+una matriz: casi todo el 11 % de "comandos") y `registro_diferido` (las
+líneas de diagnóstico no fuerzan un fsync en la SD). Las tres idénticas
+bit a bit.
+
 Primera tanda acordada (todas "más barato", verificables en el PC):
 0.1 `prof_espera`, **skinning rápido** (`ge_skin_rapido`), **matrices al
 cambiar** (`ge_mtx_cache`), **color constante** (`ge_color_const`), 2.1

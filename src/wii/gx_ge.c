@@ -357,9 +357,19 @@ static int surf_bpp(int fmt){ return fmt == GE_FMT_8888 ? 4 : 2; }
 static void surf_range(const Surface *s, core_u32 *lo, core_u32 *hi){
 	core_u32 a = s->addr, e = s->addr + s->stride * (core_u32)s->h * (core_u32)surf_bpp(s->fmt);
 	if(s->fmt == SURF_Z){
-		/* El swizzle mueve los bytes de la profundidad hasta ~32 KB */
-		a = a > 0x10000 ? a - 0x10000 : 0;
-		e += 0x10000;
+		if(opt_on[OPT_GE_Z_RANGO]){
+			/* Los bytes de la profundidad están en vram_depth: el swizzle
+			   no los saca de su bloque (2-64 KB según la traducción; con
+			   la de arranque, 16 KB). Sin esto, una textura pegada detrás
+			   del búfer (DBZ: 0x04158000) lo bajaba entero en cada imagen. */
+			core_u32 b = mem_vram_swizzle_block();
+			a &= ~(b - 1);
+			e = (e + b - 1) & ~(b - 1);
+		} else {
+			/* El swizzle mueve los bytes de la profundidad hasta ~32 KB */
+			a = a > 0x10000 ? a - 0x10000 : 0;
+			e += 0x10000;
+		}
 	}
 	if(e > PSP_VRAM_SIZE) e = PSP_VRAM_SIZE;
 	*lo = a;

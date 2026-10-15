@@ -38,6 +38,8 @@ enum {
 	                         framebuffer no lo baja ni lo invalida */
 	OPT_GE_FB_HUECO,      /* un búfer pequeño encima de unas filas de otro
 	                         no lo saca de la GPU (hueco) */
+	OPT_GE_Z_RANGO,       /* la profundidad se vigila solo en los bytes
+	                         donde puede caer con su swizzle */
 	OPT_GE_VDEC_ESP,      /* 1.2 decodificadores de vértices por vtype */
 	OPT_GE_VDEC_PSQ,      /* 1.2b conversión con psq_l y GQR */
 	OPT_GE_BBOX,          /* 1.3 descarte por caja envolvente */
@@ -68,6 +70,8 @@ enum {
 	/* Fase 5: DSP */
 	OPT_DSP_SALIDA,       /* 5.1 salida de audio con libaesnd */
 	OPT_DSP_SAS,          /* 5.2 voces de sceSas en el DSP */
+	/* Fuera de la hoja de ruta */
+	OPT_REGISTRO_DIFERIDO, /* las líneas de diagnóstico no fuerzan un fsync */
 	OPT_N
 };
 

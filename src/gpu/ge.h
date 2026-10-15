@@ -49,8 +49,15 @@ typedef struct {
 	u32 tris_outside;       /* fuera de la pantalla o de la tijera */
 	u32 tris_clipped;       /* cortados por el plano cercano */
 	u32 sprites;
+	u32 mtx_combined;       /* mundo*vista*proyección calculadas */
+	u32 mtx_reused;         /* las mismas matrices: reutilizadas (ge_mtx_cache) */
+	u32 tris_cull_off;      /* sin descarte de caras: se procesan en los dos sentidos */
 } GeStats;
 void ge_get_stats(GeStats *out);
+
+/* Censo de formatos de vértice desde el último informe (los más usados
+   primero) en una línea, y lo pone a cero */
+void ge_vtype_census(char *buf, size_t size);
 
 /* Sube cada vez que la CPU se sincroniza con el GE (sceGeDrawSync,
    sceGeListSync, fin de una lista) y cuando un framebuffer de la GPU baja a

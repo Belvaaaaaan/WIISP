@@ -243,6 +243,26 @@ static void test_memory(void){
 	CHECK_EQ(mem_read32(0x04600020), 0x9ABCDEF0u);
 	CHECK_EQ(mem_read32(0x04000000u + mem_vram_deswizzle(0x20, 1)), 0x9ABCDEF0u);
 	CHECK(!mem_valid(0x04800000, 1));
+	/* El swizzle no saca un byte de su bloque (rango de la profundidad) */
+	{
+		static const u32 tr[] = { 0, 0x200, 0x400, 0x800, 0x1000 };
+		u32 old = psp_mem.vram_translation, k, off, bad = 0;
+		for(k = 0; k < sizeof(tr) / sizeof(tr[0]); k++){
+			u32 b;
+			psp_mem.vram_translation = tr[k];
+			b = mem_vram_swizzle_block();
+			for(off = 0; off < PSP_VRAM_SIZE; off += 2){
+				u32 d0 = mem_vram_deswizzle(off, 0), d1 = mem_vram_deswizzle(off, 1);
+				bad += (d0 & ~(b - 1)) != (off & ~(b - 1));
+				bad += (d1 & ~(b - 1)) != (off & ~(b - 1));
+				/* y el bloque no es más grande de lo que hace falta */
+				if(off == (b >> 1) + 0x40) bad += (d0 & ~((b >> 1) - 1)) == (off & ~((b >> 1) - 1)) &&
+				                                (d1 & ~((b >> 1) - 1)) == (off & ~((b >> 1) - 1));
+			}
+		}
+		psp_mem.vram_translation = old;
+		CHECK_EQ(bad, 0);
+	}
 
 	/* Direcciones inválidas leen 0 y no escriben */
 	CHECK_EQ(mem_read32(0x00000000), 0);

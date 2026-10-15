@@ -15,12 +15,13 @@ const OptInfo opt_info[OPT_N] = {
 	[OPT_PROF_ESPERA]    = { "prof_espera",    0, 0 },
 	[OPT_PROF_PMC]       = { "prof_pmc",       0, 0 },
 	[OPT_GE_SKIN_RAPIDO] = { "ge_skin_rapido", 1, 1 },
-	[OPT_GE_MTX_CACHE]   = { "ge_mtx_cache",   0, 0 },
+	[OPT_GE_MTX_CACHE]   = { "ge_mtx_cache",   1, 1 },
 	[OPT_GE_COLOR_CONST] = { "ge_color_const", 0, 0 },
 	[OPT_GE_TEX_CLUT]    = { "ge_tex_clut",    1, 1 },
 	[OPT_GE_RTT_GPU]     = { "ge_rtt_gpu",     1, 1 },
 	[OPT_GE_FB_RELLENO]  = { "ge_fb_relleno",  1, 1 },
 	[OPT_GE_FB_HUECO]    = { "ge_fb_hueco",    1, 1 },
+	[OPT_GE_Z_RANGO]     = { "ge_z_rango",     1, 1 },
 	[OPT_GE_VDEC_ESP]    = { "ge_vdec_esp",    0, 0 },
 	[OPT_GE_VDEC_PSQ]    = { "ge_vdec_psq",    0, 0 },
 	[OPT_GE_BBOX]        = { "ge_bbox",        0, 0 },
@@ -47,6 +48,7 @@ const OptInfo opt_info[OPT_N] = {
 	[OPT_JIT_SD]         = { "jit_sd",         0, 0 },
 	[OPT_DSP_SALIDA]     = { "dsp_salida",     0, 0 },
 	[OPT_DSP_SAS]        = { "dsp_sas",        0, 0 },
+	[OPT_REGISTRO_DIFERIDO] = { "registro_diferido", 1, 1 },
 };
 
 u8 opt_on[OPT_N];

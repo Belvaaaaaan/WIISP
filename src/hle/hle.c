@@ -291,7 +291,13 @@ void hle_log_sync(void){
 static time_t last_sync;
 static int unsynced;
 
-static void log_v(int to_screen, const char *fmt, va_list ap){
+/* registro_diferido: cada fsync en la SD para la emulación 10-40 ms. Las
+   líneas de diagnóstico (lazy: [MANDO], el Broadway...) no lo piden: llegan
+   a la tarjeta con la siguiente sincronización (una línea normal en otro
+   segundo, el informe de [TIEMPOS] o log_tick como mucho a los 10 s). */
+#define LOG_LAZY_SECONDS 10
+
+static void log_v(int to_screen, int lazy, const char *fmt, va_list ap){
 	va_list ap2;
 	int old = prof_switch(PROF_REGISTRO);
 	va_copy(ap2, ap);
@@ -302,15 +308,15 @@ static void log_v(int to_screen, const char *fmt, va_list ap){
 		if(log_written >= LOG_FILE_MAX || log_total >= LOG_TOTAL_MAX)
 			fputs("[registro recortado: el siguiente programa vuelve a escribir]\n", log_file);
 		fflush(log_file);
-		unsynced = 1;
-		{
+		if(!lazy || !opt_on[OPT_REGISTRO_DIFERIDO]){
 			time_t now = time(NULL);
+			unsynced = 2;
 			if(now != last_sync || !strncmp(fmt, "[CPU]", 5)){
 				last_sync = now;
 				fsync(fileno(log_file));
 				unsynced = 0;
 			}
-		}
+		} else if(!unsynced) unsynced = 1;
 	}
 	va_end(ap2);
 	prof_switch(old);
@@ -319,7 +325,7 @@ static void log_v(int to_screen, const char *fmt, va_list ap){
 void hle_log(const char *fmt, ...){
 	va_list ap;
 	va_start(ap, fmt);
-	log_v(1, fmt, ap);
+	log_v(1, 0, fmt, ap);
 	va_end(ap);
 }
 
@@ -329,14 +335,14 @@ void hle_log(const char *fmt, ...){
 static void log_file_only(const char *fmt, ...){
 	va_list ap;
 	va_start(ap, fmt);
-	log_v(0, fmt, ap);
+	log_v(0, 0, fmt, ap);
 	va_end(ap);
 }
 
 void hle_log_quiet(const char *fmt, ...){
 	va_list ap;
 	va_start(ap, fmt);
-	log_v(0, fmt, ap);
+	log_v(0, 1, fmt, ap);
 	va_end(ap);
 }
 
@@ -346,7 +352,9 @@ static void log_tick(void){
 	time_t now;
 	if(!log_file || !unsynced) return;
 	now = time(NULL);
-	if(now != last_sync){
+	/* 2: hay una línea normal pendiente (a la tarjeta en un segundo); 1:
+	   solo de diagnóstico (a los 10 s) */
+	if(now != last_sync && (unsynced == 2 || !opt_on[OPT_REGISTRO_DIFERIDO] || now - last_sync >= LOG_LAZY_SECONDS)){
 		int old = prof_switch(PROF_REGISTRO);
 		last_sync = now;
 		fsync(fileno(log_file));
@@ -400,7 +408,7 @@ static void profile_ge_lines(const GeStats *g, const GeStats *b, u32 vblanks){
 		"comandos", "leer vertices", "transformar y luces", "ensamblar triangulos", "enviar a GX",
 		"preparar estado", "curvas"
 	};
-	char line[512];
+	char line[1024];
 	size_t len;
 	u32 st = 0, draws = g->draws - b->draws, verts = g->vertices - b->vertices, tris = g->tris - b->tris;
 	u32 lit = g->vertices_lit - b->vertices_lit;
@@ -434,10 +442,19 @@ static void profile_ge_lines(const GeStats *g, const GeStats *b, u32 vblanks){
 	        pct(lit, verts), lit ? (double)(g->lights - b->lights) / (double)lit : 0.0,
 	        pct(g->vertices_through - b->vertices_through, verts));
 	hle_log("[TIEMPOS] Triangulos: %u recibidos (%.0f por vblank): %.0f%% dibujados, %.0f%% de espaldas o sin area, "
-	        "%.0f%% fuera de pantalla; %u recortados; %u sprites; %u primitivas dibujadas en total\n",
+	        "%.0f%% fuera de pantalla; %u recortados; %u sprites; %u primitivas dibujadas en total; "
+	        "%.0f%% sin descarte de caras\n",
 	        (unsigned)tris, tris / per, pct(g->tris_drawn - b->tris_drawn, tris), pct(g->tris_back - b->tris_back, tris),
 	        pct(g->tris_outside - b->tris_outside, tris), (unsigned)(g->tris_clipped - b->tris_clipped),
-	        (unsigned)(g->sprites - b->sprites), (unsigned)(g->primitives - b->primitives));
+	        (unsigned)(g->sprites - b->sprites), (unsigned)(g->primitives - b->primitives),
+	        pct(g->tris_cull_off - b->tris_cull_off, tris));
+	{
+		u32 mc = g->mtx_combined - b->mtx_combined, mr = g->mtx_reused - b->mtx_reused;
+		hle_log("[TIEMPOS] Matrices mundo*vista*proyeccion: %u calculadas, %u reutilizadas (ge_mtx_cache, %.0f%%)\n",
+		        (unsigned)mc, (unsigned)mr, pct(mr, mc + mr));
+	}
+	ge_vtype_census(line, sizeof(line));
+	hle_log("[TIEMPOS] %s\n", line);
 }
 
 /* Velocidad, a dónde va el tiempo real, el GE por dentro y qué dibujó, y lo

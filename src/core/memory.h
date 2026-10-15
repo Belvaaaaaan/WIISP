@@ -65,6 +65,16 @@ static inline u32 mem_vram_deswizzle(u32 off, int mirror3){
 	return ((off ^ x) & ~m) | ((off & (h >> 1)) << 1) | ((~off & 0x20) << 1) | ((off >> (3 + k)) & 0x20);
 }
 
+/* Tamaño (potencia de 2) del bloque de la VRAM del que no sale el swizzle:
+   mem_vram_deswizzle(off, m) cae siempre en el mismo bloque que off. Los
+   bytes de un búfer de profundidad están entre los bordes de bloque que
+   rodean su rango lineal. */
+static inline u32 mem_vram_swizzle_block(void){
+	u32 t = psp_mem.vram_translation;
+	if(t == 0) return 0x800;
+	return 0x2000u << (t >= 0x1000 ? 3 : t >= 0x800 ? 2 : t >= 0x400 ? 1 : 0);
+}
+
 /* Registra los búferes de la plataforma y los pone a cero.
    ram_size debe ser PSP_RAM_SIZE_32MB o PSP_RAM_SIZE_64MB. */
 int  mem_init(u8 *ram, u32 ram_size, u8 *vram, u8 *scratch);
