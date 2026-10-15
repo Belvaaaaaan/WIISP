@@ -714,6 +714,33 @@ Este paso solo mide (censo `rtt:` de [TIEMPOS], gx_ge.c):
 - `ge.cur_cmd`: el comando del GE en curso (para saber quién lee la VRAM).
 - El texto del renderizador en hle_profile_report pasa a 6 KB (estático).
 
+### v0.5.9.2: censo completo para optimizar las texturas de framebuffer
+
+Lo que dijo el censo de la 0.5.9.1 (r3/r4, peleas, cada 30 s): la cadena
+cuesta ~10,8 s (36 %): decodificar 4,2 s, bajadas 4,6 s y **subidas
+VRAM->GPU 2,0 s**; la espera a la GPU es poca (~0,6 ms por bajada), lo caro
+es convertir (~6,6 ms por búfer de 480x272). CLUT32 (0x04088000 y
+0x04000000) siempre con alfa A_GPU; CLUT16 sobre el 565 lee hasta la fila
+271 sin vecino (recorte exacto); CLUT32 lee la fila 272 con peso (la mitad
+de los sprites): Z o la fila 0 de 0x04088000. Las bajadas "por el GE" son
+cargas de paleta dentro de 0x04000000. El 4444 de 64x64 y el 565 comparten
+0x04158000: bajar el 4444 cuesta poco, pero el 565 se vuelve a subir entero
+en cada imagen.
+
+Lo que añade este censo (líneas `rtt:`):
+- Por motivo de bajada, las filas que tocaba el acceso que la provocó
+  (lo que bastaría bajar) y cuántas solo tocaban el relleno de las filas.
+- Cada carga de paleta dentro de un búfer: dirección, bytes, filas y
+  columnas del búfer, si es solo relleno y si los bytes se repiten.
+- Pares de solape: veces, cuántas con bajada y qué filas del viejo pisa el
+  nuevo (lo que habría que volver a subir si se conservara su copia).
+- Por textura con paleta: tamaño del origen, coordenada máxima muestreada,
+  sprites que leen fuera del origen y el peso máximo de esa fila/columna,
+  cambios de paleta, destino y mezcla, y las formas de los sprites
+  (tamaño, u = ku·x + du, v = kv·y + dv).
+- Por búfer: si el primer dibujo es un sprite que lo tapa entero (opaco o
+  con mezcla), escrituras de la VRAM y ms de bajar, subir y decodificar.
+
 ### Para el siguiente chat (empezar aquí)
 
 Metodología acordada (detalle en `docs/HOJA_DE_RUTA.md`): primero medir

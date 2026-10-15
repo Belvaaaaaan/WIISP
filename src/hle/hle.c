@@ -449,7 +449,7 @@ void hle_profile_report(const char *why){
 		"audio", "registro"
 	};
 	char line[512];
-	static char extra[6144];   /* el informe del renderizador puede ser largo */
+	static char extra[12288];   /* el informe del renderizador puede ser largo */
 	u64 total, d[PROF_N];
 	double secs, game;
 	size_t len;

@@ -178,6 +178,9 @@ typedef struct {
 	int fmt, w, h;
 	unsigned binds, dl[RD_N], gpu, dec, miss;
 	unsigned first_clear, first_blit, first_upload;   /* cómo empezó cada uso */
+	unsigned cover_opaque, cover_blend;   /* primer dibujo: sprite que lo tapa entero */
+	unsigned vram_writes;                 /* veces que se escribió su VRAM (pasa a mandar la VRAM) */
+	u64 dl_ticks, up_ticks, dec_ticks;
 	int amode, ualpha;
 } RttTarget;
 static RttTarget rtt_t[RTT_MAX];
@@ -196,6 +199,16 @@ typedef struct {
 	int col_max, row_max;           /* última columna y fila leídas (con peso) */
 	unsigned amode[3];
 	int ualpha;
+	int src_w, src_h;               /* tamaño del búfer de origen */
+	float smax, tmax;               /* coordenada máxima muestreada (texels) */
+	unsigned beyond_s, beyond_t;    /* sprites que leen fuera del búfer de origen */
+	float beyond_ws, beyond_wt;     /* peso máximo de esa columna/fila */
+	unsigned clut_changes;          /* la paleta cambió respecto al uso anterior */
+	core_u32 clut_last;
+	core_u32 dest_addr;             /* destino de los dibujos */
+	int dest_fmt;
+	unsigned dest_other, blend;     /* usos con otro destino; usos con mezcla */
+	struct { int w, h; float ku, kv, du, dv; unsigned n; } kind[4];   /* sprites por forma */
 } RttPal;
 static RttPal rtt_pal[RTT_PAL_MAX];
 static int rtt_npal;
@@ -205,6 +218,22 @@ static unsigned rtt_dl[RD_N], rtt_dec[RO_N], rtt_gpu, rtt_miss[RM_N];
 static u64 rtt_dl_ticks[RD_N], rtt_dec_ticks[RO_N], rtt_dec_bytes[RO_N];
 static unsigned rtt_dx[DX_N], rtt_uploads;
 static u64 rtt_dx_wait[DX_N], rtt_dx_conv[DX_N], rtt_up_ticks;
+/* Filas que tocó el acceso que provocó cada bajada (lo que bastaría bajar) */
+static u64 rtt_dx_rows[DX_N], rtt_dx_rows_all[DX_N];
+static unsigned rtt_dx_pad[DX_N];       /* el acceso solo tocó el relleno de las filas */
+static core_u32 acc_off, acc_len;       /* rango que está pidiendo el gancho de la VRAM */
+/* Cargas de paleta (LOADCLUT) que caen en un búfer dibujado */
+#define RTT_CLUT_MAX 6
+typedef struct {
+	core_u32 off, len, surf_addr;
+	int surf_fmt, r0, r1, c0, c1, pad;
+	unsigned n, same;
+	core_u32 hash;
+} RttClut;
+static RttClut rtt_clut[RTT_CLUT_MAX];
+static int rtt_nclut;
+/* El primer dibujo tras usar un destino, si es un sprite */
+static const GeVertex *first_v0, *first_v1;
 static int dl_force = -1;               /* motivo que fija quien llama */
 /* Comandos del GE que provocan bajadas sin ser texturas ni copias */
 #define RTT_CMD_MAX 6
@@ -215,7 +244,8 @@ static core_u32 rtt_cmd[RTT_CMD_MAX];
 typedef struct {
 	core_u32 old_addr, new_addr;
 	int old_fmt, new_fmt, old_w, old_h, new_w, new_h;
-	unsigned n;
+	int r0, r1;              /* filas del viejo que pisa el nuevo */
+	unsigned n, downloads;   /* veces; las que hubo que bajarlo */
 } RttPair;
 static RttPair rtt_pair[RTT_PAIR_MAX];
 static int rtt_npair;
@@ -552,6 +582,8 @@ static Surface *surface_at(core_u32 off){
 	return NULL;
 }
 
+static core_u32 clut_hash_now(void);
+
 /* Una textura del GE: si cae dentro de un búfer dibujado, se apunta si se
    usó desde la GPU o, si no, por qué no (las mismas condiciones que
    texture_from_surface, en orden) */
@@ -591,14 +623,24 @@ static void rtt_note_texture(const GeRasterState *r, int from_gpu){
 		if(i == rtt_npal && rtt_npal < RTT_PAL_MAX){
 			k.n = 1;
 			k.umin = k.vmin = 1e30f; k.umax = k.vmax = -1e30f;
+			k.smax = k.tmax = -1e30f;
 			k.col_max = k.row_max = -1;
+			k.clut_last = clut_hash_now();
+			k.dest_addr = cur_c ? cur_c->addr : 0xFFFFFFFFu;
+			k.dest_fmt = cur_c ? cur_c->fmt : -1;
 			rtt_pal[rtt_npal++] = k;
 		}
 		if(i < rtt_npal){
 			RttPal *p = &rtt_pal[i];
+			core_u32 ch = clut_hash_now();
 			rtt_cur = p;
 			p->amode[s->amode < 3 ? s->amode : 0]++;
 			p->ualpha = s->ualpha;
+			p->src_w = s->w;
+			p->src_h = s->h;
+			if(ch != p->clut_last){ p->clut_changes++; p->clut_last = ch; }
+			if(!cur_c || cur_c->addr != p->dest_addr || cur_c->fmt != p->dest_fmt) p->dest_other++;
+			if(r->alpha_blend) p->blend++;
 		}
 	}
 	else if(r->swizzle) why = RM_SWZ;
@@ -627,21 +669,46 @@ static void rtt_note_detail(const Surface *s, int dx){
 	if(dx == DX_GE){
 		for(i = 0; i < RTT_CMD_MAX && rtt_cmd_n[i] && rtt_cmd[i] != ge.cur_cmd; i++){}
 		if(i < RTT_CMD_MAX){ rtt_cmd[i] = ge.cur_cmd; rtt_cmd_n[i]++; }
-	} else if(dx == DX_SOLAPE){
-		RttPair *p = NULL;
-		for(i = 0; i < rtt_npair; i++){
-			p = &rtt_pair[i];
-			if(p->old_addr == s->addr && p->old_fmt == s->fmt && p->new_addr == dl_new_addr && p->new_fmt == dl_new_fmt) break;
-		}
-		if(i == rtt_npair){
-			if(rtt_npair == RTT_PAIR_MAX) return;
-			p = &rtt_pair[rtt_npair++];
-			memset(p, 0, sizeof(*p));
-			p->old_addr = s->addr; p->old_fmt = s->fmt; p->old_w = s->w; p->old_h = s->h;
-			p->new_addr = dl_new_addr; p->new_fmt = dl_new_fmt; p->new_w = dl_new_w; p->new_h = dl_new_h;
-		}
-		p->n++;
 	}
+}
+
+/* Filas de un búfer que toca el rango [off, off+len) de la VRAM (lineal,
+   también para la profundidad); pad = solo el relleno de las filas */
+static int rows_touched(const Surface *s, core_u32 off, core_u32 len, int *r0, int *r1, int *pad){
+	core_u32 rowb = s->stride * (core_u32)surf_bpp(s->fmt), a, e, vis = (core_u32)s->w * (core_u32)surf_bpp(s->fmt);
+	if(!rowb || !len || off + len <= s->addr) return 0;
+	a = off > s->addr ? off - s->addr : 0;
+	e = off + len - s->addr;
+	*r0 = (int)(a / rowb);
+	*r1 = (int)((e - 1) / rowb);
+	if(*r0 >= s->h) return 0;
+	if(*r1 >= s->h) *r1 = s->h - 1;
+	*pad = *r0 == *r1 && a % rowb >= vis && (e - 1) % rowb >= vis;
+	return 1;
+}
+
+/* Un búfer que deja de existir en la GPU porque se crea otro encima */
+static void rtt_note_pair(const Surface *o, core_u32 a, core_u32 e){
+	RttPair *p = NULL;
+	int i, r0 = 0, r1 = 0, pad;
+	for(i = 0; i < rtt_npair; i++){
+		p = &rtt_pair[i];
+		if(p->old_addr == o->addr && p->old_fmt == o->fmt && p->new_addr == dl_new_addr && p->new_fmt == dl_new_fmt) break;
+	}
+	if(i == rtt_npair){
+		if(rtt_npair == RTT_PAIR_MAX) return;
+		p = &rtt_pair[rtt_npair++];
+		memset(p, 0, sizeof(*p));
+		p->old_addr = o->addr; p->old_fmt = o->fmt; p->old_w = o->w; p->old_h = o->h;
+		p->new_addr = dl_new_addr; p->new_fmt = dl_new_fmt; p->new_w = dl_new_w; p->new_h = dl_new_h;
+		p->r0 = 1 << 30; p->r1 = -1;
+	}
+	if(rows_touched(o, a, e - a, &r0, &r1, &pad)){
+		if(r0 < p->r0) p->r0 = r0;
+		if(r1 > p->r1) p->r1 = r1;
+	}
+	p->n++;
+	if(o->state == GPU_NEWER) p->downloads++;
 }
 
 /* Contenido de la GPU -> VRAM */
@@ -663,7 +730,15 @@ static void download(Surface *s){
 		rtt_dx_wait[dx] += t1 - t0;
 		rtt_dx_conv[dx] += gettime() - t1;
 		rtt_note_detail(s, dx);
-		if(t) t->dl[why]++;
+		{
+			int r0, r1, pad;
+			rtt_dx_rows_all[dx] += (u64)s->h;
+			if(acc_len && rows_touched(s, acc_off, acc_len, &r0, &r1, &pad)){
+				rtt_dx_rows[dx] += (u64)(r1 - r0 + 1);
+				rtt_dx_pad[dx] += pad;
+			} else rtt_dx_rows[dx] += (u64)s->h;
+		}
+		if(t){ t->dl[why]++; t->dl_ticks += gettime() - t0; }
 		/* Las texturas que estén ahí cambiaron (y empieza otro periodo,
 		   como en PPSSPP al leer un framebuffer) */
 		surf_range(s, &a, &e);
@@ -682,8 +757,36 @@ static void drop_surface(Surface *s){
 }
 
 /* Gancho de memory.c: la CPU va a tocar [off, off+len) de la VRAM */
+/* Censo: una carga de paleta que cae en un búfer dibujado (ya bajado) */
+static void rtt_note_clut(const Surface *s, core_u32 off, core_u32 len){
+	RttClut *c = NULL;
+	core_u32 h = 2166136261u, i;
+	int k, r0, r1, pad;
+	for(i = 0; i < len && off + i < PSP_VRAM_SIZE; i++){ h ^= psp_mem.vram[off + i]; h *= 16777619u; }
+	for(k = 0; k < rtt_nclut; k++)
+		if(rtt_clut[k].off == off && rtt_clut[k].len == len){ c = &rtt_clut[k]; break; }
+	if(!c){
+		if(rtt_nclut == RTT_CLUT_MAX) return;
+		c = &rtt_clut[rtt_nclut++];
+		memset(c, 0, sizeof(*c));
+		c->off = off; c->len = len; c->surf_addr = s->addr; c->surf_fmt = s->fmt;
+		c->r0 = c->r1 = -1;
+		if(rows_touched(s, off, len, &r0, &r1, &pad)){
+			core_u32 bpp = (core_u32)surf_bpp(s->fmt), rowb = s->stride * bpp;
+			c->r0 = r0; c->r1 = r1; c->pad = pad;
+			c->c0 = (int)(((off - s->addr) % rowb) / bpp);
+			c->c1 = (int)(((off + len - 1 - s->addr) % rowb) / bpp);
+		}
+	} else if(c->hash == h) c->same++;
+	c->hash = h;
+	c->n++;
+}
+
 static void vram_hook(core_u32 off, core_u32 len, int write){
 	int i;
+	const Surface *clut_s = NULL;
+	acc_off = off;
+	acc_len = len;
 	for(i = 0; i < MAX_SURF; i++){
 		Surface *s = &surf[i];
 		core_u32 a, e;
@@ -691,13 +794,18 @@ static void vram_hook(core_u32 off, core_u32 len, int write){
 		surf_range(s, &a, &e);
 		if(off >= e || off + len <= a) continue;
 		if(s->state == GPU_NEWER) download(s);
+		if(!write && ge.cur_cmd == GE_LOADCLUT && prof_cur != PROF_TEXTURAS && s->fmt != SURF_Z) clut_s = s;
 		if(write){
+			RttTarget *t = rtt_surface(s);
+			if(t) t->vram_writes++;
 			s->state = VRAM_NEWER;
 			if(s == cur_c){ restored_c = 0; efb_c_newer = 0; }
 			if(s == cur_z){ restored_z = 0; efb_z_newer = 0; }
 			targets_dirty = 1;
 		}
 	}
+	acc_len = 0;
+	if(clut_s) rtt_note_clut(clut_s, off, len);
 	recompute_watch();
 }
 
@@ -753,7 +861,10 @@ static Surface *get_surface(core_u32 addr, core_u32 stride, int fmt, int need_w,
 		if(!o->used) { if(!slot) slot = o; continue; }
 		oa = o->addr;
 		oe = o->addr + o->stride * (core_u32)o->h * (core_u32)surf_bpp(o->fmt);
-		if(a < oe && oa < e) drop_surface(o);
+		if(a < oe && oa < e){
+			rtt_note_pair(o, a > oa ? a : oa, e < oe ? e : oe);
+			drop_surface(o);
+		}
 		if(!o->used && !slot) slot = o;
 	}
 	dl_force = -1;
@@ -902,6 +1013,10 @@ static void restore_color_body(void){
 		vram_to_tex(s);
 		rtt_uploads++;
 		rtt_up_ticks += gettime() - t0;
+		{
+			RttTarget *t = rtt_surface(s);
+			if(t) t->up_ticks += gettime() - t0;
+		}
 		s->state = SYNCED;
 		recompute_watch();
 	}
@@ -1242,15 +1357,17 @@ static int decode_slot(TexCache *tc, void *ctx, int idx){
 		core_u32 addr = want_tex.r->texaddr[0] & PSP_ADDR_MASK;
 		int from = RO_RAM;
 		u64 t0 = gettime();
+		RttTarget *dt = NULL;
 		if(addr >= PSP_VRAM_BASE && addr < PSP_VRAM_BASE + PSP_VRAM_SIZE){
 			Surface *fs = surface_at(addr - PSP_VRAM_BASE);
 			from = fs ? RO_FB : RO_VRAM;
 			if(fs){
-				RttTarget *t = rtt_surface(fs);
-				if(t) t->dec++;
+				dt = rtt_surface(fs);
+				if(dt) dt->dec++;
 			}
 		}
 		if(!decode_texture(e, want_tex.r)){ memset(e, 0, sizeof(*e)); return 0; }
+		if(dt) dt->dec_ticks += gettime() - t0;
 		rtt_dec[from]++;
 		rtt_dec_ticks[from] += gettime() - t0;
 		rtt_dec_bytes[from] += e->bytes;
@@ -1731,6 +1848,24 @@ static void apply_gx(void){
 	GX_SetDither(GX_FALSE);
 }
 
+/* Censo: el sprite (v0, v1) tapa todo el destino actual: 1 opaco (todo
+   lo de antes se pierde), 2 con mezcla, pruebas o máscara (lo necesita), 0 no */
+static int rtt_cover(const GeVertex *v0, const GeVertex *v1){
+	const GeRasterState *r = ge_raster_state();
+	int xl = (v0->x < v1->x ? v0->x : v1->x) / 16, xr = (v0->x > v1->x ? v0->x : v1->x) / 16;
+	int yt = (v0->y < v1->y ? v0->y : v1->y) / 16, yb = (v0->y > v1->y ? v0->y : v1->y) / 16;
+	int sx1 = r->sc_x1 / 16, sy1 = r->sc_y1 / 16, sx2 = r->sc_x2 / 16 + 1, sy2 = r->sc_y2 / 16 + 1;
+	if(xl < sx1) xl = sx1;
+	if(yt < sy1) yt = sy1;
+	if(xr > sx2) xr = sx2;
+	if(yb > sy2) yb = sy2;
+	if(xl > 0 || yt > 0 || xr < cur_c->w || yb < cur_c->h) return 0;
+	if(r->alpha_blend || r->apply_logic_op || (ge.cmd[GE_MASKRGB] & 0xFFFFFF) || r->alpha_test_func != CMP_ALWAYS ||
+	   r->color_test || r->stencil_test || (touch_z && r->depth_test_func != CMP_ALWAYS))
+		return 2;
+	return 1;
+}
+
 /* Antes de cada primitiva: búferes en el EFB con su contenido. full: el
    rectángulo de borrado tapa todo el búfer de color (1) y/o de
    profundidad (2), que no hace falta restaurar. 0 = no dibujar. */
@@ -1754,6 +1889,11 @@ static int prepare_targets(int full){
 			if(t){
 				if(cur_c->state == VRAM_NEWER || !cur_c->has_tex) t->first_upload++;
 				else t->first_blit++;
+				if(first_v0){
+					int c = rtt_cover(first_v0, first_v1);
+					if(c == 1) t->cover_opaque++;
+					else if(c == 2) t->cover_blend++;
+				}
 			}
 			restore_color();
 		}
@@ -1873,6 +2013,8 @@ static void rtt_bounds(const GeVertex *v){
    (píxeles) con coordenadas c0, c1 (texels). GX muestrea en el centro de
    cada píxel cubierto; con filtro lineal lee floor(c - 0.5) y el siguiente,
    que solo cuenta si su peso no es 0. -1 si no cubre ningún píxel. */
+static float rtt_axis_m, rtt_axis_w;   /* coordenada máxima y peso del vecino del último eje */
+
 static int rtt_axis_last(float p0, float p1, float c0, float c1, int linear, unsigned *neighbor){
 	float lo = p0 < p1 ? p0 : p1, hi = p0 < p1 ? p1 : p0;
 	float first = ceilf(lo - 0.5f) + 0.5f, last = ceilf(hi - 0.5f) - 0.5f, a, b, m, f;
@@ -1881,11 +2023,34 @@ static int rtt_axis_last(float p0, float p1, float c0, float c1, int linear, uns
 	a = c0 + (first - p0) * (c1 - c0) / (p1 - p0);
 	b = c0 + (last - p0) * (c1 - c0) / (p1 - p0);
 	m = a > b ? a : b;
+	rtt_axis_m = m;
+	rtt_axis_w = 0.0f;
 	if(!linear) return (int)floorf(m);
 	f = m - 0.5f;
 	i = (int)floorf(f);
-	if(f > (float)i){ (*neighbor)++; return i + 1; }
+	if(f > (float)i){ (*neighbor)++; rtt_axis_w = f - (float)i; return i + 1; }
 	return i;
+}
+
+/* Forma de un sprite: tamaño en píxeles, texels por píxel y desfase (texel
+   que cae en el centro del primer píxel menos el que tocaría a escala) */
+static void rtt_note_kind(float x0, float x1, float y0, float y1, float s0, float s1, float t0, float t1){
+	int w = (int)fabsf(x1 - x0), h = (int)fabsf(y1 - y0), k, free_k = -1;
+	float ku = x1 != x0 ? (s1 - s0) / (x1 - x0) : 0.0f, kv = y1 != y0 ? (t1 - t0) / (y1 - y0) : 0.0f;
+	float du = s0 - x0 * ku, dv = t0 - y0 * kv;
+	du = floorf(du * 64.0f + 0.5f) / 64.0f;
+	dv = floorf(dv * 64.0f + 0.5f) / 64.0f;
+	for(k = 0; k < 4; k++){
+		if(!rtt_cur->kind[k].n){ if(free_k < 0) free_k = k; continue; }
+		if(rtt_cur->kind[k].w == w && rtt_cur->kind[k].h == h && rtt_cur->kind[k].ku == ku && rtt_cur->kind[k].kv == kv &&
+		   rtt_cur->kind[k].du == du && rtt_cur->kind[k].dv == dv){ rtt_cur->kind[k].n++; return; }
+	}
+	if(free_k >= 0){
+		rtt_cur->kind[free_k].w = w; rtt_cur->kind[free_k].h = h;
+		rtt_cur->kind[free_k].ku = ku; rtt_cur->kind[free_k].kv = kv;
+		rtt_cur->kind[free_k].du = du; rtt_cur->kind[free_k].dv = dv;
+		rtt_cur->kind[free_k].n = 1;
+	}
 }
 
 static void rtt_note_sprite(const GeVertex *v0, const GeVertex *v1){
@@ -1900,9 +2065,24 @@ static void rtt_note_sprite(const GeVertex *v0, const GeVertex *v1){
 	rtt_bounds(v1);
 	/* Con la orientación cambiada, s va a lo largo de y y t de x (draw_sprite) */
 	c = swap ? rtt_axis_last(y0, y1, s0, s1, linear, &rtt_cur->neighbor_s) : rtt_axis_last(x0, x1, s0, s1, linear, &rtt_cur->neighbor_s);
+	if(c >= 0){
+		if(rtt_axis_m > rtt_cur->smax) rtt_cur->smax = rtt_axis_m;
+		if(rtt_cur->src_w && c >= rtt_cur->src_w){
+			rtt_cur->beyond_s++;
+			if(rtt_axis_w > rtt_cur->beyond_ws) rtt_cur->beyond_ws = rtt_axis_w;
+		}
+	}
 	w = swap ? rtt_axis_last(x0, x1, t0, t1, linear, &rtt_cur->neighbor_t) : rtt_axis_last(y0, y1, t0, t1, linear, &rtt_cur->neighbor_t);
+	if(w >= 0){
+		if(rtt_axis_m > rtt_cur->tmax) rtt_cur->tmax = rtt_axis_m;
+		if(rtt_cur->src_h && w >= rtt_cur->src_h){
+			rtt_cur->beyond_t++;
+			if(rtt_axis_w > rtt_cur->beyond_wt) rtt_cur->beyond_wt = rtt_axis_w;
+		}
+	}
 	if(c > rtt_cur->col_max) rtt_cur->col_max = c;
 	if(w > rtt_cur->row_max) rtt_cur->row_max = w;
+	if(!swap) rtt_note_kind(x0, x1, y0, y1, s0, s1, t0, t1);
 }
 
 /* Triángulos: solo los límites de los vértices (y el vecino, por si acaso) */
@@ -1964,8 +2144,12 @@ static void draw_sprite(const GeVertex *v0, const GeVertex *v1){
 }
 
 static void gx_rect(const GeVertex *v0, const GeVertex *v1){
+	int ok;
 	if(v0->x == v1->x || v0->y == v1->y) return;
-	if(!prepare(0)) return;
+	first_v0 = v0; first_v1 = v1;
+	ok = prepare(0);
+	first_v0 = first_v1 = NULL;
+	if(!ok) return;
 	if(rtt_cur && tex_on) rtt_note_sprite(v0, v1);
 	draw_sprite(v0, v1);
 	drawn();
@@ -2134,6 +2318,27 @@ void gx_ge_rtt_report(char *buf, size_t size){
 		if(len < size)
 			len += (size_t)snprintf(buf + len, size - len, "%s; subidas VRAM->GPU %u (%u ms)\n", any ? "" : " ninguna",
 			                        rtt_uploads, tk_ms(rtt_up_ticks));
+		/* Lo que habría bastado bajar: las filas que tocó el acceso */
+		if(any && len < size){
+			len += (size_t)snprintf(buf + len, size - len, "rtt: filas que tocaba cada motivo (de las bajadas):");
+			any = 0;
+			for(i = 0; i < DX_N && len < size; i++){
+				if(!rtt_dx[i]) continue;
+				len += (size_t)snprintf(buf + len, size - len, "%s %s %llu de %llu (solo relleno %u)", any ? "," : "", dxn[i],
+				                        (unsigned long long)rtt_dx_rows[i], (unsigned long long)rtt_dx_rows_all[i], rtt_dx_pad[i]);
+				any = 1;
+			}
+			if(len < size) len += (size_t)snprintf(buf + len, size - len, "\n");
+		}
+	}
+	/* Cargas de paleta dentro de búferes dibujados */
+	for(i = 0; i < rtt_nclut && len < size; i++){
+		const RttClut *c = &rtt_clut[i];
+		len += (size_t)snprintf(buf + len, size - len,
+		        "rtt: carga de paleta de %08X (%u bytes) en el bufer %08X %s: filas %d..%d, columnas %d..%d%s; %u veces, "
+		        "%u con los mismos bytes que la anterior\n",
+		        (unsigned)(PSP_VRAM_BASE + c->off), (unsigned)c->len, (unsigned)(PSP_VRAM_BASE + c->surf_addr),
+		        fmts[c->surf_fmt & 3], c->r0, c->r1, c->c0, c->c1, c->pad ? " (solo relleno)" : "", c->n, c->same);
 	}
 	if(rtt_dx[DX_GE] && len < size){
 		len += (size_t)snprintf(buf + len, size - len, "rtt: bajadas por comandos del GE:");
@@ -2144,10 +2349,10 @@ void gx_ge_rtt_report(char *buf, size_t size){
 	for(i = 0; i < rtt_npair && len < size; i++){
 		const RttPair *p = &rtt_pair[i];
 		len += (size_t)snprintf(buf + len, size - len,
-		        "rtt: solape: %08X %s %dx%d bajado al crear %08X %s %dx%d: %u veces\n",
+		        "rtt: solape: %08X %s %dx%d deja la GPU al crear %08X %s %dx%d: %u veces (%u con bajada), pisa sus filas %d..%d\n",
 		        (unsigned)(PSP_VRAM_BASE + p->old_addr), p->old_fmt == SURF_Z ? "Z" : fmts[p->old_fmt & 3], p->old_w, p->old_h,
 		        (unsigned)(PSP_VRAM_BASE + p->new_addr), p->new_fmt == SURF_Z ? "Z" : fmts[p->new_fmt & 3], p->new_w, p->new_h,
-		        p->n);
+		        p->n, p->downloads, p->r0, p->r1);
 	}
 	/* Paletas sobre framebuffers, de más a menos usadas */
 	{
@@ -2181,6 +2386,22 @@ void gx_ge_rtt_report(char *buf, size_t size){
 					len += (size_t)snprintf(buf + len, size - len,
 					        "rtt:   sin primitivas; alfa del origen: uniforme %u (ultimo %d), en VRAM %u, en GPU %u\n",
 					        p->amode[A_UNIFORM], p->ualpha, p->amode[A_VRAM], p->amode[A_GPU]);
+				if(len < size && p->sprites){
+					int q;
+					len += (size_t)snprintf(buf + len, size - len,
+					        "rtt:   origen %dx%d; muestreo maximo s %.3f t %.3f; sprites que leen fuera del origen: columnas %u "
+					        "(peso max %.3f), filas %u (peso max %.3f); paleta cambia %u; destino %08X %s (otro %u), mezcla %u;",
+					        p->src_w, p->src_h, (double)p->smax, (double)p->tmax, p->beyond_s, (double)p->beyond_ws,
+					        p->beyond_t, (double)p->beyond_wt, p->clut_changes,
+					        (unsigned)(PSP_VRAM_BASE + (p->dest_addr == 0xFFFFFFFFu ? 0 : p->dest_addr)),
+					        p->dest_fmt < 0 ? "-" : p->dest_fmt == SURF_Z ? "Z" : fmts[p->dest_fmt & 3], p->dest_other, p->blend);
+					for(q = 0; q < 4 && len < size; q++)
+						if(p->kind[q].n)
+							len += (size_t)snprintf(buf + len, size - len, " %dx%d u=%.3fx%+.3f v=%.3fy%+.3f (%u)",
+							        p->kind[q].w, p->kind[q].h, (double)p->kind[q].ku, (double)p->kind[q].du,
+							        (double)p->kind[q].kv, (double)p->kind[q].dv, p->kind[q].n);
+					if(len < size) len += (size_t)snprintf(buf + len, size - len, "\n");
+				}
 			}
 		}
 	}
@@ -2207,7 +2428,11 @@ void gx_ge_rtt_report(char *buf, size_t size){
 			        t->fmt == SURF_Z || !has_alpha_fmt(t->fmt) ? "-" : am[t->amode < 3 ? t->amode : 0]);
 			if(len < size && t->fmt != SURF_Z && has_alpha_fmt(t->fmt) && t->amode == A_UNIFORM)
 				len += (size_t)snprintf(buf + len, size - len, " %d", t->ualpha);
-			if(len < size) len += (size_t)snprintf(buf + len, size - len, "\n");
+			if(len < size)
+				len += (size_t)snprintf(buf + len, size - len,
+				        "; primer dibujo tapa todo: opaco %u, con mezcla %u; VRAM escrita %u; ms: bajar %u, subir %u, decodificar %u\n",
+				        t->cover_opaque, t->cover_blend, t->vram_writes, tk_ms(t->dl_ticks), tk_ms(t->up_ticks),
+				        tk_ms(t->dec_ticks));
 		}
 	}
 	if(len && len < size && buf[len - 1] == '\n') buf[--len] = 0;
@@ -2222,6 +2447,9 @@ void gx_ge_rtt_report(char *buf, size_t size){
 	memset(rtt_dx, 0, sizeof(rtt_dx)); memset(rtt_dx_wait, 0, sizeof(rtt_dx_wait));
 	memset(rtt_dx_conv, 0, sizeof(rtt_dx_conv));
 	memset(rtt_cmd_n, 0, sizeof(rtt_cmd_n));
+	memset(rtt_dx_rows, 0, sizeof(rtt_dx_rows)); memset(rtt_dx_rows_all, 0, sizeof(rtt_dx_rows_all));
+	memset(rtt_dx_pad, 0, sizeof(rtt_dx_pad));
+	rtt_nclut = 0;
 	rtt_npair = 0;
 	rtt_uploads = 0;
 	rtt_up_ticks = 0;
