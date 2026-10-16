@@ -1016,7 +1016,11 @@ decodificador propio. En x86, en PowerPC (GCC 13) y con ge_vertex.c
 compilado por devkitPPC en qemu, con `psq_l` emulado por SIGILL (438179
 cargas): 0 diferencias, huellas sin cambios (x86 4D4A1D8B, PowerPC
 0657B177, devkitPPC B3A2BCD3); las mutaciones a mano se detectan.
-pspautotests A/B: ver abajo.
+pspautotests A/B en MR con los tres interruptores: x86, 275 programas,
+solo `malloc/malloc` (el ruido de siempre); PowerPC, los 97 de gpu/, solo
+`gpu/complex` (la última región de la RAM cambia con la hora de cada
+corrida; la imagen es igual, y dos corridas seguidas dan lo mismo con y
+sin). Los programas de tests/guest pasan.
 
 Autotest: tres corridas: sin (los tres nuevos apagados), con (encendidos)
 y verif (encendidos y `ge_verificar`).
