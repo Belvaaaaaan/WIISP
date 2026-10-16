@@ -384,6 +384,46 @@ static u32 prof_vblanks;   /* hle_run_frame lleva la cuenta */
 
 void hle_set_profile_hook(void (*fn)(char *buf, size_t size)){ profile_hook = fn; }
 
+/* prof_tirones: tiempo real de cada vblank emulado. Los de más de
+   TIRON_MS son tirones: cuántos, cuánto suman, en qué cubetas se fue su
+   tiempo y el peor (con su momento en el juego). Lo que tarda escribir el
+   propio informe no cuenta. */
+#define TIRON_MS 50
+static struct {
+	int valid;
+	u64 last, last_acc[PROF_N];
+	u32 hist[6], n;
+	u64 ticks, acc[PROF_N];
+	u64 worst, worst_acc[PROF_N], worst_cycles;
+} tir;
+
+static void tirones_tick(void){
+	u64 d;
+	int i, b;
+	if(!prof_clock || !prof_hz) return;
+	prof_flush();
+	if(tir.valid){
+		u64 ms;
+		d = prof_last - tir.last;
+		ms = d * 1000 / prof_hz;
+		b = ms <= 20 ? 0 : ms <= 33 ? 1 : ms <= 50 ? 2 : ms <= 100 ? 3 : ms <= 250 ? 4 : 5;
+		tir.hist[b]++;
+		if(ms > TIRON_MS){
+			tir.n++;
+			tir.ticks += d;
+			for(i = 0; i < PROF_N; i++) tir.acc[i] += prof_acc[i] - tir.last_acc[i];
+			if(d > tir.worst){
+				tir.worst = d;
+				tir.worst_cycles = cpu_cycles;
+				for(i = 0; i < PROF_N; i++) tir.worst_acc[i] = prof_acc[i] - tir.last_acc[i];
+			}
+		}
+	}
+	tir.valid = 1;
+	tir.last = prof_last;
+	memcpy(tir.last_acc, prof_acc, sizeof(tir.last_acc));
+}
+
 static void profile_snapshot(void){
 	prof_flush();
 	prof_base.valid = 1;
@@ -462,6 +502,17 @@ static void profile_ge_lines(const GeStats *g, const GeStats *b, u32 vblanks){
 		ge_vdec_verif_report(line, sizeof(line));
 		hle_log("[TIEMPOS] %s\n", line);
 	}
+	if(opt_on[OPT_GE_ESTADO_SUCIO] && g->es_gx - b->es_gx + g->es_tri - b->es_tri)
+		hle_log("[TIEMPOS] Estado sucio (ge_estado_sucio): estado de GX que poner %u veces, %.0f%% sin emitir (el mismo); "
+		        "triangulos a GX %u, %.0f%% sin preparar nada\n", (unsigned)(g->es_gx - b->es_gx),
+		        pct(g->es_gx_saltado - b->es_gx_saltado, g->es_gx - b->es_gx), (unsigned)(g->es_tri - b->es_tri),
+		        pct(g->es_tri_listo - b->es_tri_listo, g->es_tri - b->es_tri));
+	if(opt_on[OPT_GE_VERIF] && opt_on[OPT_GE_ESTADO_SUCIO])
+		hle_log("[TIEMPOS] Verificacion del estado de GX (ge_verificar): %u emisiones que se habrian saltado comparadas con "
+		        "libogc, %u distintas (%u sin poder leer libogc); triangulos sin preparar %u comparados, %u distintos\n",
+		        (unsigned)(g->es_gx_verif - b->es_gx_verif), (unsigned)(g->es_gx_verif_bad - b->es_gx_verif_bad),
+		        (unsigned)(g->es_gx_verif_sin - b->es_gx_verif_sin), (unsigned)(g->es_tri_verif - b->es_tri_verif),
+		        (unsigned)(g->es_tri_verif_bad - b->es_tri_verif_bad));
 	if(opt_on[OPT_PROF_ESTADO]){
 		static char cs[1536];
 		char *p = cs;
@@ -581,6 +632,31 @@ void hle_profile_report(const char *why){
 		len += (size_t)snprintf(line + len, sizeof(line) - len, " %s %.1f%%", names[b], 100.0 * (double)d[b] / (double)total);
 	}
 	hle_log("%s\n", line);
+	if(opt_on[OPT_PROF_TIRONES] && tir.valid){
+		u64 sum = 0;
+		hle_log("[TIEMPOS] Tirones (prof_tirones): vblanks por tiempo real: hasta 20 ms %u, 20-33 %u, 33-50 %u, 50-100 %u, "
+		        "100-250 %u, mas %u; de mas de %d ms: %u (%.1f s)\n", (unsigned)tir.hist[0], (unsigned)tir.hist[1],
+		        (unsigned)tir.hist[2], (unsigned)tir.hist[3], (unsigned)tir.hist[4], (unsigned)tir.hist[5], TIRON_MS,
+		        (unsigned)tir.n, (double)tir.ticks / (double)prof_hz);
+		for(i = 0; i < PROF_N; i++) sum += tir.acc[i];
+		if(tir.n && sum){
+			len = (size_t)snprintf(line, sizeof(line), "[TIEMPOS] Tirones: su tiempo en");
+			for(i = 0; i < PROF_N && len < sizeof(line) - 32; i++)
+				if(tir.acc[i] * 50 >= sum)   /* desde el 2 % */
+					len += (size_t)snprintf(line + len, sizeof(line) - len, " %s %.1f%%", names[i], 100.0 * (double)tir.acc[i] / (double)sum);
+			len += (size_t)snprintf(line + len, sizeof(line) - len, "; el peor %.0f ms a los %.1f s de juego:",
+			                        1000.0 * (double)tir.worst / (double)prof_hz, (double)tir.worst_cycles / (double)PSP_CPU_HZ);
+			for(i = 0; i < PROF_N && len < sizeof(line) - 32; i++)
+				if(tir.worst_acc[i] * 50 >= tir.worst)
+					len += (size_t)snprintf(line + len, sizeof(line) - len, " %s %.0f ms", names[i],
+					                        1000.0 * (double)tir.worst_acc[i] / (double)prof_hz);
+			hle_log("%s\n", line);
+		}
+		memset(tir.hist, 0, sizeof(tir.hist));
+		memset(tir.acc, 0, sizeof(tir.acc));
+		tir.n = 0;
+		tir.ticks = tir.worst = 0;
+	}
 	hle_log("[TIEMPOS] GE: %u listas, %u comandos, %u vertices, %u primitivas | %llu syscalls, %llu cambios de hilo, "
 	        "%llu llamadas al juego\n",
 	        ge.lists - prof_base.ge.lists, ge.commands - prof_base.ge.commands, ge.vertices - prof_base.ge.vertices,
@@ -604,6 +680,7 @@ void hle_profile_report(const char *why){
 	}
 	hle_log_sync();
 	profile_snapshot();
+	tir.valid = 0;   /* lo que tardó el informe no es un tirón */
 }
 
 static void profile_tick(void){
@@ -802,6 +879,8 @@ int hle_run_frame(void){
 	vfpu_stats_fold();
 	log_tick();
 	prof_vblanks++;
+	if(opt_on[OPT_PROF_TIRONES]) tirones_tick();
+	else tir.valid = 0;
 	profile_tick();
 	frame = cpu_cycles / CYCLES_PER_FRAME;
 	if(exited || !frame) return exited;

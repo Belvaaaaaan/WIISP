@@ -339,32 +339,40 @@ static void compute_sampler_state(void){
 static void compute_self_texture(void);
 
 /* Censo de estado (prof_estado): el estado del rasterizador comparado con
-   el de la llamada anterior (ver ge.c). También cambia con el renderizador. */
+   el de la llamada anterior (ver ge.c) */
 static struct {
 	int valid;
-	const GeHwRenderer *hw;
 	GeRasterState rs;
 } cs;
 
-static void __attribute__((noinline)) census_r(void){
+/* El estado sin la instantánea del caché de texturas (es de cada primitiva),
+   con el relleno: se compara con memcmp */
+static void raster_copy(GeRasterState *out){
+	memcpy(out, &rs, sizeof(*out));
+	memset(out->snap, 0, sizeof(out->snap));
+	memset(out->snap_size, 0, sizeof(out->snap_size));
+}
+
+static void __attribute__((noinline)) census_r(int clean){
 	GeRasterState now;
-	memcpy(&now, &rs, sizeof(now));   /* con el relleno: se compara con memcmp */
-	/* Sin la instantánea del caché de texturas: es de cada primitiva */
-	memset(now.snap, 0, sizeof(now.snap));
-	memset(now.snap_size, 0, sizeof(now.snap_size));
-	if(cs.hw != ge_hw){ cs.hw = ge_hw; ge_sucio = GE_SUCIO_TODO; }
+	raster_copy(&now);
 	if(cs.valid){
 		int eq = !memcmp(&cs.rs, &now, sizeof(now));
 		ge_stats.cs_r++;
 		ge_stats.cs_r_igual += eq;
-		if(!(ge_sucio & GE_SUCIO_R)){ ge_stats.cs_r_limpio++; ge_stats.cs_r_error += !eq; }
+		if(clean){ ge_stats.cs_r_limpio++; ge_stats.cs_r_error += !eq; }
 	}
-	ge_sucio &= ~(u32)GE_SUCIO_R;
 	memcpy(&cs.rs, &now, sizeof(now));
 	cs.valid = 1;
 }
 
-void ge_raster_begin(void){
+/* ge_estado_sucio: el estado solo se calcula si un comando que lo lee cambió
+   de valor (ge_sucio) o el bit de through del tipo de vértice */
+u32 ge_raster_gen;
+static int rs_ok;
+static u32 rs_through;
+
+static void raster_compute(void){
 	int sx2, sy2;
 	compute_pixel_state();
 	rs.enable_textures = ge_on(GE_TEXTUREMAPENABLE) && !rs.clear_mode;
@@ -373,7 +381,6 @@ void ge_raster_begin(void){
 		if(!ge_hw) compute_self_texture();
 		else rs.self_texture = 0;
 	} else rs.self_texture = 0;
-	memset(rs.snap, 0, sizeof(rs.snap));
 	rs.shade_gouraud = !(ge.cmd[GE_CLEARMODE] & 1) && (ge.cmd[GE_SHADEMODE] & 1);
 	rs.through_mode = (ge.cmd[GE_VERTEXTYPE] >> 23) & 1;
 	rs.antialias_lines = ge_on(GE_ANTIALIASENABLE);
@@ -386,7 +393,33 @@ void ge_raster_begin(void){
 	rs.sc_y1 = (int)((ge.cmd[GE_SCISSOR1] >> 10) & 0x3FF) * SSF;
 	rs.sc_x2 = sx2 * SSF + SSF - 1;
 	rs.sc_y2 = sy2 * SSF + SSF - 1;
-	if(opt_on[OPT_PROF_ESTADO]) census_r();
+}
+
+static void __attribute__((noinline)) raster_verif(void){
+	static GeRasterState old, now;
+	raster_copy(&old);
+	raster_compute();
+	raster_copy(&now);
+	if(memcmp(&old, &now, sizeof(now))){
+		ge_estado_verif_note(2, 1);
+		ge_raster_gen++;   /* el de verdad es el recalculado: GX tiene que verlo */
+	} else ge_estado_verif_note(2, 0);
+}
+
+void ge_raster_begin(void){
+	u32 through = ge.cmd[GE_VERTEXTYPE] & 0x800000u;
+	int clean = rs_ok && rs_through == through && !(ge_sucio & GE_SUCIO_R);
+	memset(rs.snap, 0, sizeof(rs.snap));
+	if(opt_on[OPT_GE_ESTADO_SUCIO] && clean){
+		if(opt_on[OPT_GE_VERIF]) raster_verif();
+	} else {
+		raster_compute();
+		ge_raster_gen++;
+	}
+	ge_sucio &= ~(u32)GE_SUCIO_R;
+	rs_ok = 1;
+	rs_through = through;
+	if(opt_on[OPT_PROF_ESTADO]) census_r(clean);
 	if(ge_hw) ge_hw->begin();
 }
 

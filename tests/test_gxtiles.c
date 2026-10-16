@@ -40,6 +40,7 @@ static void setup_clut_texture(int fmt, int w, int h, u32 cf){
 	ge.cmd[GE_TEXSIZE0] = (u32)(__builtin_ctz((unsigned)w) | (__builtin_ctz((unsigned)h) << 8));
 	ge.cmd[GE_TEXFORMAT] = (u32)fmt;
 	ge.cmd[GE_CLUTFORMAT] = cf;
+	ge_sucio = GE_SUCIO_TODO;   /* ge.cmd escrito a mano, no por una lista */
 	ge_raster_begin();
 }
 
@@ -139,6 +140,7 @@ void test_gxtiles(void){
 		ge.cmd[GE_TEXSIZE0] = 6 | (5 << 8);
 		ge.cmd[GE_TEXFORMAT] = (u32)fmt;
 		ge.cmd[GE_CLUTFORMAT] = cf;
+		ge_sucio = GE_SUCIO_TODO;   /* ge.cmd escrito a mano, no por una lista */
 		ge_raster_begin();
 		ge_texture_decode(0, whole, w, h, w);
 		ge_clut16_32_prepare();

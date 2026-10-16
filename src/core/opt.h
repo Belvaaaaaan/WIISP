@@ -28,6 +28,8 @@ enum {
 	OPT_PROF_PMC,         /* 0.2 contadores del Broadway y muestreo */
 	OPT_PROF_ESTADO,      /* censo: qué parte del estado de cada llamada de
 	                         dibujo se repite (para 1.4); solo mide */
+	OPT_PROF_TIRONES,     /* censo de tirones: los cuadros que tardan mucho
+	                         más de lo normal y en qué se fue el tiempo */
 	/* Primera tanda del GE (resultado idéntico) */
 	OPT_GE_SKIN_RAPIDO,   /* skinning mezclando las matrices por peso */
 	OPT_GE_MTX_CACHE,     /* matrices combinadas solo cuando cambian */
@@ -55,6 +57,10 @@ enum {
 	OPT_GE_ENSAMBLAR,     /* ensamblar triángulos sin copiar vértices, con
 	                         los descartes de cada vértice ya calculados */
 	OPT_GE_BBOX,          /* 1.3 descarte por caja envolvente */
+	OPT_GE_ESTADO_SUCIO,  /* 1.4, primera parte: el estado de una llamada de
+	                         dibujo (formato, transformación, rasterizador,
+	                         estado de GX y la preparación de cada
+	                         triángulo) solo se rehace si algo cambió */
 	OPT_GE_CHAROLAS,      /* 1.4 agrupar llamadas de dibujo */
 	/* Fase 2: intérprete cacheado */
 	OPT_CPU_SIN_EXTRA,    /* 2.1 sin costo por instrucción */

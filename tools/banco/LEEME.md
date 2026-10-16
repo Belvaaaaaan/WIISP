@@ -31,6 +31,12 @@ al repositorio), `gcc-powerpc-linux-gnu` y `qemu-user`. Las salidas van a
 - `build_tests_dkp.sh`: las pruebas del PC con ge_vertex.c y test_gxemit.c
   compilados por devkitPPC; correr `qemu-ppc $SALIDA/tests-dkp` desde la
   raíz del repositorio. Huella de test_vdec con devkitPPC: B3A2BCD3.
+- `build_cli_gx.sh` + `stub_estado.c`: el CLI dibujando por gx_ge.c
+  (compilado con devkitPPC) sobre una libogc de mentira que guarda el
+  estado de GX: al salir escribe `[GX] N dibujos, huella X`, la de todo el
+  estado de GX en cada dibujo. Con `ab_opt.py` (CLI = un guion que llame a
+  `qemu-ppc $SALIDA/wiisp-cli-gx`) compara dos versiones del renderizador
+  de GX en todas las pspautotests.
 - `ab_opt.py`: pspautotests A/B con un interruptor a 0 y a 1
   (`ab_opt.py CLI PSPAUTOTESTS LISTA SALIDA opcion[,opcion] [hilos] [MR]`).
   `gpu/complex` y `malloc/malloc` cambian entre corridas (fechas, malloc).

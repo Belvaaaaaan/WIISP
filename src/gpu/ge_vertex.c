@@ -1893,8 +1893,12 @@ static void verify_end(const VFormat *f, const u8 *p, int n, const GeClipVertex 
 
 void ge_vdec_verif_report(char *buf, size_t size){
 	snprintf(buf, size, "Verificacion (ge_verificar): vertices %u comparados, %u distintos; descartes de triangulos "
-	         "%u comparados, %u distintos", (unsigned)verif_vertices, (unsigned)verif_bad, (unsigned)verif_tris,
-	         (unsigned)verif_tris_bad);
+	         "%u comparados, %u distintos; estado guardado (ge_estado_sucio): uv y morph %u/%u, transformacion %u/%u, "
+	         "rasterizador %u/%u (comparados/distintos)", (unsigned)verif_vertices, (unsigned)verif_bad, (unsigned)verif_tris,
+	         (unsigned)verif_tris_bad, (unsigned)ge_estado_verif[0][0], (unsigned)ge_estado_verif[0][1],
+	         (unsigned)ge_estado_verif[1][0], (unsigned)ge_estado_verif[1][1], (unsigned)ge_estado_verif[2][0],
+	         (unsigned)ge_estado_verif[2][1]);
+	memset(ge_estado_verif, 0, sizeof(ge_estado_verif));
 	verif_vertices = verif_bad = 0;
 	verif_tris = verif_tris_bad = 0;
 }
@@ -2158,6 +2162,15 @@ static void load_morph_weights(void){
 static u32 imm_prim = 0xFFFFFFFFu, imm_flags;
 static int imm_first_sent;
 
+/* Estado guardado de ge_estado_sucio (ver ge_draw_prim) */
+static struct {
+	int f_ok, v_ok, t_ok;
+	u32 f_vt, v_key, t_key;
+	VFormat f;
+	int fast;
+	const GeHwRenderer *hw;
+} es;
+
 /* --- Censo de estado (prof_estado): formato y transformación ---------------
    Lo calculado en cada llamada comparado con la anterior (ver ge.c) */
 static struct {
@@ -2181,6 +2194,8 @@ void ge_vertex_test_reset(void){
 	imm_first_sent = 0;
 	mc.valid = 0;
 	cs.valid = 0;
+	es.f_ok = es.v_ok = es.t_ok = 0;
+	ge_sucio = GE_SUCIO_TODO;
 }
 
 void ge_test_decode_vertex(u32 vt, const u8 *p, float *pos, float *nrm){
@@ -2265,25 +2280,19 @@ void ge_vtype_census(char *buf, size_t size){
 	vt_other = 0;
 }
 
-static void __attribute__((noinline)) census_vt(const VFormat *f){
-	int v_eq, t_eq;
-	/* Otro interruptor cambia lo que se calcula: todo de nuevo */
-	if(memcmp(cs.opt, opt_on, sizeof(cs.opt))){
-		memcpy(cs.opt, opt_on, sizeof(cs.opt));
-		ge_sucio = GE_SUCIO_TODO;
-	}
+static void __attribute__((noinline)) census_vt(const VFormat *f, int v_clean, int t_clean){
 	if(cs.valid){
-		v_eq = !memcmp(&cs.f, f, sizeof(*f)) && cs.uv_prescale == uv_prescale &&
-		       !memcmp(cs.uv_ps_scale, uv_ps_scale, sizeof(uv_ps_scale)) && !memcmp(cs.uv_ps_off, uv_ps_off, sizeof(uv_ps_off)) &&
-		       !memcmp(cs.morph, morph_weights, sizeof(morph_weights));
-		t_eq = !memcmp(&cs.ts, &ts, sizeof(ts)) && cs.nlights == ts_nlights;
+		/* El formato se guarda aparte, por su tipo de vértice: V son las uv y el morph */
+		int v_eq = cs.uv_prescale == uv_prescale &&
+		           !memcmp(cs.uv_ps_scale, uv_ps_scale, sizeof(uv_ps_scale)) && !memcmp(cs.uv_ps_off, uv_ps_off, sizeof(uv_ps_off)) &&
+		           !memcmp(cs.morph, morph_weights, sizeof(morph_weights));
+		int t_eq = !memcmp(&cs.ts, &ts, sizeof(ts)) && cs.nlights == ts_nlights;
 		ge_stats.cs_vt++;
 		ge_stats.cs_v_igual += v_eq;
 		ge_stats.cs_t_igual += t_eq;
-		if(!(ge_sucio & GE_SUCIO_V)){ ge_stats.cs_v_limpio++; ge_stats.cs_v_error += !v_eq; }
-		if(!(ge_sucio & GE_SUCIO_T)){ ge_stats.cs_t_limpio++; ge_stats.cs_t_error += !t_eq; }
+		if(v_clean){ ge_stats.cs_v_limpio++; ge_stats.cs_v_error += !v_eq; }
+		if(t_clean){ ge_stats.cs_t_limpio++; ge_stats.cs_t_error += !t_eq; }
 	}
-	ge_sucio &= ~(u32)(GE_SUCIO_V | GE_SUCIO_T);
 	memcpy(&cs.f, f, sizeof(*f));   /* con el relleno: se compara con memcmp */
 	cs.uv_prescale = uv_prescale;
 	memcpy(cs.uv_ps_scale, uv_ps_scale, sizeof(uv_ps_scale));
@@ -2294,24 +2303,98 @@ static void __attribute__((noinline)) census_vt(const VFormat *f){
 	cs.valid = 1;
 }
 
+/* --- Estado sucio (ge_estado_sucio): formato y transformación ---------------
+   El formato es función del tipo de vértice; las uv, el morph (V) y la
+   transformación (T) solo se rehacen si un comando que los lee cambió de
+   valor (ge_sucio, ver ge.c) o si cambian los bits del tipo de vértice que
+   leen: through para V; through y si hay color para T. Con ge_verificar se
+   calculan siempre y se comparan con lo guardado. */
+
+u32 ge_estado_verif[3][2];   /* V, T y R: comparados y distintos */
+static u32 es_verif_logged;
+
+/* Otra matemática u otro renderizador: todo de nuevo (lo guardado no depende
+   de ningún interruptor: compute_transform_state, lighting_compute_state,
+   setup_uv_prescale y el rasterizador no los leen) */
+static void __attribute__((noinline)) estado_entorno_cambia(void){
+	es.fast = ge_fast_math;
+	es.hw = ge_hw;
+	ge_sucio = GE_SUCIO_TODO;
+}
+
+static inline void estado_entorno(void){
+	if(es.fast != ge_fast_math || es.hw != ge_hw) estado_entorno_cambia();
+}
+
+void ge_estado_verif_note(int grupo, int distinto){
+	static const char *const nombre[3] = { "uv y morph", "transformacion", "rasterizador" };
+	ge_estado_verif[grupo][0]++;
+	if(!distinto) return;
+	ge_estado_verif[grupo][1]++;
+	if(es_verif_logged++ < 16)
+		hle_log_quiet("[VERIF] estado: %s guardado distinto del recalculado (tipo de vertice %06X)\n", nombre[grupo],
+		              (unsigned)ge.cmd[GE_VERTEXTYPE]);
+}
+
+/* Uv y morph; con skip, solo para comprobar lo guardado (ge_verificar) */
+static void __attribute__((noinline)) estado_v(const VFormat *f, int skip){
+	int old_pre = uv_prescale;
+	float old_s[2], old_o[2], old_m[8];
+	if(skip){
+		memcpy(old_s, uv_ps_scale, sizeof(old_s));
+		memcpy(old_o, uv_ps_off, sizeof(old_o));
+		memcpy(old_m, morph_weights, sizeof(old_m));
+	}
+	load_morph_weights();
+	setup_uv_prescale(f);
+	if(skip)
+		ge_estado_verif_note(0, old_pre != uv_prescale || memcmp(old_s, uv_ps_scale, sizeof(old_s)) ||
+		                        memcmp(old_o, uv_ps_off, sizeof(old_o)) || memcmp(old_m, morph_weights, sizeof(old_m)));
+}
+
+static void __attribute__((noinline)) estado_t_verif(const VFormat *f){
+	static TState old;
+	u32 old_n = ts_nlights;
+	memcpy(&old, &ts, sizeof(ts));
+	compute_transform_state(f);
+	ge_estado_verif_note(1, memcmp(&old, &ts, sizeof(ts)) || old_n != ts_nlights);
+}
+
 void ge_draw_prim(u32 prim, u32 count){
 	VFormat f;
 	VSource vr;
-	u32 vaddr = ge.vaddr, iaddr = ge.iaddr;
+	u32 vaddr = ge.vaddr, iaddr = ge.iaddr, vt = ge.cmd[GE_VERTEXTYPE];
+	int sucio = opt_on[OPT_GE_ESTADO_SUCIO];
 
 	if(count == 0) return;
-	vformat_setup(&f, ge.cmd[GE_VERTEXTYPE]);
+	if(sucio || opt_on[OPT_PROF_ESTADO]) estado_entorno();
+	if(sucio && es.f_ok && es.f_vt == vt) memcpy(&f, &es.f, sizeof(f));
+	else {
+		vformat_setup(&f, vt);
+		memcpy(&es.f, &f, sizeof(f));
+		es.f_vt = vt;
+		es.f_ok = 1;
+	}
 	if(!mem_valid(vaddr, 1)) return;
 	if(f.idx && !mem_valid(iaddr, 1)) return;
 
 	/* Sin formato de posición (o en turbo) no se dibuja, pero se avanza */
 	if(f.pos && !ge_turbo){
-		int phase;
+		int phase, verif = opt_on[OPT_GE_VERIF];
+		u32 v_key = vt & 0x800000u, t_key = v_key | (f.col != 0);
+		int v_clean = es.v_ok && es.v_key == v_key && !(ge_sucio & GE_SUCIO_V);
+		int t_clean = es.t_ok && es.t_key == t_key && !(ge_sucio & GE_SUCIO_T);
 		GE_PROF_T0;
-		load_morph_weights();
-		setup_uv_prescale(&f);
-		compute_transform_state(&f);
-		if(opt_on[OPT_PROF_ESTADO]) census_vt(&f);
+		if(!(sucio && v_clean)){
+			load_morph_weights();
+			setup_uv_prescale(&f);
+		} else if(verif) estado_v(&f, 1);
+		if(!(sucio && t_clean)) compute_transform_state(&f);
+		else if(verif) estado_t_verif(&f);
+		ge_sucio &= ~(u32)(GE_SUCIO_V | GE_SUCIO_T);
+		es.v_key = v_key; es.t_key = t_key;
+		es.v_ok = es.t_ok = 1;
+		if(opt_on[OPT_PROF_ESTADO]) census_vt(&f, v_clean, t_clean);
 		phase = prof_ge_enter(GEF_LEER);
 		vsource_init(&vr, &f, vaddr, iaddr, (int)count);
 		vsource_batch(&vr, (int)count);

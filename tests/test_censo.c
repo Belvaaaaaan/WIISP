@@ -5,6 +5,8 @@
  * comandos al azar entre medias (por el mismo camino que una lista); un
  * grupo que sale distinto sin estar marcado es un comando que falta en la
  * tabla de ge.c. Con fallos metidos a propósito, se tienen que ver.
+ * Después lo mismo con ge_estado_sucio (lo guardado en vez de recalcular)
+ * y ge_verificar: lo guardado tiene que ser siempre lo recalculado.
  *
  * SPDX-License-Identifier: GPL-2.0-or-later
 **/
@@ -140,6 +142,8 @@ void test_censo(void){
 	ge_hw = &null_hw;
 	ge_fast_math = 1;
 	opt_on[OPT_PROF_ESTADO] = 1;
+	opt_on[OPT_GE_ESTADO_SUCIO] = 0;   /* el censo mide lo que se calcula cada vez */
+	opt_on[OPT_GE_VERIF] = 0;
 	ge_vertex_test_reset();
 	run(400, &ev, &et, &er, &lim, &dist);
 	printf("  %u comparaciones limpias, %u distintas; errores V %u, T %u, R %u\n", (unsigned)lim, (unsigned)dist,
@@ -174,6 +178,40 @@ void test_censo(void){
 		       (unsigned)ev, (unsigned)et, (unsigned)er);
 		CHECK((mut[i].grupo[0] == 'V' ? ev : mut[i].grupo[0] == 'T' ? et : er) > 0);
 	}
+	/* ge_estado_sucio: lo guardado contra lo recalculado */
+	printf("Estado sucio (ge_estado_sucio): lo guardado contra lo recalculado\n");
+	opt_on[OPT_PROF_ESTADO] = 0;
+	opt_on[OPT_GE_ESTADO_SUCIO] = 1;
+	opt_on[OPT_GE_VERIF] = 1;
+	memset(ge_estado_verif, 0, sizeof(ge_estado_verif));
+	ge_vertex_test_reset();
+	run(400, &ev, &et, &er, &lim, &dist);
+	{
+		u32 c;
+		for(c = 0; c < 256; c++){
+			if(avoided(c)) continue;
+			focus = (int)c;
+			run(12, &ev, &et, &er, &lim, &dist);
+		}
+		focus = -1;
+	}
+	printf("  comparados: uv y morph %u, transformacion %u, rasterizador %u; distintos %u, %u, %u\n",
+	       (unsigned)ge_estado_verif[0][0], (unsigned)ge_estado_verif[1][0], (unsigned)ge_estado_verif[2][0],
+	       (unsigned)ge_estado_verif[0][1], (unsigned)ge_estado_verif[1][1], (unsigned)ge_estado_verif[2][1]);
+	CHECK(ge_estado_verif[0][0] > 1000 && ge_estado_verif[1][0] > 1000 && ge_estado_verif[2][0] > 1000);
+	CHECK_EQ(ge_estado_verif[0][1] + ge_estado_verif[1][1] + ge_estado_verif[2][1], 0u);
+	for(i = 0; i < sizeof(mut) / sizeof(mut[0]); i++){
+		int g = mut[i].grupo[0] == 'V' ? 0 : mut[i].grupo[0] == 'T' ? 1 : 2;
+		memset(ge_estado_verif, 0, sizeof(ge_estado_verif));
+		old = ge_test_census_group(mut[i].cmd, 0);
+		focus = (int)mut[i].cmd;
+		run(300, &ev, &et, &er, &lim, &dist);
+		focus = -1;
+		ge_test_census_group(mut[i].cmd, old);
+		printf("  sin el comando 0x%02X en %s: %u distintos\n", (unsigned)mut[i].cmd, mut[i].grupo, (unsigned)ge_estado_verif[g][1]);
+		CHECK(ge_estado_verif[g][1] > 0);
+	}
+	memset(ge_estado_verif, 0, sizeof(ge_estado_verif));
 	memcpy(opt_on, saved_opt, sizeof(saved_opt));
 	ge_fast_math = saved_fast;
 	ge_hw = saved_hw;

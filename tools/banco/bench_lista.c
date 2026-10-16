@@ -79,6 +79,7 @@ int main(int argc, char **argv){
 	end = lp;
 	bench_run_list(start, end);
 	if(opt_on[OPT_PROF_ESTADO]){ static char b[2048]; GeStats z; memset(&z, 0, sizeof(z)); ge_state_census_report(&ge_stats, &z, b, sizeof(b)); printf("%s\n", b); }
+	printf("estado de GX %u veces, %u sin emitir; triangulos %u, %u sin preparar\n", ge_stats.es_gx, ge_stats.es_gx_saltado, ge_stats.es_tri, ge_stats.es_tri_listo);
 	printf("%u comandos, %u vertices, %u triangulos, %u primitivas\n", ge_stats.commands, ge_stats.vertices, ge_stats.tris, ge_stats.primitives);
 	return 0;
 }

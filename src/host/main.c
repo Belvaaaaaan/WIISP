@@ -274,6 +274,11 @@ static void mode_text(char *buf, size_t size){
 	         app_turbo() ? " TURBO" : "");
 }
 
+#if !defined(_WIN32)
+/* Pruebas (tools/banco): otro renderizador en lugar del de software */
+void host_renderer_hook(void) __attribute__((weak));
+#endif
+
 int main(int argc, char **argv){
 	int max_imports = 16, run = 0, frames = 1800, i, exited = 0, every = 0;
 	const char *path = NULL, *imports = NULL, *screenshot = NULL;
@@ -322,6 +327,9 @@ int main(int argc, char **argv){
 		if(r) fprintf(stderr, "[OPT] %s: %s\n", opts[i], r > 0 ? "todavia no esta implementada" : "no se entiende");
 	}
 	if(app_load(path, max_imports, imports)) return 1;
+#if !defined(_WIN32)
+	if(host_renderer_hook) host_renderer_hook();
+#endif
 	if(!run) return 0;
 	if(partidas){
 		char base[600];

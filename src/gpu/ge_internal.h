@@ -112,6 +112,13 @@ extern GeStats ge_stats;
    píxel, muestreo y tijera del rasterizador) */
 enum { GE_SUCIO_V = 1, GE_SUCIO_T = 2, GE_SUCIO_R = 4, GE_SUCIO_TODO = 7 };
 extern u32 ge_sucio;
+/* ge_estado_sucio con ge_verificar: lo guardado comparado con lo recalculado
+   (0 formato, 1 transformación, 2 rasterizador) */
+extern u32 ge_estado_verif[3][2];
+void ge_estado_verif_note(int grupo, int distinto);
+/* Sube cada vez que el estado del rasterizador se calcula de nuevo (el
+   renderizador por hardware sabe así si cambió) */
+extern u32 ge_raster_gen;
 
 /* Qué le pasó al último triángulo (ge_stats): 1 fuera de la pantalla o de
    la tijera, 2 recortado por el plano cercano */

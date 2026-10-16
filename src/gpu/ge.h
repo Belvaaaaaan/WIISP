@@ -64,7 +64,7 @@ typedef struct {
 	u32 cs_huesos, cs_huesos_igual;    /* datos de los huesos */
 	u32 cs_paletas, cs_paletas_igual;  /* LOADCLUT con los bytes que ya había */
 	u32 cs_vt;                          /* llamadas comparadas (formato y transformación) */
-	u32 cs_v_igual, cs_v_limpio, cs_v_error;   /* formato de vértice, uv y morph */
+	u32 cs_v_igual, cs_v_limpio, cs_v_error;   /* uv y morph (el formato va aparte, por tipo de vértice) */
 	u32 cs_t_igual, cs_t_limpio, cs_t_error;   /* transformación y luces */
 	u32 cs_r;                           /* estados del rasterizador comparados */
 	u32 cs_r_igual, cs_r_limpio, cs_r_error;   /* píxel, muestreo y tijera */
@@ -74,6 +74,14 @@ typedef struct {
 	u32 cs_gx, cs_gx_igual, cs_gx_tocado;      /* estado de GX (apply_gx): mismas entradas; GX tocado por otros entre medias */
 	u32 cs_tri, cs_tri_listo, cs_tri_primero, cs_tri_mitad;  /* primitivas a GX; listas sin preparar nada; primeras de su
 	                                                             llamada; no listas a mitad de una llamada */
+
+	/* ge_estado_sucio en GX: estado de GX que había que poner y cuántas veces
+	   no se emitió (el mismo que el anterior); triángulos sin preparar. Con
+	   ge_verificar: emisiones que se habrían saltado comprobadas contra el
+	   estado interno de libogc (y si no se pudo leer), y triángulos sin
+	   preparar comprobados */
+	u32 es_gx, es_gx_saltado, es_tri, es_tri_listo;
+	u32 es_gx_verif, es_gx_verif_bad, es_gx_verif_sin, es_tri_verif, es_tri_verif_bad;
 } GeStats;
 void ge_get_stats(GeStats *out);
 

@@ -39,6 +39,7 @@ void test_texclut(void){
 		ge.cmd[GE_TEXSIZE0] = (u32)ws | ((u32)hs << 8);
 		ge.cmd[GE_TEXFORMAT] = (u32)fmt;
 		ge.cmd[GE_CLUTFORMAT] = clutfmt | (shift << 2) | (mask << 8) | (offset << 16);
+		ge_sucio = GE_SUCIO_TODO;   /* ge.cmd escrito a mano, no por una lista */
 		ge_raster_begin();
 		CHECK_EQ(ge_raster_state()->texfmt, fmt);
 		CHECK_EQ(ge_raster_state()->clut_fmt, clutfmt);

@@ -1111,6 +1111,86 @@ V/T/R ni emitir `apply_gx` si sus entradas no cambiaron, y `tri_listo` en
 vez de `prepare_idle` + `drawn` por triángulo); si alguno casi nunca se
 repite, ese se queda fuera.
 
+### Resultado del censo de la 0.5.14.1 (DBZ, una corrida con `prof_estado`)
+
+Errores 0 en todos los bloques (la tabla de grupos está completa). El censo
+cuesta: con él, comandos ~5900 ciclos por llamada (antes ~2900) y estado
+~2800 (antes ~1200); apagado no cuesta nada.
+- Pelea: estado de GX con las mismas entradas el 91-92 % de las llamadas;
+  rasterizador igual 94-95 % (limpio 93 %); transformación igual 99 %,
+  pero limpia solo el 71 % (DBZ alterna formatos con huesos y entonces
+  cualquier cambio del tipo de vértice la marcaba); uv y morph 77 %;
+  `setup_targets` y textura iguales 91-93 %; `LOADCLUT` con la misma paleta
+  solo el 30 % (no compensa); primitivas "listas" solo el 44-54 %, con
+  ~1,4 M por bloque no listas a mitad de llamada: era la condición prudente
+  de `prepare_idle` con alfa por stencil o mezcla con el alfa del destino.
+- Selección de personajes (~79 %): CPU 58 % (32 ciclos por instrucción de
+  la PSP), GE 13,6 %, esperar GX 7,6 %, texturas 5,4 %, E/S 3,6 %. Ahí manda
+  el intérprete (fase 2); lo de 1.4 apenas ayuda (~1-2 %).
+
+### v0.5.15: el estado de cada llamada solo si cambió (`ge_estado_sucio`) y censo de tirones (`prof_tirones`)
+
+`ge_estado_sucio` (encendido; 1.4, primera parte; juntar llamadas sigue
+aparte, `ge_charolas`). Todo idéntico bit a bit:
+- `ge.c`: cada comando que cambia de valor marca en `ge_sucio` los grupos
+  que lo leen (`estado_grupo`, construida al arrancar; unas pocas
+  instrucciones por comando, siempre); los datos de matrices marcan si
+  cambia el valor (huesos, nada). El tipo de vértice no marca: cada grupo
+  mira sus bits.
+- `ge_vertex.c`: el formato se guarda por tipo de vértice; uv y morph (V)
+  solo si V está sucio o cambia el bit de through; la transformación (T)
+  si T está sucio o cambian through o "hay color" (lo único del formato
+  que lee). Lo guardado no depende de ningún interruptor: solo del
+  renderizador y de la matemática rápida (`estado_entorno`).
+- `ge_raster.c`: el estado del rasterizador solo si R está sucio o cambia
+  through; `ge_raster_gen` sube cada vez que se calcula.
+- `gx_ge.c`: `apply_gx` no se emite si su clave (`GxKey`: `ge_raster_gen`,
+  búferes, formato y alfa del destino, textura con los bytes de su objeto
+  de GX, modo y tres comandos) es la de la última emisión y nadie más tocó
+  GX (`gx_tocado`: blit, vuelta a la CPU de las paletas, `set_pf`,
+  presentar, reiniciar). `setup_targets` sigue en cada llamada (sus
+  efectos: bajadas, periodos de las texturas, censo). Por triángulo,
+  `tri_listo` en vez de `prepare_idle` + `drawn` con una condición más fina
+  (`estado_listo`: con stencil o mezcla con el alfa del destino no hay nada
+  que hacer si el búfer ya tiene el alfa en la GPU); lo quitan el inicio de
+  cada llamada, el gancho de la VRAM, las demás primitivas, presentar,
+  reiniciar, la vuelta a la CPU de las paletas y `set_pf`.
+- Con `ge_verificar`: V, T y R se recalculan y se comparan; el estado de GX
+  se emite siempre, y cuando se habría saltado se compara el estado
+  interno de libogc antes y después (`__gxregs`, 0x598 bytes, salvo las
+  banderas sucias de la palabra 48; su dirección se lee de `lis`/`addi` de
+  `GX_SetTevOrder`, comprobado con el `.dol`: 0x804C0D10). Las display
+  lists no sirven para esto: `GX_EndDispList` devuelve el estado interno al
+  de antes. Cada triángulo sin preparar comprueba `estado_listo()`.
+  Líneas `[VERIF] estado`, `[VERIF] estado de GX`, `[VERIF] triangulo` y
+  totales en `[TIEMPOS]`.
+
+Banco de qemu (tiras de 20 vértices, estado repetido): de ~38.500 a ~36.000
+instrucciones por llamada (−2540) en las tres escenas, sin contar libogc
+(en el Wii, ~950 más cuando no se emite GX). Estimación para las peleas
+(~15.600 llamadas/s, con los porcentajes del censo): ~6-7 % del Broadway.
+
+`prof_tirones` (solo mide, apagado): tiempo real de cada vblank;
+`[TIEMPOS] Tirones`: cuántos vblanks hasta 20, 33, 50, 100, 250 ms y más;
+los de más de 50 ms, cuánto suman y en qué cubetas se fue su tiempo; el
+peor, con su momento en el juego (para la selección de personajes).
+
+Verificación: `tests/test_censo.c` también con la caché y `ge_verificar`
+(~27.000 comparados, 0 distintos; las 6 mutaciones se ven); huellas de
+test_vdec sin cambios (x86 4D4A1D8B, PowerPC 0657B177, devkitPPC B3A2BCD3);
+pspautotests A/B con `ge_estado_sucio` en x86 (MR y exacto) y con el
+renderizador de GX bajo qemu (`tools/banco/build_cli_gx.sh`: libogc de
+mentira que guarda el estado, `stub_estado.c`, y una huella del estado de
+GX en cada dibujo): solo el ruido de siempre (`malloc`, `gpu/complex`,
+savedata que no se repite). Los 97 de `gpu/` con GX y `ge_verificar`: 0
+distintos. `tests/guest/ge_vram_mid.c`: vértices leídos de la VRAM del
+propio framebuffer a mitad de llamada; misma huella de GX con y sin, y
+quitando a propósito la invalidación de `tri_listo` del gancho de la VRAM
+la huella cambia y `ge_verificar` lo detecta (y se corrige).
+
+Autotest: sin (`ge_estado_sucio` 0) y con (1), con capturas, `prof_pmc` y
+`prof_tirones`; verif (1 y `ge_verificar`) sin capturas.
+
 ### Para el siguiente chat (empezar aquí)
 
 Metodología acordada (detalle en `docs/HOJA_DE_RUTA.md`): primero medir
@@ -1123,14 +1203,14 @@ Metodología acordada (detalle en `docs/HOJA_DE_RUTA.md`): primero medir
   `ge_z_rango`, `ge_mtx_cache` y `registro_diferido` (0.5.11), `prof_pmc`
   (0.5.11.1), 1.2 `ge_vdec_esp` y `ge_tri_rapido` (0.5.12-0.5.13),
   `gx_envio_rapido`, `ge_ensamblar_rapido` y 1.2b `ge_vdec_psq` (0.5.14) y
-  el censo `prof_estado` (0.5.14.1).
+  el censo `prof_estado` (0.5.14.1), `ge_estado_sucio` y `prof_tirones`
+  (0.5.15).
 - Herramientas para medir sin el Wii (banco de qemu con el código de
   devkitPPC, perfil por función, psq_l emulado, A/B): `tools/banco/LEEME.md`.
-- 0.5.14 comprobada en el Wii (arriba). **En curso: 0.5.14.1, censo del
-  estado por llamada** (arriba). Con su resultado se decide qué entra en la
-  0.5.15 (`ge_estado_sucio`: rehacer el estado solo cuando cambie, plan en
-  la sección de la 0.5.14.1). Juntar llamadas (`ge_charolas`, 1.4) va
-  aparte, después y medido. Después: las esperas al leer vértices
+- **En curso: 0.5.15** (`ge_estado_sucio` y `prof_tirones`, arriba): falta
+  el resultado del Wii (sin/con/verif). Juntar llamadas (`ge_charolas`,
+  1.4) va aparte, después y medido. Con los tirones se decide qué atacar en
+  la selección de personajes (probablemente la fase 2 del intérprete). Después: las esperas al leer vértices
   (`round_to_screen`, la división por w y tres conversiones a entero por la
   memoria; leer va a IPC 0,67). Otros candidatos medidos: leer los
   comandos con un puntero (~56 de las ~80-100 instrucciones por comando),

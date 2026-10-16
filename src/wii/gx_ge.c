@@ -30,6 +30,7 @@
  * SPDX-License-Identifier: GPL-2.0-or-later
 **/
 
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -245,9 +246,18 @@ static int rtt_npal;
 static RttPal *rtt_cur;                 /* la de las primitivas en curso */
 static core_u32 rtt_tex_off = 0xFFFFFFFFu;   /* textura que se está buscando */
 
-/* Censo de estado (prof_estado): avisos que invalidan los destinos y otros
-   cambios del estado de GX entre dos llamadas (ver census_dst y census_gx) */
-static int cs_aviso = 1, cs_tocado = 1, cs_primero;
+/* Censo de estado (prof_estado): avisos que invalidan los destinos entre
+   dos llamadas (census_dst) y primera primitiva de la llamada */
+static int cs_aviso = 1, cs_primero;
+/* Alguien más que apply_gx tocó el estado de GX (copias, vuelta a la CPU de
+   las paletas, formato del EFB, presentar): la próxima vez se emite entero
+   (ge_estado_sucio) */
+static int gx_tocado = 1;
+/* ge_estado_sucio: el próximo triángulo de esta llamada no tiene nada que
+   preparar ni que marcar (lo que miran prepare_idle y drawn). Lo quita todo
+   lo que entra en este archivo desde fuera entre dos triángulos: la llamada
+   siguiente, los ganchos de la VRAM, las demás primitivas, presentar... */
+static int tri_listo;
 static unsigned rtt_dl[RD_N], rtt_dec[RO_N], rtt_gpu, rtt_miss[RM_N];
 static u64 rtt_dl_ticks[RD_N], rtt_dec_ticks[RO_N], rtt_dec_bytes[RO_N];
 static unsigned rtt_dx[DX_N], rtt_uploads;
@@ -346,6 +356,8 @@ static void set_pf(int pf){
 	if(pf == efb_fmt) return;
 	GX_SetPixelFmt((u8)pf, GX_ZC_LINEAR);
 	efb_fmt = pf;
+	gx_tocado = 1;
+	tri_listo = 0;
 }
 
 static int has_alpha_fmt(int fmt){ return fmt == GE_FMT_5551 || fmt == GE_FMT_4444 || fmt == GE_FMT_8888; }
@@ -921,6 +933,7 @@ static int only_padding(const Surface *s, core_u32 off, core_u32 len){
 }
 
 static void vram_hook(core_u32 off, core_u32 len, int write){
+	tri_listo = 0;   /* puede bajar o invalidar el búfer en el que se dibuja */
 	int i;
 	const Surface *clut_s = NULL;
 	acc_off = off;
@@ -1221,7 +1234,7 @@ static void blit(const Surface *c, const Surface *z, int color, int alpha, float
 		GX_SetZCompLoc(GX_TRUE);
 	}
 	gx_dirty = 1;
-	cs_tocado = 1;
+	gx_tocado = 1;
 }
 
 /* --- Restaurar el EFB ---------------------------------------------------------- */
@@ -1876,7 +1889,8 @@ static void clut_gpu_fallback(void){
 	clut_gpu_fallbacks++;
 	cur_tex = lookup_texture(r);
 	gx_dirty = 1;
-	cs_tocado = 1;
+	gx_tocado = 1;
+	tri_listo = 0;
 }
 
 /* --- Estado de GX a partir del GE ---------------------------------------------- */
@@ -1943,19 +1957,18 @@ static void __attribute__((noinline)) census_gx(void){
 	else if(cur_tex){ memcpy(&g.obj, &cur_tex->obj, sizeof(g.obj)); g.levels = cur_tex->levels; }
 	g.mrgb = ge.cmd[GE_MASKRGB]; g.ma = ge.cmd[GE_MASKALPHA]; g.lmode = ge.cmd[GE_LIGHTMODE];
 	ge_stats.cs_gx++;
-	ge_stats.cs_gx_igual += cs_gx_ok && !cs_tocado && !memcmp(&g, &cs_gx, sizeof(g));
-	ge_stats.cs_gx_tocado += cs_tocado;
-	cs_tocado = 0;
+	ge_stats.cs_gx_igual += cs_gx_ok && !gx_tocado && !memcmp(&g, &cs_gx, sizeof(g));
+	ge_stats.cs_gx_tocado += gx_tocado;
 	memcpy(&cs_gx, &g, sizeof(g));
 	cs_gx_ok = 1;
 }
 
 /* Cada primitiva que llega a GX: ¿haría falta preparar algo o marcar el
    búfer como dibujado? (lo que miran prepare_idle y drawn) */
+static int estado_listo(void);
+
 static void __attribute__((noinline)) census_prim(void){
-	int listo = !targets_dirty && !skip_draws && (!touch_c || restored_c) && (!touch_z || !cur_z || restored_z) &&
-	            stencil_val < 0 && !reads_dst_alpha && !want_promote && !gx_dirty &&
-	            !(writes_c && !efb_c_newer) && !(writes_z && cur_z && !efb_z_newer);
+	int listo = estado_listo();
 	ge_stats.cs_tri++;
 	ge_stats.cs_tri_listo += listo;
 	if(cs_primero){ ge_stats.cs_tri_primero++; cs_primero = 0; }
@@ -2404,6 +2417,107 @@ static int prepare_targets(int full){
 	return 1;
 }
 
+/* --- Estado sucio (ge_estado_sucio) en GX ----------------------------------------
+   apply_gx es función de lo que lee: el estado del rasterizador (ge_raster_gen
+   sube cada vez que se calcula de nuevo), los búferes en el EFB, la textura
+   (con los bytes de su objeto de GX) y unos pocos comandos. Si todo es lo de
+   la última vez y nadie más tocó GX (gx_tocado), no hace falta emitirlo. */
+typedef struct {
+	u32 rgen;
+	Surface *c, *z;
+	TexEntry *tex;
+	int fmt, amode, ualpha, w, h, through, tex_on, use_rtt, use_clut, levels, mode;
+	GXTexObj obj;
+	core_u32 mrgb, ma, lmode;
+} GxKey;
+typedef char gx_key_words[sizeof(GxKey) % 4 == 0 ? 1 : -1];
+
+static GxKey gx_key_last;
+static int gx_key_ok;
+
+static void gx_key(GxKey *k){
+	memset(k, 0, sizeof(*k));   /* el relleno también: se compara con memcmp */
+	k->rgen = ge_raster_gen;
+	k->c = cur_c; k->z = cur_z; k->tex = cur_tex;
+	if(cur_c){ k->fmt = cur_c->fmt; k->amode = cur_c->amode; k->ualpha = cur_c->ualpha; k->w = cur_c->w; k->h = cur_c->h; }
+	k->through = through; k->tex_on = tex_on; k->use_rtt = use_rtt; k->use_clut = use_clut_gpu; k->mode = mode;
+	if(use_rtt) memcpy(&k->obj, &rtt_obj, sizeof(k->obj));
+	else if(use_clut_gpu) memcpy(&k->obj, &clut_obj, sizeof(k->obj));
+	else if(cur_tex){ memcpy(&k->obj, &cur_tex->obj, sizeof(k->obj)); k->levels = cur_tex->levels; }
+	k->mrgb = ge.cmd[GE_MASKRGB]; k->ma = ge.cmd[GE_MASKALPHA]; k->lmode = ge.cmd[GE_LIGHTMODE];
+}
+
+/* ge_verificar: el estado interno de libogc (__gxregs, 0x598 bytes; su
+   dirección se lee de las dos primeras instrucciones que la cargan en
+   GX_SetTevOrder). Al volver a emitir lo que se habría saltado, si saltarlo
+   era correcto no cambia nada salvo las banderas de estado sucio (palabra
+   48). Sin él (otra libogc, el banco de qemu) no se comprueba. */
+#define GX_SHADOW_SIZE 0x598
+#define GX_SHADOW_DIRTY 48
+
+static const u8 *gx_shadow(void){
+	static int tried;
+	static const u8 *p;
+	if(!tried){
+		const u32 *code = (const u32 *)(const void *)GX_SetTevOrder;
+		int i, reg = -1;
+		u32 hi = 0;
+		tried = 1;
+		for(i = 0; i < 12 && !p; i++){
+			u32 w = code[i];
+			if((w & 0xFC1F0000u) == 0x3C000000u){ reg = (int)((w >> 21) & 31); hi = w & 0xFFFFu; continue; }   /* lis */
+			if(reg >= 0 && (w >> 26) == 14 && (int)((w >> 21) & 31) == reg && (int)((w >> 16) & 31) == reg)      /* addi */
+				p = (const u8 *)(uintptr_t)((hi << 16) + (u32)(s32)(s16)(w & 0xFFFFu));
+		}
+		if(p && ((uintptr_t)p < 0x80000000u || (uintptr_t)p + GX_SHADOW_SIZE > 0x81800000u)) p = NULL;
+	}
+	return p;
+}
+
+static void __attribute__((noinline)) gx_emit_verify(void){
+	static u8 before[GX_SHADOW_SIZE];
+	static unsigned logged;
+	const u8 *sh = gx_shadow();
+	int i;
+	if(!sh){ ge_stats.es_gx_verif_sin++; apply_gx(); return; }
+	memcpy(before, sh, sizeof(before));
+	apply_gx();
+	ge_stats.es_gx_verif++;
+	for(i = 0; i < GX_SHADOW_SIZE; i++){
+		if(i >= GX_SHADOW_DIRTY && i < GX_SHADOW_DIRTY + 4) continue;
+		if(before[i] != sh[i]) break;
+	}
+	if(i == GX_SHADOW_SIZE) return;
+	ge_stats.es_gx_verif_bad++;
+	if(logged++ < 16)
+		hle_log_quiet("[VERIF] estado de GX: se habria saltado y cambia el byte 0x%03X de libogc (%02X -> %02X)\n",
+		              (unsigned)i, (unsigned)before[i], (unsigned)sh[i]);
+}
+
+/* Palabra a palabra (memcmp de newlib va byte a byte si no sabe la alineación) */
+static inline int gx_key_eq(const GxKey *a, const GxKey *b){
+	const core_u32 *x = (const core_u32 *)(const void *)a, *y = (const core_u32 *)(const void *)b;
+	core_u32 d = 0;
+	unsigned i;
+	for(i = 0; i < sizeof(GxKey) / 4; i++) d |= x[i] ^ y[i];
+	return !d;
+}
+
+static void gx_emit_state(void){
+	GxKey k;
+	gx_key(&k);
+	ge_stats.es_gx++;
+	if(gx_key_ok && !gx_tocado && gx_key_eq(&k, &gx_key_last)){
+		/* Lo mismo que la vez anterior: con ge_verificar se emite igual y se comprueba */
+		if(opt_on[OPT_GE_VERIF]) gx_emit_verify();
+		else ge_stats.es_gx_saltado++;
+		return;
+	}
+	apply_gx();
+	memcpy(&gx_key_last, &k, sizeof(k));
+	gx_key_ok = 1;
+}
+
 /* Después: alfa por píxel si hace falta y estado de GX */
 static void prepare_state(void){
 	if(stencil_val >= 0 && !(cur_c->amode == A_UNIFORM && stencil_val == cur_c->ualpha)) want_promote = 1;
@@ -2416,7 +2530,9 @@ static void prepare_state(void){
 		u64 t0 = gettime();
 		int phase = prof_ge_enter(GEF_ESTADO);
 		if(opt_on[OPT_PROF_ESTADO]) census_gx();
-		apply_gx();
+		if(opt_on[OPT_GE_ESTADO_SUCIO]) gx_emit_state();
+		else apply_gx();
+		gx_tocado = 0;
 		gx_dirty = 0;
 		prof_ge_leave(phase);
 		prof_state += gettime() - t0;
@@ -2434,6 +2550,20 @@ static int prepare(int full){
 static inline int prepare_idle(void){
 	return !targets_dirty && !skip_draws && (!touch_c || restored_c) && (!touch_z || !cur_z || restored_z) &&
 	       stencil_val < 0 && !reads_dst_alpha && !want_promote && !gx_dirty;
+}
+
+/* ge_estado_sucio: ni prepare(0) ni drawn() harían nada. Más fino que
+   prepare_idle: con alfa por stencil o mezcla que lee el alfa del destino,
+   prepare_state no hace nada si el búfer ya tiene el alfa en la GPU (o no
+   tiene alfa, o es el mismo uniforme) */
+static int estado_listo(void){
+	int promote;
+	if(targets_dirty || skip_draws || !cur_c || gx_dirty || want_promote) return 0;
+	if((touch_c && !restored_c) || (touch_z && cur_z && !restored_z)) return 0;
+	if((writes_c && !efb_c_newer) || (writes_z && cur_z && !efb_z_newer)) return 0;
+	promote = (stencil_val >= 0 && !(cur_c->amode == A_UNIFORM && stencil_val == cur_c->ualpha)) ||
+	          (reads_dst_alpha && cur_c->amode == A_VRAM);
+	return !promote || cur_c->amode == A_GPU || !has_alpha_fmt(cur_c->fmt);
 }
 
 static inline void drawn(void){
@@ -2650,9 +2780,23 @@ static void gx_triangle(const GeVertex *v0, const GeVertex *v1, const GeVertex *
 	GxVtxWords w;
 	GxEmitLocal l;
 	const GeVertex *c;
+	int listo;
 	if(opt_on[OPT_PROF_ESTADO]) census_prim();
 	if(!opt_on[OPT_GX_ENVIO]){ gx_triangle_ref_path(v0, v1, v2); return; }
-	if(!prepare_idle() && !prepare(0)) return;
+	listo = tri_listo && opt_on[OPT_GE_ESTADO_SUCIO];
+	if(listo && opt_on[OPT_GE_VERIF]){
+		/* Comprobar que nada cambió sin quitar tri_listo */
+		ge_stats.es_tri_verif++;
+		if(!estado_listo()){
+			static unsigned logged;
+			ge_stats.es_tri_verif_bad++;
+			if(logged++ < 16) hle_log_quiet("[VERIF] triangulo sin preparar con algo que preparar\n");
+			listo = 0;
+		}
+	}
+	ge_stats.es_tri++;
+	if(listo) ge_stats.es_tri_listo++;
+	else if(!prepare_idle() && !prepare(0)) return;
 	if(use_clut_gpu && tex_on){
 		const GeVertex *vv[3] = { v0, v1, v2 };
 		if(!clut_gpu_triangle_ok(vv)){
@@ -2672,7 +2816,10 @@ static void gx_triangle(const GeVertex *v0, const GeVertex *v1, const GeVertex *
 	w = gx_vertex_fast(v2, c ? c : v2, &l); put_words(&w);
 	GX_End();
 	if(opt_on[OPT_GE_VERIF]) verify_triangle(v0, v1, v2);
-	drawn();
+	if(!listo || !tri_listo){
+		drawn();
+		tri_listo = opt_on[OPT_GE_ESTADO_SUCIO] && estado_listo();
+	}
 }
 
 /* Esquina de un sprite: x de vx, y de vy; s y t según la orientación */
@@ -2707,6 +2854,7 @@ static void draw_sprite(const GeVertex *v0, const GeVertex *v1){
 
 static void gx_rect(const GeVertex *v0, const GeVertex *v1){
 	int ok;
+	tri_listo = 0;
 	if(v0->x == v1->x || v0->y == v1->y) return;
 	if(opt_on[OPT_PROF_ESTADO]) census_prim();
 	first_v0 = v0; first_v1 = v1;
@@ -2726,6 +2874,7 @@ static void gx_clear_rect(const GeVertex *v0, const GeVertex *v1){
 	const GeRasterState *r = ge_raster_state();
 	int full = 0, covers = 0, color_full = 0, alpha_w = 0, aval = (int)(v1->color0 >> 24);
 	core_u32 mrgb = ge.cmd[GE_MASKRGB] & 0xFFFFFF, ma = ge.cmd[GE_MASKALPHA] & 0xFF;
+	tri_listo = 0;
 	if(v0->x == v1->x || v0->y == v1->y) return;
 	if(targets_dirty){
 		int phase = prof_ge_enter(GEF_ESTADO);
@@ -2770,6 +2919,7 @@ static void gx_clear_rect(const GeVertex *v0, const GeVertex *v1){
 /* GX dibuja líneas y puntos como cuadrados centrados en la coordenada; la
    PSP pinta el píxel cuya esquina es esa coordenada: medio píxel más */
 static void gx_line(const GeVertex *v0, const GeVertex *v1){
+	tri_listo = 0;
 	if(!prepare(0)) return;
 	if(use_clut_gpu && tex_on){ clut_gpu_fallback(); prepare_state(); }   /* sin comprobación de límites */
 	pos_off = 0.5f;
@@ -2782,6 +2932,7 @@ static void gx_line(const GeVertex *v0, const GeVertex *v1){
 }
 
 static void gx_point(const GeVertex *v0){
+	tri_listo = 0;
 	if(!prepare(0)) return;
 	if(use_clut_gpu && tex_on){ clut_gpu_fallback(); prepare_state(); }
 	pos_off = 0.5f;
@@ -2795,6 +2946,7 @@ static void gx_point(const GeVertex *v0){
 static void gx_begin(void){
 	targets_dirty = 1;
 	cs_primero = 1;
+	tri_listo = 0;
 }
 
 /* TEXFLUSH vacía el caché de texturas del GE, pero no dice que la memoria
@@ -2816,6 +2968,7 @@ static int present_body(void *xfb, GXRModeObj *rm, int widescreen);
 int gx_ge_present(void *xfb, GXRModeObj *rm, int widescreen){
 	u64 t0 = gettime();
 	int r = present_body(xfb, rm, widescreen);
+	tri_listo = 0;
 	prof_present += gettime() - t0;
 	return r;
 }
@@ -3073,7 +3226,7 @@ static int present_body(void *xfb, GXRModeObj *rm, int widescreen){
 	cur_c = cur_z = NULL;
 	restored_c = restored_z = 0;
 	targets_dirty = 1;
-	cs_aviso = cs_tocado = 1;   /* censo: la imagen se compone con otro estado de GX */
+	cs_aviso = gx_tocado = 1;   /* censo: la imagen se compone con otro estado de GX */
 
 	if(!s){
 		/* Framebuffer escrito por la CPU: se convierte desde la memoria */
@@ -3144,6 +3297,7 @@ static int present_body(void *xfb, GXRModeObj *rm, int widescreen){
 
 void gx_ge_sync_vram(void){
 	int i;
+	tri_listo = 0;
 	dl_force = DX_SINC;
 	for(i = 0; i < MAX_SURF; i++)
 		if(surf[i].used && surf[i].state == GPU_NEWER) download(&surf[i]);
@@ -3153,6 +3307,7 @@ void gx_ge_sync_vram(void){
 
 void gx_ge_reset(void){
 	int i;
+	tri_listo = 0;
 	wait_gpu();
 	for(i = 0; i < MAX_SURF; i++)
 		if(surf[i].used){ free(surf[i].tex); free(surf[i].ci); memset(&surf[i], 0, sizeof(surf[i])); }
@@ -3171,12 +3326,14 @@ void gx_ge_reset(void){
 	cur_tex = NULL;
 	efb_c_newer = efb_z_newer = restored_c = restored_z = 0;
 	targets_dirty = gx_dirty = 1;
-	cs_aviso = cs_tocado = 1;
+	cs_aviso = gx_tocado = 1;
 	recompute_watch();
 }
 
 void gx_ge_init(void){
 	Mtx id;
+	tri_listo = 0;
+	gx_tocado = 1;
 	tc_init(&tcache);
 	tcache.alloc = alloc_texture_slot;
 	tcache.decode = decode_slot;
