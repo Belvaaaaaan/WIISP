@@ -244,6 +244,10 @@ static RttPal rtt_pal[RTT_PAL_MAX];
 static int rtt_npal;
 static RttPal *rtt_cur;                 /* la de las primitivas en curso */
 static core_u32 rtt_tex_off = 0xFFFFFFFFu;   /* textura que se está buscando */
+
+/* Censo de estado (prof_estado): avisos que invalidan los destinos y otros
+   cambios del estado de GX entre dos llamadas (ver census_dst y census_gx) */
+static int cs_aviso = 1, cs_tocado = 1, cs_primero;
 static unsigned rtt_dl[RD_N], rtt_dec[RO_N], rtt_gpu, rtt_miss[RM_N];
 static u64 rtt_dl_ticks[RD_N], rtt_dec_ticks[RO_N], rtt_dec_bytes[RO_N];
 static unsigned rtt_dx[DX_N], rtt_uploads;
@@ -865,7 +869,7 @@ static void drop_surface(Surface *s){
 	if(s->state == GPU_NEWER) download(s);
 	if(s == cur_c){ cur_c = NULL; efb_c_newer = 0; restored_c = 0; }
 	if(s == cur_z){ cur_z = NULL; efb_z_newer = 0; restored_z = 0; }
-	if(s == clut_src){ clut_src = NULL; use_clut_gpu = 0; targets_dirty = 1; }
+	if(s == clut_src){ clut_src = NULL; use_clut_gpu = 0; targets_dirty = 1; cs_aviso = 1; }
 	defer_free(s->tex);
 	defer_free(s->ci);
 	memset(s, 0, sizeof(*s));
@@ -942,6 +946,7 @@ static void vram_hook(core_u32 off, core_u32 len, int write){
 			if(s == cur_c){ restored_c = 0; efb_c_newer = 0; }
 			if(s == cur_z){ restored_z = 0; efb_z_newer = 0; }
 			targets_dirty = 1;
+			cs_aviso = 1;
 		}
 	}
 	acc_len = 0;
@@ -1216,6 +1221,7 @@ static void blit(const Surface *c, const Surface *z, int color, int alpha, float
 		GX_SetZCompLoc(GX_TRUE);
 	}
 	gx_dirty = 1;
+	cs_tocado = 1;
 }
 
 /* --- Restaurar el EFB ---------------------------------------------------------- */
@@ -1870,9 +1876,91 @@ static void clut_gpu_fallback(void){
 	clut_gpu_fallbacks++;
 	cur_tex = lookup_texture(r);
 	gx_dirty = 1;
+	cs_tocado = 1;
 }
 
 /* --- Estado de GX a partir del GE ---------------------------------------------- */
+
+/* --- Censo de estado (prof_estado) ----------------------------------------------
+   Si lo que sale de setup_targets y lo que lee apply_gx es lo mismo que en la
+   llamada anterior, y si entre medias hubo avisos (VRAM escrita, búferes
+   quitados, presentar) o alguien más tocó GX (copias, vuelta a la CPU).
+   Solo mide: no cambia nada. */
+typedef struct {
+	Surface *c, *z, *clut_src;
+	TexEntry *tex;
+	RttPal *rtt;
+	int skip, stencil, rda, wc, wz, tc, tz, through, tex_on, use_rtt, use_clut, tex_proj, flat;
+	float su, sv, itw, ith;
+	core_u32 rtt_off;
+} CsDst;
+
+typedef struct {
+	GeRasterState r;
+	Surface *c, *z;
+	TexEntry *tex;
+	int fmt, amode, ualpha, w, h, through, tex_on, use_rtt, use_clut, levels, mode;
+	GXTexObj obj;
+	core_u32 mrgb, ma, lmode;
+} CsGx;
+
+static CsDst cs_dst;
+static CsGx cs_gx;
+static int cs_dst_ok, cs_gx_ok;
+
+static void __attribute__((noinline)) census_dst(void){
+	CsDst d;
+	memset(&d, 0, sizeof(d));   /* el relleno también: se compara con memcmp */
+	d.c = cur_c; d.z = cur_z; d.clut_src = clut_src; d.tex = cur_tex; d.rtt = rtt_cur;
+	d.skip = skip_draws; d.stencil = stencil_val; d.rda = reads_dst_alpha;
+	d.wc = writes_c; d.wz = writes_z; d.tc = touch_c; d.tz = touch_z;
+	d.through = through; d.tex_on = tex_on; d.use_rtt = use_rtt; d.use_clut = use_clut_gpu;
+	d.tex_proj = tex_proj; d.flat = flat;
+	d.su = tex_su; d.sv = tex_sv; d.itw = inv_tw; d.ith = inv_th;
+	d.rtt_off = rtt_tex_off;
+	ge_stats.cs_dst++;
+	ge_stats.cs_dst_igual += cs_dst_ok && !memcmp(&d, &cs_dst, sizeof(d));
+	ge_stats.cs_dst_aviso += cs_aviso;
+	cs_aviso = 0;
+	if(d.tex_on && !d.skip && !d.use_rtt && !d.use_clut){
+		ge_stats.cs_tex++;
+		ge_stats.cs_tex_igual += cs_dst_ok && cs_dst.tex_on && d.tex == cs_dst.tex;
+	}
+	memcpy(&cs_dst, &d, sizeof(d));
+	cs_dst_ok = 1;
+}
+
+static void __attribute__((noinline)) census_gx(void){
+	CsGx g;
+	memset(&g, 0, sizeof(g));
+	memcpy(&g.r, ge_raster_state(), sizeof(g.r));
+	memset(g.r.snap_size, 0, sizeof(g.r.snap_size));
+	g.c = cur_c; g.z = cur_z; g.tex = cur_tex;
+	if(cur_c){ g.fmt = cur_c->fmt; g.amode = cur_c->amode; g.ualpha = cur_c->ualpha; g.w = cur_c->w; g.h = cur_c->h; }
+	g.through = through; g.tex_on = tex_on; g.use_rtt = use_rtt; g.use_clut = use_clut_gpu; g.mode = mode;
+	if(use_rtt) memcpy(&g.obj, &rtt_obj, sizeof(g.obj));
+	else if(use_clut_gpu) memcpy(&g.obj, &clut_obj, sizeof(g.obj));
+	else if(cur_tex){ memcpy(&g.obj, &cur_tex->obj, sizeof(g.obj)); g.levels = cur_tex->levels; }
+	g.mrgb = ge.cmd[GE_MASKRGB]; g.ma = ge.cmd[GE_MASKALPHA]; g.lmode = ge.cmd[GE_LIGHTMODE];
+	ge_stats.cs_gx++;
+	ge_stats.cs_gx_igual += cs_gx_ok && !cs_tocado && !memcmp(&g, &cs_gx, sizeof(g));
+	ge_stats.cs_gx_tocado += cs_tocado;
+	cs_tocado = 0;
+	memcpy(&cs_gx, &g, sizeof(g));
+	cs_gx_ok = 1;
+}
+
+/* Cada primitiva que llega a GX: ¿haría falta preparar algo o marcar el
+   búfer como dibujado? (lo que miran prepare_idle y drawn) */
+static void __attribute__((noinline)) census_prim(void){
+	int listo = !targets_dirty && !skip_draws && (!touch_c || restored_c) && (!touch_z || !cur_z || restored_z) &&
+	            stencil_val < 0 && !reads_dst_alpha && !want_promote && !gx_dirty &&
+	            !(writes_c && !efb_c_newer) && !(writes_z && cur_z && !efb_z_newer);
+	ge_stats.cs_tri++;
+	ge_stats.cs_tri_listo += listo;
+	if(cs_primero){ ge_stats.cs_tri_primero++; cs_primero = 0; }
+	else if(!listo) ge_stats.cs_tri_mitad++;
+}
 
 static void setup_targets(void){
 	const GeRasterState *r = ge_raster_state();
@@ -2285,6 +2373,7 @@ static int prepare_targets(int full){
 		setup_targets();
 		targets_dirty = 0;
 		gx_dirty = 1;
+		if(opt_on[OPT_PROF_ESTADO]) census_dst();
 		prof_ge_leave(phase);
 		prof_setup += gettime() - t0;
 	}
@@ -2326,6 +2415,7 @@ static void prepare_state(void){
 	if(gx_dirty){
 		u64 t0 = gettime();
 		int phase = prof_ge_enter(GEF_ESTADO);
+		if(opt_on[OPT_PROF_ESTADO]) census_gx();
 		apply_gx();
 		gx_dirty = 0;
 		prof_ge_leave(phase);
@@ -2560,6 +2650,7 @@ static void gx_triangle(const GeVertex *v0, const GeVertex *v1, const GeVertex *
 	GxVtxWords w;
 	GxEmitLocal l;
 	const GeVertex *c;
+	if(opt_on[OPT_PROF_ESTADO]) census_prim();
 	if(!opt_on[OPT_GX_ENVIO]){ gx_triangle_ref_path(v0, v1, v2); return; }
 	if(!prepare_idle() && !prepare(0)) return;
 	if(use_clut_gpu && tex_on){
@@ -2617,6 +2708,7 @@ static void draw_sprite(const GeVertex *v0, const GeVertex *v1){
 static void gx_rect(const GeVertex *v0, const GeVertex *v1){
 	int ok;
 	if(v0->x == v1->x || v0->y == v1->y) return;
+	if(opt_on[OPT_PROF_ESTADO]) census_prim();
 	first_v0 = v0; first_v1 = v1;
 	ok = prepare(0);
 	first_v0 = first_v1 = NULL;
@@ -2640,6 +2732,7 @@ static void gx_clear_rect(const GeVertex *v0, const GeVertex *v1){
 		setup_targets();
 		targets_dirty = 0;
 		gx_dirty = 1;
+		if(opt_on[OPT_PROF_ESTADO]) census_dst();
 		prof_ge_leave(phase);
 	}
 	if(skip_draws) return;
@@ -2701,6 +2794,7 @@ static void gx_point(const GeVertex *v0){
 
 static void gx_begin(void){
 	targets_dirty = 1;
+	cs_primero = 1;
 }
 
 /* TEXFLUSH vacía el caché de texturas del GE, pero no dice que la memoria
@@ -2979,6 +3073,7 @@ static int present_body(void *xfb, GXRModeObj *rm, int widescreen){
 	cur_c = cur_z = NULL;
 	restored_c = restored_z = 0;
 	targets_dirty = 1;
+	cs_aviso = cs_tocado = 1;   /* censo: la imagen se compone con otro estado de GX */
 
 	if(!s){
 		/* Framebuffer escrito por la CPU: se convierte desde la memoria */
@@ -3076,6 +3171,7 @@ void gx_ge_reset(void){
 	cur_tex = NULL;
 	efb_c_newer = efb_z_newer = restored_c = restored_z = 0;
 	targets_dirty = gx_dirty = 1;
+	cs_aviso = cs_tocado = 1;
 	recompute_watch();
 }
 

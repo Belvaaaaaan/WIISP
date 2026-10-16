@@ -26,6 +26,8 @@ enum {
 	/* Fase 0: medir */
 	OPT_PROF_ESPERA,      /* 0.1 espera separada en el desglose de tiempos */
 	OPT_PROF_PMC,         /* 0.2 contadores del Broadway y muestreo */
+	OPT_PROF_ESTADO,      /* censo: qué parte del estado de cada llamada de
+	                         dibujo se repite (para 1.4); solo mide */
 	/* Primera tanda del GE (resultado idéntico) */
 	OPT_GE_SKIN_RAPIDO,   /* skinning mezclando las matrices por peso */
 	OPT_GE_MTX_CACHE,     /* matrices combinadas solo cuando cambian */

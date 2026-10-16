@@ -10,10 +10,21 @@ al repositorio), `gcc-powerpc-linux-gnu` y `qemu-user`. Las salidas van a
   enlaza con el resto (gcc de Linux para PowerPC), `stub.c` (libogc de
   mentira) y `bench_gx.c` (tiras de 20 vértices como las de DBZ).
   `qemu-ppc $SALIDA/bench REPETICIONES VTYPE opcion=valor...`.
+- `bench_lista.c` + `bench_cmd.c` (también los compila `build_banco.sh`):
+  llamadas de dibujo como las de sceGu por el bucle de comandos de `ge.c` y
+  `ge_raster.c` compilados con devkitPPC. `qemu-ppc $SALIDA/bench_lista
+  REPETICIONES VTYPE ESCENA opcion=valor...`: escena 0 = VERTEXTYPE, BASE,
+  VADDR y PRIM; 1 = más 10 comandos de textura con paleta; 2 = más 4 huesos
+  y la matriz de mundo; 3 = con 8 huesos. `LUCES=1` enciende dos luces;
+  con `prof_estado=1` escribe el censo de estado.
 - `qprof.py`: instrucciones PowerPC por función (y por unidad) a partir de
   `qemu-ppc -d in_asm,exec,nochain -D grande.log` menos una corrida corta:
   `qprof.py grande.log corta.log UNIDADES`. `qtb.py` lo mismo por bloque
   de una función.
+- `qlines.py`: lo mismo por bloque con la función y la línea de código
+  (`addr2line`; el banco se compila con `-g`), para repartir una función
+  entre lo que tiene en línea. `qcallers.py`: quién llama a una función
+  (memcpy, memset...), por el bloque que corre antes de entrar.
 - `sigill_ppc.c`: emula con SIGILL lo que un PowerPC normal no tiene o es
   privilegiado (mfmsr/mtmsr, mfspr/mtspr con los GQR, psq_l con W = 1).
   `PSQ_INFORME=1` dice cuántos psq_l emuló.

@@ -2158,6 +2158,18 @@ static void load_morph_weights(void){
 static u32 imm_prim = 0xFFFFFFFFu, imm_flags;
 static int imm_first_sent;
 
+/* --- Censo de estado (prof_estado): formato y transformación ---------------
+   Lo calculado en cada llamada comparado con la anterior (ver ge.c) */
+static struct {
+	int valid;
+	VFormat f;
+	int uv_prescale;
+	float uv_ps_scale[2], uv_ps_off[2], morph[8];
+	TState ts;
+	u32 nlights;
+	u8 opt[OPT_N];
+} cs;
+
 /* Pruebas: lo que una llamada deja a la siguiente, como al arrancar */
 void ge_vertex_test_reset(void){
 	last_uv[0] = last_uv[1] = 0.0f;
@@ -2168,6 +2180,7 @@ void ge_vertex_test_reset(void){
 	imm_flags = 0;
 	imm_first_sent = 0;
 	mc.valid = 0;
+	cs.valid = 0;
 }
 
 void ge_test_decode_vertex(u32 vt, const u8 *p, float *pos, float *nrm){
@@ -2252,6 +2265,35 @@ void ge_vtype_census(char *buf, size_t size){
 	vt_other = 0;
 }
 
+static void __attribute__((noinline)) census_vt(const VFormat *f){
+	int v_eq, t_eq;
+	/* Otro interruptor cambia lo que se calcula: todo de nuevo */
+	if(memcmp(cs.opt, opt_on, sizeof(cs.opt))){
+		memcpy(cs.opt, opt_on, sizeof(cs.opt));
+		ge_sucio = GE_SUCIO_TODO;
+	}
+	if(cs.valid){
+		v_eq = !memcmp(&cs.f, f, sizeof(*f)) && cs.uv_prescale == uv_prescale &&
+		       !memcmp(cs.uv_ps_scale, uv_ps_scale, sizeof(uv_ps_scale)) && !memcmp(cs.uv_ps_off, uv_ps_off, sizeof(uv_ps_off)) &&
+		       !memcmp(cs.morph, morph_weights, sizeof(morph_weights));
+		t_eq = !memcmp(&cs.ts, &ts, sizeof(ts)) && cs.nlights == ts_nlights;
+		ge_stats.cs_vt++;
+		ge_stats.cs_v_igual += v_eq;
+		ge_stats.cs_t_igual += t_eq;
+		if(!(ge_sucio & GE_SUCIO_V)){ ge_stats.cs_v_limpio++; ge_stats.cs_v_error += !v_eq; }
+		if(!(ge_sucio & GE_SUCIO_T)){ ge_stats.cs_t_limpio++; ge_stats.cs_t_error += !t_eq; }
+	}
+	ge_sucio &= ~(u32)(GE_SUCIO_V | GE_SUCIO_T);
+	memcpy(&cs.f, f, sizeof(*f));   /* con el relleno: se compara con memcmp */
+	cs.uv_prescale = uv_prescale;
+	memcpy(cs.uv_ps_scale, uv_ps_scale, sizeof(uv_ps_scale));
+	memcpy(cs.uv_ps_off, uv_ps_off, sizeof(uv_ps_off));
+	memcpy(cs.morph, morph_weights, sizeof(morph_weights));
+	memcpy(&cs.ts, &ts, sizeof(ts));
+	cs.nlights = ts_nlights;
+	cs.valid = 1;
+}
+
 void ge_draw_prim(u32 prim, u32 count){
 	VFormat f;
 	VSource vr;
@@ -2269,6 +2311,7 @@ void ge_draw_prim(u32 prim, u32 count){
 		load_morph_weights();
 		setup_uv_prescale(&f);
 		compute_transform_state(&f);
+		if(opt_on[OPT_PROF_ESTADO]) census_vt(&f);
 		phase = prof_ge_enter(GEF_LEER);
 		vsource_init(&vr, &f, vaddr, iaddr, (int)count);
 		vsource_batch(&vr, (int)count);
@@ -2415,6 +2458,7 @@ void ge_immediate_vertex(void){
 	for(i = 0; i < 6; i++) save[i] = ge.cmd[fl_cmd[i]];
 	if(changed) for(i = 0; i < 6; i++) ge.cmd[fl_cmd[i]] = (imm_flags & fl_bit[i]) ? 1 : 0;
 	ge.cmd[GE_CULL] = (imm_flags & 0x100000) ? 1 : 0;
+	ge_sucio = GE_SUCIO_TODO;   /* censo: el estado cambia por debajo de los comandos */
 
 	/* El vértice ya transformado, con el viewport a escala 1 */
 	memset(&cv, 0, sizeof(cv));
@@ -2459,6 +2503,7 @@ void ge_immediate_vertex(void){
 
 	ge.cmd[GE_CULL] = save_cull;
 	for(i = 0; i < 6; i++) ge.cmd[fl_cmd[i]] = save[i];
+	ge_sucio = GE_SUCIO_TODO;
 }
 
 /* --- Parches bezier y spline (SplineCommon.cpp) ------------------------------
@@ -2792,6 +2837,7 @@ static void submit_curve(u32 arg, int is_spline){
 		   índices de 16 bits y el modo through del original */
 		vformat_setup(&gf, (3u << 0) | (7u << 2) | (3u << 5) | (3u << 7) | (2u << 11) | (ge.cmd[GE_VERTEXTYPE] & 0x800000u));
 		compute_transform_state(&gf);
+		ge_sucio |= GE_SUCIO_V | GE_SUCIO_T;   /* censo: el de la curva no es el de las llamadas */
 		memset(&vr, 0, sizeof(vr));
 		vr.f = &gf;
 		vr.list = curve_out;

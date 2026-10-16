@@ -106,6 +106,13 @@ typedef struct {
 extern GeState ge;
 extern GeStats ge_stats;
 
+/* Censo de estado (prof_estado): grupos del estado de una llamada de dibujo
+   con algún comando que cambió de valor desde que se calcularon por última
+   vez (V formato de vértice, uv y morph; T transformación y luces; R
+   píxel, muestreo y tijera del rasterizador) */
+enum { GE_SUCIO_V = 1, GE_SUCIO_T = 2, GE_SUCIO_R = 4, GE_SUCIO_TODO = 7 };
+extern u32 ge_sucio;
+
 /* Qué le pasó al último triángulo (ge_stats): 1 fuera de la pantalla o de
    la tijera, 2 recortado por el plano cercano */
 enum { GE_TRI_OUTSIDE = 1, GE_TRI_CLIPPED = 2 };
@@ -308,6 +315,10 @@ const GeRasterState *ge_raster_state(void);
 void ge_test_decode_vertex(u32 vt, const u8 *p, float *pos, float *nrm);
 /* Pruebas: lo que una llamada de dibujo deja a la siguiente, a cero */
 void ge_vertex_test_reset(void);
+/* Pruebas: aplica un comando del GE como si viniera en una lista */
+void ge_test_execute(u32 op);
+/* Pruebas: cambia los grupos del censo de estado de un comando y devuelve los de antes */
+u32 ge_test_census_group(u32 cmd, u32 g);
 
 /* Texels del nivel `level` de la textura actual (estado de ge_raster_begin)
    en RGBA de 8 bits (rojo en el byte bajo), fila a fila con `pitch` texels

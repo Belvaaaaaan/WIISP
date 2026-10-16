@@ -1037,6 +1037,70 @@ y verif (encendidos y `ge_verificar`).
   leer de 570 a 502 por vértice (−12 %, IPC 0,67: espera a fdivs y a las
   conversiones a entero por la memoria más que instrucciones).
 
+### v0.5.14.1: censo del estado de cada llamada (`prof_estado`, solo mide)
+
+Lo que dijeron los registros de la 0.5.14 (pelea, "con", cada 30 s): 537.115
+llamadas de dibujo (~17.900 por segundo), **14,5 comandos por llamada**, ~16
+triángulos por llamada, **0 % de vértices con luces**; comandos 6,7 % del
+tiempo, ensamblar 10,1 %, enviar 7,5 %, estado 2,9 % y esperar GX 4,1 %.
+PMC: comandos 2864 ciclos por llamada, estado 1212.
+
+Medido antes con el banco de qemu (`tools/banco/bench_lista.c`, una lista
+del GE de verdad por el bucle de `ge.c`, todo compilado con devkitPPC; tiras
+de 20 vértices con el estado idéntico en cada llamada), en instrucciones:
+- Cada comando: ~56 de leerlo (bucle 21 + `mem_valid` 19 + `mem_read32`
+  16, palabra a palabra aunque la lista esté seguida) más 25-43 de
+  `execute`. `LOADCLUT` +436 (copia la paleta de 16 en 16 bytes).
+- Antes de cada dibujo (cuenta en "comandos"): `compute_transform_state`
+  ~690 sin luces (163 propias + 290 de comparar las 3 matrices + 238 de
+  copiarlas aunque no cambien), ~3100 con dos luces; `vformat_setup` +
+  `setup_uv_prescale` ~120; el resto de `ge_draw_prim` ~210.
+- `ge_raster_begin` ~600 (cuenta en "ensamblar"); `setup_targets` +
+  `get_surface` ~560; `lookup_texture` ~350 (en "texturas"); `apply_gx` ~470
+  propias y ~950 de libogc (contadas con objdump: en el banco libogc es de
+  mentira) más el volcado del estado sucio en `GX_Begin`.
+- `prepare_idle` + `drawn`: 67 por triángulo.
+Si el estado no cambiara, ~4100 instrucciones por llamada se rehacen sin
+necesidad (sin luces).
+
+Esta versión solo cuenta (con `opt prof_estado 1`; apagado no cuesta nada
+más que mirar el interruptor) y escribe tres líneas `[TIEMPOS] Censo de
+estado`:
+- Comandos por llamada; de los de estado, cuántos llegan con el valor que
+  ya tenían; datos de matrices y de huesos iguales; `LOADCLUT` con los
+  mismos bytes.
+- Por grupo del estado: V (formato de vértice, uv, morph), T
+  (transformación y luces) y R (píxel, muestreo y tijera de
+  `ge_raster_begin`): "igual" = salió como en la llamada anterior;
+  "limpio" = ningún comando que lo lee cambió de valor (la tabla
+  `censo_grupo` de `ge.c`, por la que se marcan `ge_sucio`); "errores" =
+  limpio pero distinto: **tiene que ser 0** (un comando que falta en la
+  tabla). Es lo que usaría la versión que se lo salte.
+- En GX: `setup_targets` con el mismo resultado (y si hubo avisos entre
+  medias: VRAM escrita, búfer quitado, presentar), la misma textura, las
+  entradas de `apply_gx` iguales (y si alguien más tocó GX: copias, vuelta
+  a la CPU de las paletas, presentar) y, por primitiva, si `prepare_idle` y
+  `drawn` no harían nada ("listas"), las primeras de su llamada y las que no
+  están listas a mitad de llamada (p. ej. un framebuffer bajado al leer
+  vértices de la VRAM).
+
+Verificación: `tests/test_censo.c` cambia por el camino de las listas
+(`ge_test_execute`) comandos al azar entre llamadas, uno por uno los 256 y
+matrices, y comprueba 0 errores; quitando 6 comandos de la tabla a propósito
+(TEXFUNC, ZTEST, LIGHTENABLE0, FOG1, MORPHWEIGHT0, TEXSCALEU) los errores
+salen. Huellas de test_vdec sin cambios (x86 4D4A1D8B, PowerPC 0657B177,
+devkitPPC B3A2BCD3). pspautotests 275/275; A/B con `prof_estado` en x86
+(MR): solo el ruido de siempre (`malloc`, `gpu/complex`, que también cambia
+en A/A, y unos de savedata que no se repiten). En el banco con el estado
+fijo, todo sale "igual" y 17 de cada 18 triángulos "listos".
+
+Autotest: sin (`prof_estado` 0), con (1) y verif (1 y `ge_verificar`).
+Qué decidir con el resultado (pelea): si V/T/R y GX salen iguales en la
+mayoría de llamadas, el plan de la 0.5.15 (`ge_estado_sucio`: no rehacer
+V/T/R ni emitir `apply_gx` si sus entradas no cambiaron, y `tri_listo` en
+vez de `prepare_idle` + `drawn` por triángulo); si alguno casi nunca se
+repite, ese se queda fuera.
+
 ### Para el siguiente chat (empezar aquí)
 
 Metodología acordada (detalle en `docs/HOJA_DE_RUTA.md`): primero medir
@@ -1047,15 +1111,21 @@ Metodología acordada (detalle en `docs/HOJA_DE_RUTA.md`): primero medir
   `ge_skin_rapido` (0.5.8), 2.1 `cpu_sin_extra` (0.5.9), las texturas de
   framebuffer (`ge_rtt_gpu`, `ge_fb_relleno`, `ge_fb_hueco`, 0.5.10),
   `ge_z_rango`, `ge_mtx_cache` y `registro_diferido` (0.5.11), `prof_pmc`
-  (0.5.11.1), 1.2 `ge_vdec_esp` y `ge_tri_rapido` (0.5.12-0.5.13) y
-  `gx_envio_rapido`, `ge_ensamblar_rapido` y 1.2b `ge_vdec_psq` (0.5.14).
+  (0.5.11.1), 1.2 `ge_vdec_esp` y `ge_tri_rapido` (0.5.12-0.5.13),
+  `gx_envio_rapido`, `ge_ensamblar_rapido` y 1.2b `ge_vdec_psq` (0.5.14) y
+  el censo `prof_estado` (0.5.14.1).
 - Herramientas para medir sin el Wii (banco de qemu con el código de
   devkitPPC, perfil por función, psq_l emulado, A/B): `tools/banco/LEEME.md`.
-- 0.5.14 comprobada en el Wii (arriba). Candidatos siguientes (por el banco de qemu): el estado por
-  llamada (`ge_raster_begin` ~600 instrucciones por llamada y
-  `setup_targets` + `apply_gx` ~720: rehacerlo solo si cambió, 1.4
-  `ge_charolas`), `round_to_screen` (~110 por vértice: tres conversiones a
-  entero por la memoria), y lo de antes: el 4444 de 64x64 de DBZ, los
+- 0.5.14 comprobada en el Wii (arriba). **En curso: 0.5.14.1, censo del
+  estado por llamada** (arriba). Con su resultado se decide qué entra en la
+  0.5.15 (`ge_estado_sucio`: rehacer el estado solo cuando cambie, plan en
+  la sección de la 0.5.14.1). Juntar llamadas (`ge_charolas`, 1.4) va
+  aparte, después y medido. Después: las esperas al leer vértices
+  (`round_to_screen`, la división por w y tres conversiones a entero por la
+  memoria; leer va a IPC 0,67). Otros candidatos medidos: leer los
+  comandos con un puntero (~56 de las ~80-100 instrucciones por comando),
+  saltarse `setup_targets`/`lookup_texture` cuando no cambien (~900), un
+  solo `GX_Begin` por llamada, y lo de antes: el 4444 de 64x64 de DBZ, los
   índices CI8 con dcbt, el limitador de cuadros.
 
 Pendiente de antes: la primera tanda del GE (skinning rápido, matrices al

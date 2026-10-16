@@ -48,6 +48,7 @@ void test_interp(void);
 void test_gxemit(void);
 /* tests/test_vdec.c: el camino de los vértices del GE con y sin interruptor */
 void test_vdec(void);
+void test_censo(void);
 /* tests/test_wiimote.c: el Wiimote en horizontal como mando de PSP */
 void test_wiimote(void);
 

@@ -31,6 +31,7 @@
 #include "gpu/ge_math.h"
 #include "core/memory.h"
 #include "core/prof.h"
+#include "core/opt.h"
 
 #define SSF 16  /* SCREEN_SCALE_FACTOR */
 
@@ -337,6 +338,32 @@ static void compute_sampler_state(void){
 
 static void compute_self_texture(void);
 
+/* Censo de estado (prof_estado): el estado del rasterizador comparado con
+   el de la llamada anterior (ver ge.c). También cambia con el renderizador. */
+static struct {
+	int valid;
+	const GeHwRenderer *hw;
+	GeRasterState rs;
+} cs;
+
+static void __attribute__((noinline)) census_r(void){
+	GeRasterState now;
+	memcpy(&now, &rs, sizeof(now));   /* con el relleno: se compara con memcmp */
+	/* Sin la instantánea del caché de texturas: es de cada primitiva */
+	memset(now.snap, 0, sizeof(now.snap));
+	memset(now.snap_size, 0, sizeof(now.snap_size));
+	if(cs.hw != ge_hw){ cs.hw = ge_hw; ge_sucio = GE_SUCIO_TODO; }
+	if(cs.valid){
+		int eq = !memcmp(&cs.rs, &now, sizeof(now));
+		ge_stats.cs_r++;
+		ge_stats.cs_r_igual += eq;
+		if(!(ge_sucio & GE_SUCIO_R)){ ge_stats.cs_r_limpio++; ge_stats.cs_r_error += !eq; }
+	}
+	ge_sucio &= ~(u32)GE_SUCIO_R;
+	memcpy(&cs.rs, &now, sizeof(now));
+	cs.valid = 1;
+}
+
 void ge_raster_begin(void){
 	int sx2, sy2;
 	compute_pixel_state();
@@ -359,6 +386,7 @@ void ge_raster_begin(void){
 	rs.sc_y1 = (int)((ge.cmd[GE_SCISSOR1] >> 10) & 0x3FF) * SSF;
 	rs.sc_x2 = sx2 * SSF + SSF - 1;
 	rs.sc_y2 = sy2 * SSF + SSF - 1;
+	if(opt_on[OPT_PROF_ESTADO]) census_r();
 	if(ge_hw) ge_hw->begin();
 }
 

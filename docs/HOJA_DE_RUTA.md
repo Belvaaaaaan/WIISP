@@ -162,12 +162,18 @@ vértices y el área una vez); el banco de qemu baja de 1694 a ~1150
 instrucciones por triángulo. Todo idéntico bit a bit y comprobable en el
 Wii con `ge_verificar`.
 
+En curso (v0.5.14.1): censo `prof_estado` para 1.4. Acordado con el
+usuario: primero "no rehacer el estado de una llamada si no cambió"
+(interruptor propio, `ge_estado_sucio`) y, aparte y después, juntar llamadas
+(`ge_charolas`). Medidas y plan en docs/CONTINUAR.md.
+
 Primera tanda acordada (todas "más barato", verificables en el PC):
 0.1 `prof_espera`, **skinning rápido** (`ge_skin_rapido`), **matrices al
 cambiar** (`ge_mtx_cache`), **color constante** (`ge_color_const`), 2.1
 `cpu_sin_extra`. Antes, la infraestructura de interruptores.
 
 - **Fase 0 — Medir:** 0.1 espera separada en el profiler (`prof_espera`);
+  censo del estado por llamada (`prof_estado`, para 1.4);
   0.2 contadores MMCR0/MMCR1 y PMC1-4 del Broadway y muestreo de SRR0
   (`prof_pmc`); 0.3 contar instrucciones PPC por instrucción MIPS con
   objdump (objetivo 15-25 hoy, 6-10 predecodificado).

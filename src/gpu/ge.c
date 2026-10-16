@@ -19,7 +19,9 @@
 **/
 
 #include <stdio.h>
+#include <string.h>
 #include "gpu/ge_internal.h"
+#include "core/opt.h"
 #include "hle/hle.h"
 #include "core/memory.h"
 #include "core/prof.h"
@@ -161,6 +163,7 @@ void ge_init(void){
 	ge_pending_len = 0;
 	psp_mem.vram_translation = 0x400;
 	ge.last_prim = GE_PRIM_TRIANGLES;
+	ge_sucio = GE_SUCIO_TODO;
 	kernel_register_intr(PSP_GE_INTR, &ge_intr_handler);
 }
 
@@ -337,6 +340,156 @@ static void restore_context(u32 addr){
 	ge.cmd[GE_VIEWMATRIXNUMBER] = *w++ & 0xF;
 	ge.cmd[GE_PROJMATRIXNUMBER] = *w++ & 0xF;
 	ge.cmd[GE_TGENMATRIXNUMBER] = *w++ & 0xF;
+	ge_sucio = GE_SUCIO_TODO;
+}
+
+
+/* --- Censo de estado (prof_estado) ---------------------------------------
+   Qué parte del estado de cada llamada de dibujo se repite: cada comando
+   que cambia de valor marca los grupos que lo leen (ge_sucio) y, al
+   dibujar, cada grupo compara lo calculado con la llamada anterior. Un
+   grupo limpio que sale distinto es un comando que falta en esta tabla.
+   Solo mide: no cambia nada de lo que se calcula. */
+
+u32 ge_sucio = GE_SUCIO_TODO;
+
+enum { CG_FLUJO = 0x80, CG_DATOS = 0x40 };
+static u8 censo_grupo[256];
+static int censo_lista;
+
+static void censo_marca(int desde, int hasta, u8 g){
+	int c;
+	for(c = desde; c <= hasta; c++) censo_grupo[c] |= g;
+}
+
+static void censo_tabla(void){
+	static const u8 flujo[] = {
+		GE_NOP, GE_VADDR, GE_IADDR, GE_PRIM, GE_BEZIER, GE_SPLINE, GE_BOUNDINGBOX, GE_JUMP, GE_BJUMP,
+		GE_CALL, GE_RET, GE_END, GE_SIGNAL, GE_FINISH, GE_BASE, GE_OFFSETADDR, GE_ORIGIN,
+		GE_BONEMATRIXNUMBER, GE_WORLDMATRIXNUMBER, GE_VIEWMATRIXNUMBER, GE_PROJMATRIXNUMBER, GE_TGENMATRIXNUMBER,
+		GE_TEXFLUSH, GE_TEXSYNC, GE_LOADCLUT, GE_TRANSFERSTART
+	};
+	/* Estado que no está en ningún grupo: se lee directamente donde hace falta */
+	static const u8 suelto[] = {
+		GE_REGION1, GE_CULLFACEENABLE, GE_CULL, GE_OFFSETX, GE_OFFSETY, GE_PATCHCULLENABLE, GE_PATCHDIVISION,
+		GE_PATCHPRIMITIVE, GE_PATCHFACING, GE_CLUTADDR, GE_CLUTADDRUPPER, GE_TRANSFERSRC, GE_TRANSFERSRCW,
+		GE_TRANSFERDST, GE_TRANSFERDSTW, GE_TRANSFERSRCPOS, GE_TRANSFERDSTPOS, GE_TRANSFERSIZE
+	};
+	/* Lo que lee ge_raster_begin (compute_pixel_state, compute_sampler_state) y apply_gx */
+	static const u8 raster[] = {
+		GE_REGION2, GE_TEXTUREMAPENABLE, GE_FOGENABLE, GE_DITHERENABLE, GE_ALPHABLENDENABLE, GE_ALPHATESTENABLE,
+		GE_ZTESTENABLE, GE_STENCILTESTENABLE, GE_ANTIALIASENABLE, GE_COLORTESTENABLE, GE_LOGICOPENABLE,
+		GE_SHADEMODE, GE_LIGHTMODE, GE_FRAMEBUFPTR, GE_FRAMEBUFWIDTH, GE_ZBUFPTR, GE_ZBUFWIDTH,
+		GE_TEXMAPMODE, GE_TEXMODE, GE_TEXFORMAT, GE_CLUTFORMAT, GE_TEXFILTER, GE_TEXWRAP, GE_TEXLEVEL,
+		GE_TEXFUNC, GE_TEXENVCOLOR, GE_FOGCOLOR, GE_TEXLODSLOPE, GE_FRAMEBUFPIXFORMAT, GE_CLEARMODE,
+		GE_SCISSOR1, GE_SCISSOR2, GE_MINZ, GE_MAXZ, GE_COLORTEST, GE_COLORREF, GE_COLORTESTMASK, GE_ALPHATEST,
+		GE_STENCILTEST, GE_STENCILOP, GE_ZTEST, GE_BLENDMODE, GE_BLENDFIXEDA, GE_BLENDFIXEDB, GE_LOGICOP,
+		GE_ZWRITEDISABLE, GE_MASKRGB, GE_MASKALPHA
+	};
+	/* Lo que lee compute_transform_state (con lighting_compute_state) */
+	static const u8 transf[] = {
+		GE_LIGHTINGENABLE, GE_DEPTHCLAMPENABLE, GE_FOGENABLE, GE_REVERSENORMAL, GE_FOG1, GE_FOG2,
+		GE_TEXMAPMODE, GE_AMBIENTCOLOR, GE_AMBIENTALPHA, GE_LIGHTMODE
+	};
+	unsigned i;
+	/* Lo que no sale en la tabla cuenta como estado de todos los grupos */
+	memset(censo_grupo, GE_SUCIO_TODO, sizeof(censo_grupo));
+	for(i = 0; i < sizeof(flujo); i++) censo_grupo[flujo[i]] = CG_FLUJO;
+	censo_grupo[GE_BONEMATRIXDATA] = censo_grupo[GE_WORLDMATRIXDATA] = censo_grupo[GE_VIEWMATRIXDATA] = CG_DATOS;
+	censo_grupo[GE_PROJMATRIXDATA] = censo_grupo[GE_TGENMATRIXDATA] = CG_DATOS;
+	censo_marca(GE_VSCX, GE_VSCV, CG_FLUJO);   /* el vértice inmediato lo marca él */
+	for(i = 0; i < sizeof(suelto); i++) censo_grupo[suelto[i]] = 0;
+	/* Del estado conocido, solo los grupos que lo leen */
+	for(i = 0; i < sizeof(raster); i++) censo_grupo[raster[i]] = 0;
+	for(i = 0; i < sizeof(transf); i++) censo_grupo[transf[i]] = 0;
+	censo_marca(GE_LIGHTENABLE0, GE_LIGHTENABLE0 + 3, 0);
+	censo_marca(GE_MORPHWEIGHT0, GE_MORPHWEIGHT0 + 7, 0);
+	censo_marca(GE_VIEWPORTXSCALE, GE_TEXOFFSETV, 0);
+	censo_marca(GE_MATERIALUPDATE, GE_MATERIALSPECULARCOEF, 0);
+	censo_marca(GE_LIGHTTYPE0, GE_LAC0 + 11, 0);
+	censo_marca(GE_TEXADDR0, GE_TEXBUFWIDTH0 + 7, 0);
+	censo_marca(GE_TEXSIZE0, GE_TEXSIZE0 + 7, 0);
+	censo_marca(GE_DITH0, GE_DITH0 + 3, 0);
+	for(i = 0; i < sizeof(raster); i++) censo_grupo[raster[i]] |= GE_SUCIO_R;
+	for(i = 0; i < sizeof(transf); i++) censo_grupo[transf[i]] |= GE_SUCIO_T;
+	censo_marca(GE_LIGHTENABLE0, GE_LIGHTENABLE0 + 3, GE_SUCIO_T);
+	censo_marca(GE_MORPHWEIGHT0, GE_MORPHWEIGHT0 + 7, GE_SUCIO_V);
+	censo_marca(GE_VIEWPORTXSCALE, GE_VIEWPORTZCENTER, GE_SUCIO_T);
+	censo_marca(GE_TEXSCALEU, GE_TEXOFFSETV, GE_SUCIO_V | GE_SUCIO_T);
+	censo_grupo[GE_TEXMAPMODE] |= GE_SUCIO_V;
+	censo_marca(GE_MATERIALUPDATE, GE_MATERIALSPECULARCOEF, GE_SUCIO_T);
+	censo_marca(GE_LIGHTTYPE0, GE_LAC0 + 11, GE_SUCIO_T);
+	censo_marca(GE_TEXADDR0, GE_TEXBUFWIDTH0 + 7, GE_SUCIO_R);
+	censo_marca(GE_TEXSIZE0, GE_TEXSIZE0 + 7, GE_SUCIO_R);
+	censo_marca(GE_DITH0, GE_DITH0 + 3, GE_SUCIO_R);
+	/* El tipo de vértice: el formato y la transformación con cualquier bit;
+	   el rasterizador solo lee el de through (en censo_cmd) */
+	censo_grupo[GE_VERTEXTYPE] = GE_SUCIO_V | GE_SUCIO_T;
+	censo_lista = 1;
+}
+
+/* Pruebas: cambia los grupos de un comando (para meter fallos a propósito) */
+u32 ge_test_census_group(u32 cmd, u32 g){
+	u32 old;
+	if(!censo_lista) censo_tabla();
+	old = censo_grupo[cmd & 0xFF];
+	censo_grupo[cmd & 0xFF] = (u8)g;
+	return old;
+}
+
+static void __attribute__((noinline)) censo_cmd(u32 cmd, u32 arg){
+	u8 g;
+	u32 old = ge.cmd[cmd];
+	if(!censo_lista) censo_tabla();
+	g = censo_grupo[cmd];
+	if(g & (CG_FLUJO | CG_DATOS)) return;
+	ge_stats.cs_cmds_estado++;
+	if(old == arg){ ge_stats.cs_cmds_igual++; return; }
+	if(cmd == GE_VERTEXTYPE && ((old ^ arg) & 0x800000u)) g |= GE_SUCIO_R;
+	ge_sucio |= g;
+}
+
+/* Un dato de matriz: ¿cambia el valor? (mundo, vista y proyección los lee
+   la transformación; la de textura también el rasterizador) */
+static void __attribute__((noinline)) censo_mtx(const float *m, u32 idx, u32 size, u32 arg){
+	float v = ge_f24(arg);
+	int igual = idx >= size || !memcmp(&m[idx], &v, sizeof(v));
+	if(m == &ge.bone[0][0]){
+		ge_stats.cs_huesos++;
+		ge_stats.cs_huesos_igual += igual;
+		return;
+	}
+	ge_stats.cs_mtx++;
+	ge_stats.cs_mtx_igual += igual;
+	if(!igual) ge_sucio |= m == ge.tgen ? GE_SUCIO_T | GE_SUCIO_R : GE_SUCIO_T;
+}
+
+static double censo_pct(u32 a, u32 b){ return b ? 100.0 * (double)a / (double)b : 0.0; }
+
+void ge_state_census_report(const GeStats *g, const GeStats *g0, char *buf, size_t size){
+#define D(x) (g->x - g0->x)
+	u32 draws = D(draws), cmds = D(commands), vt = D(cs_vt), r = D(cs_r);
+	snprintf(buf, size,
+	         "Censo de estado (prof_estado): %u llamadas, %.1f comandos por llamada; de estado %u (%.0f%% con el mismo valor), "
+	         "matrices %u datos (%.0f%% iguales), huesos %u datos (%.0f%% iguales), paletas %u (%.0f%% iguales)\n"
+	         "Censo de estado: formato igual %.0f%% (limpio %.0f%%, errores %u), transformacion igual %.0f%% (limpia %.0f%%, errores %u) "
+	         "de %u; rasterizador igual %.0f%% (limpio %.0f%%, errores %u) de %u\n"
+	         "Censo de estado en GX: destinos y textura iguales %.0f%% de %u (con aviso entre medias %.0f%%), misma textura %.0f%% de %u; "
+	         "estado de GX con las mismas entradas %.0f%% de %u (GX tocado por otros %.0f%%); "
+	         "primitivas %u: listas sin preparar %.0f%%, primeras de su llamada %.0f%%, no listas a mitad de llamada %u",
+	         (unsigned)draws, draws ? (double)cmds / (double)draws : 0.0,
+	         (unsigned)D(cs_cmds_estado), censo_pct(D(cs_cmds_igual), D(cs_cmds_estado)),
+	         (unsigned)D(cs_mtx), censo_pct(D(cs_mtx_igual), D(cs_mtx)), (unsigned)D(cs_huesos), censo_pct(D(cs_huesos_igual), D(cs_huesos)),
+	         (unsigned)D(cs_paletas), censo_pct(D(cs_paletas_igual), D(cs_paletas)),
+	         censo_pct(D(cs_v_igual), vt), censo_pct(D(cs_v_limpio), vt), (unsigned)D(cs_v_error),
+	         censo_pct(D(cs_t_igual), vt), censo_pct(D(cs_t_limpio), vt), (unsigned)D(cs_t_error), (unsigned)vt,
+	         censo_pct(D(cs_r_igual), r), censo_pct(D(cs_r_limpio), r), (unsigned)D(cs_r_error), (unsigned)r,
+	         censo_pct(D(cs_dst_igual), D(cs_dst)), (unsigned)D(cs_dst), censo_pct(D(cs_dst_aviso), D(cs_dst)),
+	         censo_pct(D(cs_tex_igual), D(cs_tex)), (unsigned)D(cs_tex),
+	         censo_pct(D(cs_gx_igual), D(cs_gx)), (unsigned)D(cs_gx), censo_pct(D(cs_gx_tocado), D(cs_gx)),
+	         (unsigned)D(cs_tri), censo_pct(D(cs_tri_listo), D(cs_tri)), censo_pct(D(cs_tri_primero), D(cs_tri)),
+	         (unsigned)D(cs_tri_mitad));
+#undef D
 }
 
 /* --- Ejecución de comandos ---------------------------------------------- */
@@ -419,10 +572,21 @@ void ge_load_clut(u32 blocks){
 	u32 bytes = (blocks & 0x3F) * 32, off;
 	if(bytes > 1024) bytes = 1024;
 	if(!mem_valid(addr, 1) && addr == 0) return;
+	int igual = bytes == ge.clut_bytes;
 	for(off = 0; off < bytes; off += 16){
 		const u8 *p = mem_ptr_r(addr + off, 16);
-		if(p) memcpy(ge.clut + off, p, 16);
-		else memset(ge.clut + off, 0, 16);
+		if(p){
+			if(igual && memcmp(ge.clut + off, p, 16)) igual = 0;
+			memcpy(ge.clut + off, p, 16);
+		} else {
+			static const u8 cero[16];
+			if(igual && memcmp(ge.clut + off, cero, 16)) igual = 0;
+			memset(ge.clut + off, 0, 16);
+		}
+	}
+	if(opt_on[OPT_PROF_ESTADO]){
+		ge_stats.cs_paletas++;
+		ge_stats.cs_paletas_igual += igual;
 	}
 	ge.clut_bytes = bytes;
 	ge.clut_gen++;
@@ -439,6 +603,7 @@ static void matrix_num(int numcmd, int datacmd, u32 arg, u32 mask){
 
 static void matrix_data(int numcmd, int datacmd, float *m, u32 size, u32 mask, u32 arg){
 	u32 num = ge.cmd[numcmd] & 0xFFFFFF;
+	if(opt_on[OPT_PROF_ESTADO]) censo_mtx(m, num & mask, size, arg);
 	if((num & mask) < size) m[num & mask] = ge_f24(arg);
 	ge.cmd[numcmd] = (num + 1) & 0xFFFFFF;
 	ge.cmd[datacmd] = 0;
@@ -573,6 +738,7 @@ static void jump_to(DisplayList *l, u32 target){
 /* Ejecuta el comando en l->pc (que luego avanza 4) */
 static void execute(DisplayList *l, u32 op){
 	u32 cmd = op >> 24, arg = op & 0x00FFFFFFu;
+	if(opt_on[OPT_PROF_ESTADO]) censo_cmd(cmd, arg);
 	ge.cmd[cmd] = arg;
 	ge.cur_cmd = cmd;
 	ge_stats.commands++;
@@ -660,6 +826,13 @@ static void execute(DisplayList *l, u32 op){
 	default:
 		break;
 	}
+}
+
+/* Pruebas: un comando de estado, como si viniera en una lista */
+void ge_test_execute(u32 op){
+	DisplayList l;
+	memset(&l, 0, sizeof(l));
+	execute(&l, op);
 }
 
 /* Ejecuta la cola hasta que algo la pare. Las listas no corren mientras la
