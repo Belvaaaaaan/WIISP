@@ -910,6 +910,34 @@ ejecutado; banco de tiras de 20 vértices como las de DBZ). Cambios:
   bits que la 0.5.12. Mutaciones detectadas. pspautotests A/B: 0
   diferencias (salvo el ruido conocido de malloc).
 
+### v0.5.13.1: carpeta por sesión y verificación en el Wii
+
+Resultado de la 0.5.13 (sin = `ge_vdec_esp` y `ge_tri_rapido` apagados):
+**las capturas 2000, 2400 y 2800 salieron distintas** (las demás, iguales).
+El juego no se separó: las 258 lecturas del mando son idénticas, con el
+mismo tiempo emulado; es una diferencia de dibujo en escenas de menú con
+modelos 3D (`uv16 c4444 p16`, sin luces ni morph) y tiras 2D. En el PC no
+se reproduce: tests/test_vdec.c da 0 diferencias en x86, en PowerPC con
+GCC 13 y también con ge_vertex.c compilado por el GCC 16 de devkitPPC
+(enlazado con la libc de Linux y corrido en qemu: `-msdata=none -G0
+-maix-struct-return` y quitando `.gnu.attributes`). Velocidad (con PMC):
+peleas del 22,2-26,5 % al 26,9-28,9 %; leer 640 ciclos por vértice (antes
+leer + transformar ~945), ensamblar ~410 por triángulo (antes ~670).
+
+Para encontrarlo en el Wii:
+- `ge_vdec_verificar` (apagado por defecto): cada lote de `ge_vdec_esp`
+  se calcula también uno a uno y se compara campo a campo; las diferencias
+  van al registro (`[VERIF]`, con los bits y los bytes del vértice) y
+  `[TIEMPOS]` dice cuántos se compararon y cuántos salieron distintos.
+- El autotest corre tres veces: sin, solo `ge_tri_rapido`, y los dos con
+  la verificación.
+
+Además, a petición del usuario: cada sesión escribe todo en su carpeta,
+`sd:/wiisp/0001`, `0002`... (la primera libre): wiisp.log y, por cada
+juego, registro, huellas, capturas y estadísticas (`session_open`,
+`session_path` en wii/main.c). Las partidas y la configuración siguen
+donde estaban.
+
 ### Para el siguiente chat (empezar aquí)
 
 Metodología acordada (detalle en `docs/HOJA_DE_RUTA.md`): primero medir

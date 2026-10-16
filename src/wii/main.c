@@ -20,6 +20,8 @@
  * lado) sin mandos; su salida va a
  * <programa>.out y la captura que pida a <programa>.bmp. Las líneas "gx" y
  * "soft" eligen el renderizador y "frames N" el máximo de frames (1200).
+ * Las salidas van a la carpeta de la sesión (sd:/wiisp/0001, 0002...), con
+ * el nombre del programa sin su ruta.
  * Al final de cada programa se añaden a <programa>.stats los FPS y MIPS y
  * la última imagen va a <programa>.gx.bmp o .soft.bmp. Al acabar escribe
  * autotest.done y apaga.
@@ -59,6 +61,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+#include <sys/stat.h>
 #include <ogc/lwp_watchdog.h>
 #include <fat.h>
 #include "wii/wii.h"
@@ -87,6 +90,31 @@ void *plat_alloc_big(size_t size){
 
 /* Rutas normales de las partidas y del registro (las pruebas las cambian) */
 static char savedata_normal[340], log_normal[340];
+
+/* Carpeta de esta sesión: <carpeta de WIISP>/0001, 0002... (la primera
+   libre). Todo lo que se escribe al jugar o al correr pruebas (wiisp.log,
+   registros, huellas, capturas y estadísticas de cada juego) va dentro, en
+   vez de junto a la ISO. */
+static char session_dir[300];
+
+static void session_open(const char *wiisp_dir){
+	struct stat st;
+	int n;
+	mkdir(wiisp_dir, 0777);
+	for(n = 1; n <= 9999; n++){
+		snprintf(session_dir, sizeof(session_dir), "%s/%04d", wiisp_dir, n);
+		if(stat(session_dir, &st) != 0) break;
+	}
+	if(n > 9999 || mkdir(session_dir, 0777) != 0) snprintf(session_dir, sizeof(session_dir), "%s", wiisp_dir);
+}
+
+/* La salida de un juego en la carpeta de la sesión: su nombre sin la ruta */
+static void session_path(char *out, size_t size, const char *path){
+	const char *name = strrchr(path, '/');
+	if(!name) name = strrchr(path, ':');
+	name = name ? name + 1 : path;
+	snprintf(out, size, "%s/%s", session_dir, name);
+}
 
 static void program_output(const char *text, unsigned len){
 	fwrite(text, 1, len, stdout);
@@ -303,7 +331,9 @@ static int start_replay(const char *path){
 		return -1;
 	}
 	for(n = 1; n < 1000; n++){
-		snprintf(replay_prefix, sizeof(replay_prefix), "%s.r%d", path, n);
+		char out[560];
+		session_path(out, sizeof(out), path);
+		snprintf(replay_prefix, sizeof(replay_prefix), "%s.r%d", out, n);
 		snprintf(probe, sizeof(probe), "%s.huellas", replay_prefix);
 		if(access(probe, F_OK) != 0) break;
 	}
@@ -332,7 +362,9 @@ static void start_screenshots(const char *path){
 	char probe[620];
 	int n;
 	for(n = 1; n < 1000; n++){
-		snprintf(shots_prefix, sizeof(shots_prefix), "%s.j%d", path, n);
+		char out[560];
+		session_path(out, sizeof(out), path);
+		snprintf(shots_prefix, sizeof(shots_prefix), "%s.j%d", out, n);
 		snprintf(probe, sizeof(probe), "%s.capturas.txt", shots_prefix);
 		if(access(probe, F_OK) != 0) break;
 	}
@@ -543,8 +575,9 @@ static int autotest(const char *appdir){
 		if(strstr(line, ":/")) snprintf(path, sizeof(path), "%s", line);
 		else snprintf(path, sizeof(path), "%s/autotest/%s", base, line);
 		for(k = 1; k <= times; k++){
-			char base_prefix[sizeof(prefix) - 8];
-			snprintf(base_prefix, sizeof(base_prefix), "%s%s%s", path, suffix[0] ? "." : "", suffix);
+			char base_prefix[sizeof(prefix) - 8], out[560];
+			session_path(out, sizeof(out), path);
+			snprintf(base_prefix, sizeof(base_prefix), "%s%s%s", out, suffix[0] ? "." : "", suffix);
 			if(times > 1) snprintf(prefix, sizeof(prefix), "%s.v%d", base_prefix, k);
 			else snprintf(prefix, sizeof(prefix), "%s", base_prefix);
 			printf("%s%s\n", line, times > 1 ? (k == 1 ? " (vez 1)" : " (otra vez)") : "");
@@ -608,10 +641,12 @@ int main(int argc, char **argv){
 		menu_set_config_path(config);
 	}
 
-	/* Partidas y registro junto a WIISP (sd:/apps/wiisp/ o sd:/wiisp/) */
+	/* Partidas junto a WIISP (sd:/apps/wiisp/ o sd:/wiisp/); el registro, en
+	   la carpeta de la sesión */
 	snprintf(savedata_normal, sizeof(savedata_normal), "%s/SAVEDATA", appdir[0] ? appdir : "sd:/wiisp");
 	app_set_savedata_dir(savedata_normal);
-	snprintf(log_normal, sizeof(log_normal), "%s/wiisp.log", appdir[0] ? appdir : "sd:/wiisp");
+	session_open("sd:/wiisp");
+	snprintf(log_normal, sizeof(log_normal), "%s/wiisp.log", session_dir);
 	hle_set_log_file(log_normal);
 	broadway_report();
 	broadway_pmc_init();

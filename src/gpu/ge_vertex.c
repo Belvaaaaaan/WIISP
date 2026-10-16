@@ -27,6 +27,7 @@
 #include "core/memory.h"
 #include "core/prof.h"
 #include "core/opt.h"
+#include "hle/hle.h"
 
 /* --- Formato de vértice ---------------------------------------------------- */
 
@@ -1571,6 +1572,78 @@ static void vsource_read(const VSource *s, int vtx, GeClipVertex *out){
    cambian) y las mismas expresiones (read_vertex_body), así que salen los
    mismos bits: tests/test_vdec.c. Solo la RAM: leer de la VRAM puede bajar
    un framebuffer. */
+/* ge_vdec_verificar: cada lote se calcula también uno a uno (decode_vertex
+   y read_vertex, como sin ge_vdec_esp) y se compara campo a campo; lo
+   distinto va al registro con los bits y los bytes del vértice. Para
+   encontrar en el Wii lo que las pruebas del PC no ven. */
+static GeClipVertex *vref;
+static int vref_cap;
+static u32 verif_vertices, verif_bad, verif_logged;
+
+static void verify_begin(const VSource *s, const u8 *p, int n){
+	float uv[2], nrm[3];
+	int i;
+	if(n > vref_cap){
+		GeClipVertex *nr = realloc(vref, (size_t)n * sizeof(GeClipVertex));
+		if(!nr){ vref_cap = 0; return; }
+		vref = nr;
+		vref_cap = n;
+	}
+	memcpy(uv, last_uv, sizeof(uv));
+	memcpy(nrm, last_normal, sizeof(nrm));
+	for(i = 0; i < n; i++, p += s->f->size){
+		DecVertex d;
+		decode_vertex(s->f, p, &d);
+		read_vertex(s->f, &d, &vref[i]);
+	}
+	/* El lote empieza con lo que dejó la llamada anterior, como el de referencia */
+	memcpy(last_uv, uv, sizeof(uv));
+	memcpy(last_normal, nrm, sizeof(nrm));
+}
+
+static void verify_end(const VFormat *f, const u8 *p, int n, const GeClipVertex *dst){
+	static const char *const names[14] = { "clip0", "clip1", "clip2", "clip3", "s", "t", "q", "clipw", "color0", "color1",
+	                                       "x", "y", "z", "niebla" };
+	int i, k;
+	if(n > vref_cap) return;
+	for(i = 0; i < n; i++){
+		const GeClipVertex *a = &vref[i], *b = &dst[i];
+		u32 va[14], vb[14];
+		memcpy(va, a->clip, 16); memcpy(vb, b->clip, 16);
+		memcpy(&va[4], &a->v.s, 4); memcpy(&vb[4], &b->v.s, 4);
+		memcpy(&va[5], &a->v.t, 4); memcpy(&vb[5], &b->v.t, 4);
+		memcpy(&va[6], &a->v.q, 4); memcpy(&vb[6], &b->v.q, 4);
+		memcpy(&va[7], &a->v.clipw, 4); memcpy(&vb[7], &b->v.clipw, 4);
+		va[8] = a->v.color0; vb[8] = b->v.color0;
+		va[9] = a->v.color1; vb[9] = b->v.color1;
+		va[10] = (u32)a->v.x; vb[10] = (u32)b->v.x;
+		va[11] = (u32)a->v.y; vb[11] = (u32)b->v.y;
+		va[12] = a->v.z; vb[12] = b->v.z;
+		memcpy(&va[13], &a->v.fogdepth, 4); memcpy(&vb[13], &b->v.fogdepth, 4);
+		verif_vertices++;
+		if(!memcmp(va, vb, sizeof(va))) continue;
+		verif_bad++;
+		if(verif_logged < 24){
+			char line[400];
+			size_t len = (size_t)snprintf(line, sizeof(line), "[VERIF] vtype %06X vertice %d:", (unsigned)f->vtype, i);
+			for(k = 0; k < 14 && len + 40 < sizeof(line); k++)
+				if(va[k] != vb[k]) len += (size_t)snprintf(line + len, sizeof(line) - len, " %s %08X/%08X", names[k],
+				                                           (unsigned)va[k], (unsigned)vb[k]);
+			len += (size_t)snprintf(line + len, sizeof(line) - len, " bytes");
+			for(k = 0; k < (int)f->size && k < 40 && len + 4 < sizeof(line); k++)
+				len += (size_t)snprintf(line + len, sizeof(line) - len, " %02X", p[(u32)i * f->size + (u32)k]);
+			hle_log_quiet("%s\n", line);
+			verif_logged++;
+		}
+	}
+}
+
+void ge_vdec_verif_report(char *buf, size_t size){
+	snprintf(buf, size, "Verificacion de vertices (ge_vdec_verificar): %u comparados, %u distintos",
+	         (unsigned)verif_vertices, (unsigned)verif_bad);
+	verif_vertices = verif_bad = 0;
+}
+
 static int batch_range(const VSource *s, u32 first, int n, GeClipVertex *dst){
 	const VFormat *f = s->f;
 	const u8 *p;
@@ -1581,6 +1654,7 @@ static int batch_range(const VSource *s, u32 first, int n, GeClipVertex *dst){
 	off = ((s->vaddr + first * size) & PSP_ADDR_MASK) - PSP_RAM_BASE;
 	if(off >= psp_mem.ram_size || (u64)size * (u32)n > psp_mem.ram_size - off) return 0;
 	p = psp_mem.ram + off;
+	if(opt_on[OPT_GE_VDEC_VERIF]) verify_begin(s, p, n);
 	/* Formatos con decodificador propio (los del censo de [TIEMPOS]: DBZ usa
 	   casi solo estos); el resto, con el genérico */
 #define BATCH(tc, col, nrm, pos, wt) \
@@ -1601,6 +1675,7 @@ static int batch_range(const VSource *s, u32 first, int n, GeClipVertex *dst){
 		break;
 	}
 #undef BATCH
+	if(opt_on[OPT_GE_VDEC_VERIF]) verify_end(f, psp_mem.ram + off, n, dst);
 	ge_stats.vertices += (u32)n;
 	if(f->wt) ge_stats.vertices_skinned += (u32)n;
 	return 1;

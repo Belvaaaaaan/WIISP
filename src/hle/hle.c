@@ -458,6 +458,10 @@ static void profile_ge_lines(const GeStats *g, const GeStats *b, u32 vblanks){
 	}
 	ge_vtype_census(line, sizeof(line));
 	hle_log("[TIEMPOS] %s\n", line);
+	if(opt_on[OPT_GE_VDEC_VERIF]){
+		ge_vdec_verif_report(line, sizeof(line));
+		hle_log("[TIEMPOS] %s\n", line);
+	}
 }
 
 /* prof_pmc (0.2): ciclos del procesador por cubeta (con IPC, fallos de la

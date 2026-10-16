@@ -42,6 +42,7 @@ enum {
 	                         donde puede caer con su swizzle */
 	OPT_GE_VDEC_ESP,      /* 1.2 decodificadores de vértices por vtype */
 	OPT_GE_VDEC_PSQ,      /* 1.2b conversión con psq_l y GQR */
+	OPT_GE_VDEC_VERIF,    /* comprobar ge_vdec_esp vértice a vértice (lento) */
 	OPT_GE_TRI_RAPIDO,    /* sin descarte de caras, cada triángulo se
 	                         comprueba una vez y solo se envía su sentido */
 	OPT_GE_BBOX,          /* 1.3 descarte por caja envolvente */

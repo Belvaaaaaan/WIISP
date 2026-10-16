@@ -273,7 +273,25 @@ void test_vdec(void){
 		}
 	}
 	CHECK_EQ(bad, 0);
-	CHECK(total_prims > 3000);   /* que de verdad se dibuje */
+	CHECK(total_prims > 3000);
+	/* El modo de verificación del Wii no encuentra nada aquí */
+	{
+		char rep[200];
+		ge_vdec_verif_report(rep, sizeof(rep));
+		opt_on[OPT_GE_VDEC_VERIF] = 1;
+		for(n = 0; n < 300; n++){
+			GeStats sv;
+			random_case(&c);
+			write_case_data(&c);
+			run_case(&c, 1, &sv);
+		}
+		opt_on[OPT_GE_VDEC_VERIF] = 0;
+		ge_vdec_verif_report(rep, sizeof(rep));
+		CHECK(strstr(rep, " 0 distintos") != NULL);
+		CHECK(strstr(rep, " 0 comparados") == NULL);
+		printf("  %s\n", rep);
+		n = 3000;
+	}   /* que de verdad se dibuje */
 	printf("  %d tandas, %d primitivas comparadas (huella %08X)\n", n, total_prims, (unsigned)golden);
 	free(a);
 	ge_hw = saved_hw;
