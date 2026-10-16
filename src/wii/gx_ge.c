@@ -2517,10 +2517,13 @@ static void __attribute__((noinline)) verify_triangle(const GeVertex *v0, const 
 	if(!memcmp(r, w, sizeof(r))) return;
 	verif_tris_bad++;
 	if(verif_tris_logged++ < 16){
-		const u32 *a = (const u32 *)(const void *)r, *b = (const u32 *)(const void *)w;
+		u32 a[24], b[24];
 		char line[400];
-		size_t len = (size_t)snprintf(line, sizeof(line), "[VERIF] GX triangulo (tex %d through %d proj %d plano %d norm %d):",
-		                              e->tex_on, e->through, e->tex_proj, e->flat, e->tex_norm);
+		size_t len;
+		memcpy(a, r, sizeof(a));
+		memcpy(b, w, sizeof(b));
+		len = (size_t)snprintf(line, sizeof(line), "[VERIF] GX triangulo (tex %d through %d proj %d plano %d norm %d):",
+		                       e->tex_on, e->through, e->tex_proj, e->flat, e->tex_norm);
 		for(i = 0; i < 24 && len + 32 < sizeof(line); i++)
 			if(a[i] != b[i]) len += (size_t)snprintf(line + len, sizeof(line) - len, " [%d] %08X/%08X", i, (unsigned)a[i], (unsigned)b[i]);
 		hle_log_quiet("%s\n", line);

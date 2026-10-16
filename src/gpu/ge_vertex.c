@@ -146,6 +146,11 @@ static inline void psq_setup(void){
 	                     :: "r"(0x07040000u), "r"(0x07060000u), "r"(0x0F040000u));
 }
 
+/* psq_l del byte p[off] (off constante). Sin operando de memoria: con él
+   el lote hace ~11 instrucciones más por vértice (uv16 c4444 p16). Es
+   seguro porque batch_range solo lee la RAM de la PSP (escribe en el caché
+   de vértices y en la pila) y volatile mantiene el orden con psq_setup. Si
+   algún día el lote escribe la RAM de la PSP, hay que ponérselo. */
 #define PSQ_LOAD(r, p, off, gqr) __asm__ __volatile__("psq_l %0," #off "(%1),1," #gqr : "=f"(r) : "b"(p))
 
 static inline __attribute__((always_inline)) float psq_u8(const u8 *p){ float r; PSQ_LOAD(r, p, 0, 2); return r; }
@@ -744,7 +749,9 @@ static inline void light_color_scale(int *x, float f){
 /* Las mismas luces en float, sin pasar por enteros en cada luz: los
    factores de 8 bits del GE se aproximan con su producto en float. noinline:
    una sola copia compilada para el camino por lotes y el de uno en uno (las
-   sumas de productos dan el mismo bit con la misma fusión) */
+   sumas de productos dan el mismo bit). No noipa: sin saber qué registros
+   usa, el bucle del lote guarda más (~25 instrucciones por vértice); las
+   dos llamadas pasan lo mismo, así que comparten el mismo clon */
 static void __attribute__((noinline)) lighting_process_fast(GeVertex *v, const float *mpos, const float *wn, float n_rsqrt,
                                                             const LightState *s){
 	float fc[4], spec[4] = { 0, 0, 0, 0 }, vc[4], wpos[3] = { 0, 0, 0 };
