@@ -1049,6 +1049,8 @@ Metodología acordada (detalle en `docs/HOJA_DE_RUTA.md`): primero medir
   `ge_z_rango`, `ge_mtx_cache` y `registro_diferido` (0.5.11), `prof_pmc`
   (0.5.11.1), 1.2 `ge_vdec_esp` y `ge_tri_rapido` (0.5.12-0.5.13) y
   `gx_envio_rapido`, `ge_ensamblar_rapido` y 1.2b `ge_vdec_psq` (0.5.14).
+- Herramientas para medir sin el Wii (banco de qemu con el código de
+  devkitPPC, perfil por función, psq_l emulado, A/B): `tools/banco/LEEME.md`.
 - 0.5.14 comprobada en el Wii (arriba). Candidatos siguientes (por el banco de qemu): el estado por
   llamada (`ge_raster_begin` ~600 instrucciones por llamada y
   `setup_targets` + `apply_gx` ~720: rehacerlo solo si cambió, 1.4
