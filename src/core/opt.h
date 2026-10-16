@@ -42,9 +42,16 @@ enum {
 	                         donde puede caer con su swizzle */
 	OPT_GE_VDEC_ESP,      /* 1.2 decodificadores de vértices por vtype */
 	OPT_GE_VDEC_PSQ,      /* 1.2b conversión con psq_l y GQR */
-	OPT_GE_VDEC_VERIF,    /* comprobar ge_vdec_esp vértice a vértice (lento) */
+	OPT_GE_VERIF,         /* comprobar los caminos rápidos del GE contra los de
+	                         referencia en el Wii (ge_vdec_esp, gx_envio_rapido,
+	                         ge_ensamblar_rapido, ge_vdec_psq): lento, solo
+	                         para pruebas */
+	OPT_GX_ENVIO,         /* GX: cada triángulo calculado antes de escribirlo
+	                         en el FIFO, sin preparar si no hace falta */
 	OPT_GE_TRI_RAPIDO,    /* sin descarte de caras, cada triángulo se
 	                         comprueba una vez y solo se envía su sentido */
+	OPT_GE_ENSAMBLAR,     /* ensamblar triángulos sin copiar vértices, con
+	                         los descartes de cada vértice ya calculados */
 	OPT_GE_BBOX,          /* 1.3 descarte por caja envolvente */
 	OPT_GE_CHAROLAS,      /* 1.4 agrupar llamadas de dibujo */
 	/* Fase 2: intérprete cacheado */

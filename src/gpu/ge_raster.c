@@ -2092,12 +2092,17 @@ static int range_of(const GeVertex *const *v, int n, int *x1, int *y1, int *x2, 
 }
 
 void ge_raster_triangle(const GeVertex *v0, const GeVertex *v1, const GeVertex *v2){
-	const GeVertex *v[3] = { v0, v1, v2 };
 	s64 d01x = (s64)v0->x - v1->x, d01y = (s64)v0->y - v1->y;
 	s64 d02x = (s64)v0->x - v2->x, d02y = (s64)v0->y - v2->y;
-	int x1, y1, x2, y2;
 	/* Solo los de orden antihorario y con área (gpu/probe exp118, exp132) */
 	if(d01x * d02y - d01y * d02x <= 0) return;
+	ge_raster_triangle_ccw(v0, v1, v2);
+}
+
+/* Con el área ya comprobada (ge_ensamblar_rapido la calcula al ensamblar) */
+void ge_raster_triangle_ccw(const GeVertex *v0, const GeVertex *v1, const GeVertex *v2){
+	const GeVertex *v[3] = { v0, v1, v2 };
+	int x1, y1, x2, y2;
 	if(!range_of(v, 3, &x1, &y1, &x2, &y2)){ ge_tri_flags |= GE_TRI_OUTSIDE; return; }
 	ge_stats.primitives++;
 	if(ge_hw){

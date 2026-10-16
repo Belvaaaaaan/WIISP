@@ -971,13 +971,25 @@ static void compute_transform_state(const VFormat *f){
    cuenta para el rango, salvo que se pida (always) */
 #define SCREEN_BOUND (4095.0f + 15.5f / 16.0f)
 
-/* ge_f2i(ge_floorf(f)) sin volver a convertir el entero ya redondeado */
-static inline int floor_to_int(float f){
+/* ge_f2i(ge_floorf(f)) sin volver a convertir el entero ya redondeado; en
+   *fi, el mismo entero en float (1 si es exacto: |f| < 2^23) */
+static inline int floor_to_int(float f, float *fi, int *exact){
 	if(f > -8388608.0f && f < 8388608.0f){
-		int i = (int)f;
-		return (float)i > f ? i - 1 : i;
+		float t = ge_floorf(f);
+		*fi = t;
+		*exact = 1;
+		return (int)t;
 	}
+	*exact = 0;
 	return ge_f2i(f);
+}
+
+/* El offset de pantalla en float (cambia muy de vez en cuando) */
+static u32 off_key[2] = { 0xFFFFFFFFu, 0xFFFFFFFFu };
+static float off_val[2];
+static inline float offset_float(int k, u32 o){
+	if(o != off_key[k]){ off_key[k] = o; off_val[k] = (float)o; }
+	return off_val[k];
 }
 
 static int round_to_screen(float sx, float sy, float sz, const float *clip, int depth_clip, int always, GeVertex *v){
@@ -989,9 +1001,21 @@ static int round_to_screen(float sx, float sy, float sz, const float *clip, int 
 		else if(sz > 65535.0f) sz = 65535.0f;
 	} else if(sx > SCREEN_BOUND || sy >= SCREEN_BOUND || sx < 0 || sy < 0 || sz < 0.0f || sz >= 65536.0f)
 		outside = 1;
-	v->x = (int)((u32)floor_to_int(sx * 16.0f) - (ge.cmd[GE_OFFSETX] & 0xFFFF));
-	v->y = (int)((u32)floor_to_int(sy * 16.0f) - (ge.cmd[GE_OFFSETY] & 0xFFFF));
-	v->z = (u16)(u32)ge_f2i(sz);
+	{
+		u32 ox = ge.cmd[GE_OFFSETX] & 0xFFFF, oy = ge.cmd[GE_OFFSETY] & 0xFFFF;
+		float fx, fy;
+		int ex, ey, ix = floor_to_int(sx * 16.0f, &fx, &ex), iy = floor_to_int(sy * 16.0f, &fy, &ey);
+		v->x = (int)((u32)ix - ox);
+		v->y = (int)((u32)iy - oy);
+		v->z = (u16)(u32)ge_f2i(sz);
+		/* |i| < 2^23 y el offset < 2^16: la resta en float es exacta */
+		v->fx = ex ? fx - offset_float(0, ox) : (float)v->x;
+		v->fy = ey ? fy - offset_float(1, oy) : (float)v->y;
+		/* Dentro del rango, sz ya es el entero (nunca -0) */
+		v->fz = sz > 0.0f && sz <= 65535.0f ? sz : (float)v->z;
+		/* Aquí y no al volver: sin guardar nada en la pila para la llamada */
+		v->clip_flags = (u16)ge_clip_flags_xy(clip, v->x, v->y);
+	}
 	return outside;
 }
 
@@ -1087,7 +1111,7 @@ static inline __attribute__((always_inline)) void read_vertex_body(const VFormat
 		v->clipw = out->clip[3];
 		v->fogdepth = 1.0f;
 		if(round_to_screen(sx, sy, sz, out->clip, ts.depth_clip, 0, v)){
-			v->x = GE_OUTSIDE;
+			ge_vertex_mark_outside(v);
 			return;
 		}
 
@@ -1150,9 +1174,8 @@ static inline __attribute__((always_inline)) void read_vertex_body(const VFormat
 		}
 	} else {
 		out->clip[0] = out->clip[1] = out->clip[2] = out->clip[3] = 0.0f;
-		v->x = ge_f2i(pos[0] * 16.0f);
-		v->y = ge_f2i(pos[1] * 16.0f);
-		v->z = (u16)(u32)ge_f2i(pos[2]);
+		ge_vertex_set_xyz(v, ge_f2i(pos[0] * 16.0f), ge_f2i(pos[1] * 16.0f), (u16)(u32)ge_f2i(pos[2]));
+		ge_set_clip_flags(out);
 		v->clipw = 1.0f;
 		v->fogdepth = 1.0f;
 	}
@@ -1214,7 +1237,7 @@ static void clip_lerp(GeClipVertex *d, float t, const GeClipVertex *a, const GeC
 static void clip_interpolate(GeClipVertex *d, float t, const GeClipVertex *a, const GeClipVertex *b){
 	GeClipVertex tmp = *d;
 	clip_lerp(&tmp, t, a, b);
-	if(clip_to_screen(tmp.clip, &tmp.v)) tmp.v.x = GE_OUTSIDE;
+	if(clip_to_screen(tmp.clip, &tmp.v)) ge_vertex_mark_outside(&tmp.v);
 	tmp.v.clipw = tmp.clip[3];
 	*d = tmp;
 }
@@ -1245,7 +1268,7 @@ static void near_point(GeClipVertex *d, const GeClipVertex *in, const GeClipVert
 		tc[c] = ge_trunc24(ge_add(ge_product24((double)t * delta), in_tc[c]));
 	}
 	d->v.s = tc[0]; d->v.t = tc[1]; d->v.q = tc[2];
-	if(clip_to_screen(d->clip, &d->v)) d->v.x = GE_OUTSIDE;
+	if(clip_to_screen(d->clip, &d->v)) ge_vertex_mark_outside(&d->v);
 	d->v.clipw = d->clip[3];
 }
 
@@ -1253,11 +1276,11 @@ static void near_point(GeClipVertex *d, const GeClipVertex *in, const GeClipVert
 static void add_triangle_rect(const GeVertex *v0, const GeVertex *v1){
 	GeVertex buf[4], *tl = &buf[0], *tr = &buf[1], *bl = &buf[2], *br = &buf[3];
 	int i;
-	buf[0] = *v1; buf[0].x = v0->x; buf[0].y = v0->y;
+	buf[0] = *v1; buf[0].x = v0->x; buf[0].y = v0->y; buf[0].fx = v0->fx; buf[0].fy = v0->fy;
 	buf[0].s = v0->s; buf[0].t = v0->t; buf[0].q = v0->q;
-	buf[1] = *v1; buf[1].x = v0->x;
+	buf[1] = *v1; buf[1].x = v0->x; buf[1].fx = v0->fx;
 	buf[1].s = v0->s; buf[1].q = v0->q;
-	buf[2] = *v1; buf[2].y = v0->y;
+	buf[2] = *v1; buf[2].y = v0->y; buf[2].fy = v0->fy;
 	buf[2].t = v0->t;
 	buf[3] = *v1;
 
@@ -1297,10 +1320,9 @@ static void process_rect(const GeClipVertex *v0, const GeClipVertex *v1){
 		if(split_fog){
 			/* La niebla de un rectángulo va por el más cercano en x, al revés */
 			GeVertex h0 = v1->v, h1 = v1->v, rev = v1->v;
-			h0.x = v0->v.x + (v1->v.x - v0->v.x) / 2;
+			ge_vertex_set_xyz(&h0, v0->v.x + (v1->v.x - v0->v.x) / 2, h0.y, h0.z);
 			h0.s = v0->v.s + (v1->v.s - v0->v.s) / 2;
-			h1.x = v0->v.x + (v1->v.x - v0->v.x) / 2;
-			h1.y = v0->v.y;
+			ge_vertex_set_xyz(&h1, v0->v.x + (v1->v.x - v0->v.x) / 2, v0->v.y, h1.z);
 			h1.s = v0->v.s + (v1->v.s - v0->v.s) / 2;
 			h1.t = v0->v.t;
 			rev.fogdepth = v0->v.fogdepth;
@@ -1381,6 +1403,16 @@ static void add_tri_flat(const GeClipVertex *a, const GeClipVertex *b, const GeC
 	} else ge_raster_triangle(&a->v, &b->v, &c->v);
 }
 
+/* add_tri_flat con el área ya comprobada (positiva) */
+static void add_tri_ccw(const GeClipVertex *a, const GeClipVertex *b, const GeClipVertex *c, const GeClipVertex *provoking){
+	if(!(ge.cmd[GE_SHADEMODE] & 1)){
+		GeVertex c2 = c->v;
+		c2.color0 = provoking->v.color0;
+		c2.color1 = provoking->v.color1;
+		ge_raster_triangle_ccw(&a->v, &b->v, &c2);
+	} else ge_raster_triangle_ccw(&a->v, &b->v, &c->v);
+}
+
 /* Los descartes de un triángulo antes de recortar (no dependen del orden de
    los vértices); 1 si se descarta. mask: hay que recortar con el plano
    cercano */
@@ -1410,13 +1442,81 @@ static int triangle_rejected(const GeClipVertex *v0, const GeClipVertex *v1, con
 	return 0;
 }
 
+/* ge_ensamblar_rapido: los mismos descartes con las banderas de cada
+   vértice (ge_clip_flags), que solo dependen de sus coordenadas: en una tira
+   cada vértice se comprobaba en tres triángulos */
+static inline int triangle_rejected_flags(const GeClipVertex *v0, const GeClipVertex *v1, const GeClipVertex *v2, int *maskp){
+	int mask = 0;
+	if(!ge_through()){
+		u32 f0 = v0->v.clip_flags, f1 = v1->v.clip_flags, f2 = v2->v.clip_flags;
+		u32 any = f0 | f1 | f2, all = f0 & f1 & f2;
+		int depth_clip = ge.cmd[GE_DEPTHCLAMPENABLE] & 1;
+		ge_tri_flags |= GE_TRI_OUTSIDE;
+		/* outside_range_before_clip: con recorte de profundidad, solo el que
+		   no está más allá del plano cercano */
+		if(any & GE_CF_OUTSIDE){
+			const u32 m = GE_CF_OUTSIDE | GE_CF_NEAR;
+			if(!depth_clip || (f0 & m) == GE_CF_OUTSIDE || (f1 & m) == GE_CF_OUTSIDE || (f2 & m) == GE_CF_OUTSIDE) return 1;
+		}
+		if(all & GE_CF_WNEG) return 1;
+		if(any & GE_CF_NEAR) mask = -1;
+		/* outside_mask: x e y solo si cull_xy */
+		if(all & (cull_xy ? GE_CF_XP | GE_CF_XN | GE_CF_YP | GE_CF_YN | GE_CF_ZP | GE_CF_ZN : GE_CF_ZP | GE_CF_ZN)) return 1;
+		if(!depth_clip){
+			if(!(all & GE_CF_WPOS)) return 1;
+			mask = 0;
+		}
+		ge_tri_flags &= ~GE_TRI_OUTSIDE;
+	}
+	*maskp = mask;
+	return 0;
+}
+
+/* ge_verificar: las banderas guardadas tienen que ser las de las coordenadas
+   del vértice, y los descartes los mismos que los de referencia (resultado,
+   recorte y ge_tri_flags). Se queda el resultado rápido. */
+static u32 verif_tris, verif_tris_bad, verif_tris_logged;
+
+static void __attribute__((noinline)) verify_rejected(const GeClipVertex *v0, const GeClipVertex *v1, const GeClipVertex *v2,
+                                                      int flags_before, int mask_before, int r, int mask){
+	const GeClipVertex *v[3] = { v0, v1, v2 };
+	int flags = ge_tri_flags, ref_mask = mask_before, ref_r, ref_flags, i, bad = 0;
+	for(i = 0; i < 3; i++) if(v[i]->v.clip_flags != ge_clip_flags(v[i])) bad |= 1 << i;
+	ge_tri_flags = flags_before;
+	ref_r = triangle_rejected(v0, v1, v2, &ref_mask);
+	ref_flags = ge_tri_flags;
+	ge_tri_flags = flags;
+	verif_tris++;
+	if(!bad && ref_r == r && ref_mask == mask && ref_flags == flags) return;
+	verif_tris_bad++;
+	if(verif_tris_logged++ < 24)
+		hle_log_quiet("[VERIF] descartes: vertices %d %d %d banderas %03X/%03X %03X/%03X %03X/%03X x %d %d %d through %d "
+		              "profundidad %u: %d/%d recorte %d/%d triangulo %X/%X\n", !!(bad & 1), !!(bad & 2), !!(bad & 4),
+		              (unsigned)ge_clip_flags(v0), (unsigned)v0->v.clip_flags, (unsigned)ge_clip_flags(v1), (unsigned)v1->v.clip_flags,
+		              (unsigned)ge_clip_flags(v2), (unsigned)v2->v.clip_flags, v0->v.x, v1->v.x, v2->v.x, ge_through(),
+		              (unsigned)(ge.cmd[GE_DEPTHCLAMPENABLE] & 1), ref_r, r, ref_mask, mask, (unsigned)ref_flags, (unsigned)flags);
+}
+
+static inline __attribute__((always_inline)) int triangle_rejected_fast(const GeClipVertex *v0, const GeClipVertex *v1,
+                                                                        const GeClipVertex *v2, int *maskp){
+	int flags_before = ge_tri_flags, mask_before = *maskp;
+	int r = triangle_rejected_flags(v0, v1, v2, maskp);
+	if(opt_on[OPT_GE_VERIF]) verify_rejected(v0, v1, v2, flags_before, mask_before, r, *maskp);
+	return r;
+}
+
+static inline int triangle_rejected_any(const GeClipVertex *v0, const GeClipVertex *v1, const GeClipVertex *v2, int *maskp){
+	if(opt_on[OPT_GE_ENSAMBLAR]) return triangle_rejected_fast(v0, v1, v2, maskp);
+	return triangle_rejected(v0, v1, v2, maskp);
+}
+
 static void process_triangle(const GeClipVertex *v0, const GeClipVertex *v1, const GeClipVertex *v2,
                              const GeClipVertex *provoking, int reversed){
 	int mask = 0, i, num_outside = 0, num_tris = 0, outside[3];
 	const GeClipVertex *src[3], *tris[2][3];
 	GeClipVertex made[2];
 
-	if(triangle_rejected(v0, v1, v2, &mask)) return;
+	if(triangle_rejected_any(v0, v1, v2, &mask)) return;
 
 	if(mask == 0){
 		add_tri_flat(v0, v1, v2, provoking);
@@ -1468,32 +1568,60 @@ static int data_index_;
 static u32 prev_prim_ = GE_PRIM_POINTS;
 static int is_imm_draw;
 
-static void send_triangle(int cull, const GeClipVertex *v, int provoking, int reversed){
+/* 1 si el rasterizador dibujaría (a, b, c) (área positiva, ge_raster_triangle),
+   -1 si dibujaría (c, b, a) y 0 si ninguno. Con x e y pequeñas (GE_CF_SMALL)
+   en double desde fx y fy, exacto y sin la multiplicación de 64 bits, que
+   en el Broadway son varias. Si no, como el rasterizador: el área de (c, b,
+   a) es -area también al desbordar (el mismo polinomio módulo 2^64), y con
+   0 o INT64_MIN ninguna de las dos es positiva. */
+static inline int triangle_area_sign(const GeVertex *a, const GeVertex *b, const GeVertex *c){
+	if(a->clip_flags & b->clip_flags & c->clip_flags & GE_CF_SMALL){
+		double d01x = (double)a->fx - b->fx, d01y = (double)a->fy - b->fy;
+		double d02x = (double)a->fx - c->fx, d02y = (double)a->fy - c->fy;
+		double area = d01x * d02y - d01y * d02x;
+		return area > 0.0 ? 1 : area < 0.0 ? -1 : 0;
+	} else {
+		s64 d01x = (s64)a->x - b->x, d01y = (s64)a->y - b->y;
+		s64 d02x = (s64)a->x - c->x, d02y = (s64)a->y - c->y;
+		s64 area = d01x * d02y - d01y * d02x;
+		return area > 0 ? 1 : area < 0 && area != INT64_MIN ? -1 : 0;
+	}
+}
+
+/* v: los tres vértices de la ventana (en data_ o, con ge_ensamblar_rapido,
+   en el caché de la llamada) */
+static void send_triangle(int cull, const GeClipVertex *const *v, int provoking, int reversed){
 	u32 drawn = ge_stats.primitives;
 	ge_tri_flags = 0;
 	if(cull == CULL_OFF){
-		int mask;
+		int mask = 0;
 		ge_stats.tris_cull_off++;
 		if(!opt_on[OPT_GE_TRI_RAPIDO]){
-			process_triangle(&v[0], &v[1], &v[2], &v[provoking], reversed);
-			process_triangle(&v[2], &v[1], &v[0], &v[provoking], !reversed);
-		} else if(triangle_rejected(&v[0], &v[1], &v[2], &mask)){
+			process_triangle(v[0], v[1], v[2], v[provoking], reversed);
+			process_triangle(v[2], v[1], v[0], v[provoking], !reversed);
+		} else if(triangle_rejected_any(v[0], v[1], v[2], &mask)){
 			/* ge_tri_rapido: los descartes no dependen del orden: una vez */
 		} else if(mask){
-			process_triangle(&v[0], &v[1], &v[2], &v[provoking], reversed);
-			process_triangle(&v[2], &v[1], &v[0], &v[provoking], !reversed);
+			process_triangle(v[0], v[1], v[2], v[provoking], reversed);
+			process_triangle(v[2], v[1], v[0], v[provoking], !reversed);
+		} else if(opt_on[OPT_GE_ENSAMBLAR]){
+			/* ge_ensamblar_rapido: el área se calcula aquí y el rasterizador
+			   no la vuelve a mirar */
+			int sign = triangle_area_sign(&v[0]->v, &v[1]->v, &v[2]->v);
+			if(sign > 0) add_tri_ccw(v[0], v[1], v[2], v[provoking]);
+			else if(sign < 0) add_tri_ccw(v[2], v[1], v[0], v[provoking]);
 		} else {
 			/* Sin recortar, el rasterizador solo dibuja el sentido con área
 			   positiva: el otro (o ninguno con área 0) se iba a descartar */
-			s64 d01x = (s64)v[0].v.x - v[1].v.x, d01y = (s64)v[0].v.y - v[1].v.y;
-			s64 d02x = (s64)v[0].v.x - v[2].v.x, d02y = (s64)v[0].v.y - v[2].v.y;
-			if(d01x * d02y - d01y * d02x > 0) add_tri_flat(&v[0], &v[1], &v[2], &v[provoking]);
-			else add_tri_flat(&v[2], &v[1], &v[0], &v[provoking]);
+			s64 d01x = (s64)v[0]->v.x - v[1]->v.x, d01y = (s64)v[0]->v.y - v[1]->v.y;
+			s64 d02x = (s64)v[0]->v.x - v[2]->v.x, d02y = (s64)v[0]->v.y - v[2]->v.y;
+			if(d01x * d02y - d01y * d02x > 0) add_tri_flat(v[0], v[1], v[2], v[provoking]);
+			else add_tri_flat(v[2], v[1], v[0], v[provoking]);
 		}
 	} else if(cull == CULL_CW){
-		process_triangle(&v[2], &v[1], &v[0], &v[provoking], !reversed);
+		process_triangle(v[2], v[1], v[0], v[provoking], !reversed);
 	} else {
-		process_triangle(&v[0], &v[1], &v[2], &v[provoking], reversed);
+		process_triangle(v[0], v[1], v[2], v[provoking], reversed);
 	}
 	ge_stats.tris++;
 	if(ge_stats.primitives != drawn) ge_stats.tris_drawn++;
@@ -1521,12 +1649,13 @@ static int vcache_cap;
 /* Copia de un vértice palabra a palabra (una copia de estructura acababa
    en una llamada a memcpy por vértice) */
 typedef u32 __attribute__((may_alias)) cv_word;
-typedef char cv_size_ok[sizeof(GeClipVertex) == 56 ? 1 : -1];
+typedef char cv_size_ok[sizeof(GeClipVertex) == 68 ? 1 : -1];
 static inline void copy_cv(GeClipVertex *d, const GeClipVertex *s){
 	cv_word *o = (cv_word *)(void *)d;
 	const cv_word *i = (const cv_word *)(const void *)s;
-	o[0] = i[0]; o[1] = i[1]; o[2] = i[2]; o[3] = i[3]; o[4] = i[4]; o[5] = i[5]; o[6] = i[6];
-	o[7] = i[7]; o[8] = i[8]; o[9] = i[9]; o[10] = i[10]; o[11] = i[11]; o[12] = i[12]; o[13] = i[13];
+	o[0] = i[0]; o[1] = i[1]; o[2] = i[2]; o[3] = i[3]; o[4] = i[4]; o[5] = i[5]; o[6] = i[6]; o[7] = i[7];
+	o[8] = i[8]; o[9] = i[9]; o[10] = i[10]; o[11] = i[11]; o[12] = i[12]; o[13] = i[13]; o[14] = i[14];
+	o[15] = i[15]; o[16] = i[16];
 }
 
 static u32 index_at(const VSource *s, int i){
@@ -1564,6 +1693,36 @@ static void vsource_read(const VSource *s, int vtx, GeClipVertex *out){
 	else read_raw(s, (u32)vtx, out);
 }
 
+/* El vértice vtx para la ventana de triángulos. refs (ge_ensamblar_rapido):
+   si ya está calculado en el caché de la llamada (por lotes o con índices
+   repetidos), el del caché, sin copiar sus 68 bytes; si no, leído en slot */
+static inline const GeClipVertex *vsource_ref(const VSource *s, int vtx, GeClipVertex *slot, int refs){
+	if(refs){
+		if(s->use_indices){
+			if(s->use_cache){
+				ge_stats.vertex_reads++;
+				return &s->cache[index_at(s, vtx) - s->lower];
+			}
+		} else if(s->batch){
+			ge_stats.vertex_reads++;
+			return &s->cache[vtx];
+		}
+	}
+	vsource_read(s, vtx, slot);
+	return slot;
+}
+
+/* Al acabar la llamada, data_ queda como si cada vértice se hubiera copiado
+   a su hueco (lo que sigue con PRIM continuar o el modo inmediato): el caché
+   se reutiliza en la siguiente */
+static void window_keep(const GeClipVertex **w){
+	int i;
+	for(i = 0; i < 4; i++){
+		if(w[i] != &data_[i]) copy_cv(&data_[i], w[i]);
+		w[i] = &data_[i];
+	}
+}
+
 /* ge_vdec_esp: con la matemática rápida, los vértices de una llamada sin
    índices (o el rango de una con índices repetidos) se calculan todos de una
    vez y en orden, antes de ensamblar: un solo puntero a la RAM, sin cambiar
@@ -1572,7 +1731,7 @@ static void vsource_read(const VSource *s, int vtx, GeClipVertex *out){
    cambian) y las mismas expresiones (read_vertex_body), así que salen los
    mismos bits: tests/test_vdec.c. Solo la RAM: leer de la VRAM puede bajar
    un framebuffer. */
-/* ge_vdec_verificar: cada lote se calcula también uno a uno (decode_vertex
+/* ge_verificar: cada lote se calcula también uno a uno (decode_vertex
    y read_vertex, como sin ge_vdec_esp) y se compara campo a campo; lo
    distinto va al registro con los bits y los bytes del vértice. Para
    encontrar en el Wii lo que las pruebas del PC no ven. */
@@ -1602,13 +1761,13 @@ static void verify_begin(const VSource *s, const u8 *p, int n){
 }
 
 static void verify_end(const VFormat *f, const u8 *p, int n, const GeClipVertex *dst){
-	static const char *const names[14] = { "clip0", "clip1", "clip2", "clip3", "s", "t", "q", "clipw", "color0", "color1",
-	                                       "x", "y", "z", "niebla" };
+	static const char *const names[18] = { "clip0", "clip1", "clip2", "clip3", "s", "t", "q", "clipw", "color0", "color1",
+	                                       "x", "y", "z", "niebla", "fx", "fy", "fz", "banderas" };
 	int i, k;
 	if(n > vref_cap) return;
 	for(i = 0; i < n; i++){
 		const GeClipVertex *a = &vref[i], *b = &dst[i];
-		u32 va[14], vb[14];
+		u32 va[18], vb[18];
 		memcpy(va, a->clip, 16); memcpy(vb, b->clip, 16);
 		memcpy(&va[4], &a->v.s, 4); memcpy(&vb[4], &b->v.s, 4);
 		memcpy(&va[5], &a->v.t, 4); memcpy(&vb[5], &b->v.t, 4);
@@ -1620,13 +1779,17 @@ static void verify_end(const VFormat *f, const u8 *p, int n, const GeClipVertex 
 		va[11] = (u32)a->v.y; vb[11] = (u32)b->v.y;
 		va[12] = a->v.z; vb[12] = b->v.z;
 		memcpy(&va[13], &a->v.fogdepth, 4); memcpy(&vb[13], &b->v.fogdepth, 4);
+		memcpy(&va[14], &a->v.fx, 4); memcpy(&vb[14], &b->v.fx, 4);
+		memcpy(&va[15], &a->v.fy, 4); memcpy(&vb[15], &b->v.fy, 4);
+		memcpy(&va[16], &a->v.fz, 4); memcpy(&vb[16], &b->v.fz, 4);
+		va[17] = a->v.clip_flags; vb[17] = b->v.clip_flags;
 		verif_vertices++;
 		if(!memcmp(va, vb, sizeof(va))) continue;
 		verif_bad++;
 		if(verif_logged < 24){
 			char line[400];
 			size_t len = (size_t)snprintf(line, sizeof(line), "[VERIF] vtype %06X vertice %d:", (unsigned)f->vtype, i);
-			for(k = 0; k < 14 && len + 40 < sizeof(line); k++)
+			for(k = 0; k < 18 && len + 40 < sizeof(line); k++)
 				if(va[k] != vb[k]) len += (size_t)snprintf(line + len, sizeof(line) - len, " %s %08X/%08X", names[k],
 				                                           (unsigned)va[k], (unsigned)vb[k]);
 			len += (size_t)snprintf(line + len, sizeof(line) - len, " bytes");
@@ -1639,9 +1802,11 @@ static void verify_end(const VFormat *f, const u8 *p, int n, const GeClipVertex 
 }
 
 void ge_vdec_verif_report(char *buf, size_t size){
-	snprintf(buf, size, "Verificacion de vertices (ge_vdec_verificar): %u comparados, %u distintos",
-	         (unsigned)verif_vertices, (unsigned)verif_bad);
+	snprintf(buf, size, "Verificacion (ge_verificar): vertices %u comparados, %u distintos; descartes de triangulos "
+	         "%u comparados, %u distintos", (unsigned)verif_vertices, (unsigned)verif_bad, (unsigned)verif_tris,
+	         (unsigned)verif_tris_bad);
 	verif_vertices = verif_bad = 0;
+	verif_tris = verif_tris_bad = 0;
 }
 
 static int batch_range(const VSource *s, u32 first, int n, GeClipVertex *dst){
@@ -1654,7 +1819,7 @@ static int batch_range(const VSource *s, u32 first, int n, GeClipVertex *dst){
 	off = ((s->vaddr + first * size) & PSP_ADDR_MASK) - PSP_RAM_BASE;
 	if(off >= psp_mem.ram_size || (u64)size * (u32)n > psp_mem.ram_size - off) return 0;
 	p = psp_mem.ram + off;
-	if(opt_on[OPT_GE_VDEC_VERIF]) verify_begin(s, p, n);
+	if(opt_on[OPT_GE_VERIF]) verify_begin(s, p, n);
 	/* Formatos con decodificador propio (los del censo de [TIEMPOS]: DBZ usa
 	   casi solo estos); el resto, con el genérico */
 #define BATCH(tc, col, nrm, pos, wt) \
@@ -1675,7 +1840,7 @@ static int batch_range(const VSource *s, u32 first, int n, GeClipVertex *dst){
 		break;
 	}
 #undef BATCH
-	if(opt_on[OPT_GE_VDEC_VERIF]) verify_end(f, psp_mem.ram + off, n, dst);
+	if(opt_on[OPT_GE_VERIF]) verify_end(f, psp_mem.ram + off, n, dst);
 	ge_stats.vertices += (u32)n;
 	if(f->wt) ge_stats.vertices_skinned += (u32)n;
 	return 1;
@@ -1742,7 +1907,10 @@ static void submit_primitive(const VSource *vr, u32 prim_type, int vertex_count)
 static void submit_primitive_body(const VSource *vr, u32 prim_type, int vertex_count){
 	int cull_on = (ge.cmd[GE_CULLFACEENABLE] & 1) && !(ge.cmd[GE_CLEARMODE] & 1);
 	int cull = cull_on ? ((ge.cmd[GE_CULL] & 1) ? CULL_CCW : CULL_CW) : CULL_OFF;
-	int vtx, i;
+	int vtx, i, refs = opt_on[OPT_GE_ENSAMBLAR];
+	/* La ventana de los triángulos: cada hueco de data_ o el vértice que le
+	   tocaría, en el caché */
+	const GeClipVertex *w[4] = { &data_[0], &data_[1], &data_[2], &data_[3] };
 
 	if(prim_type != GE_PRIM_CONTINUE){
 		data_index_ = 0;
@@ -1776,13 +1944,15 @@ static void submit_primitive_body(const VSource *vr, u32 prim_type, int vertex_c
 
 	case GE_PRIM_TRIANGLES:
 		for(vtx = 0; vtx < vertex_count; vtx++){
-			vsource_read(vr, vtx, &data_[data_index_++]);
+			w[data_index_] = vsource_ref(vr, vtx, &data_[data_index_], refs);
+			data_index_++;
 			if(data_index_ < 3) continue;  /* uno incompleto sigue para PRIM continuar */
 			data_index_ = 0;
-			send_triangle(cull, data_, 2, 0);
+			send_triangle(cull, w, 2, 0);
 		}
+		window_keep(w);
 		if(data_index_ >= 3){
-			send_triangle(cull, data_, 2, 0);
+			send_triangle(cull, w, 2, 0);
 			data_index_ = 0;
 		}
 		break;
@@ -1818,21 +1988,23 @@ static void submit_primitive_body(const VSource *vr, u32 prim_type, int vertex_c
 	case GE_PRIM_TRIANGLE_STRIP: {
 		int skip = data_index_ >= 2 ? 0 : 2 - data_index_, start = 0;
 		for(vtx = start; vtx < vertex_count && skip > 0; vtx++){
-			vsource_read(vr, vtx, &data_[(data_index_++) % 3]);
+			int k = (data_index_++) % 3;
+			w[k] = vsource_ref(vr, vtx, &data_[k], refs);
 			skip--;
 			start++;
 		}
 		for(vtx = start; vtx < vertex_count; vtx++){
 			int provoking = (data_index_++) % 3, wind = (data_index_ - 1) % 2;
 			int alt = cull == CULL_OFF ? cull : (cull ^ wind);
-			vsource_read(vr, vtx, &data_[provoking]);
+			w[provoking] = vsource_ref(vr, vtx, &data_[provoking], refs);
 			/* Los impares llegan en el orden contrario al del GE (gpu/probe exp45) */
-			send_triangle(alt, data_, provoking, wind != 0);
+			send_triangle(alt, w, provoking, wind != 0);
 		}
+		window_keep(w);
 		if(is_imm_draw && data_index_ >= 3){
 			int provoking = (data_index_ - 1) % 3, wind = (data_index_ - 1) % 2;
 			int alt = cull == CULL_OFF ? cull : (cull ^ wind);
-			send_triangle(alt, data_, provoking, wind != 0);
+			send_triangle(alt, w, provoking, wind != 0);
 		}
 		break;
 	}
@@ -1841,26 +2013,27 @@ static void submit_primitive_body(const VSource *vr, u32 prim_type, int vertex_c
 		int skip = data_index_ <= 1 ? 1 : 0, start = 0;
 		/* El centro solo se lee si no se continúa */
 		if(data_index_ == 0 && vertex_count > 0){
-			vsource_read(vr, 0, &data_[0]);
+			w[0] = vsource_ref(vr, 0, &data_[0], refs);
 			data_index_++;
 			start = 1;
 		}
 		for(vtx = start; vtx < vertex_count && skip > 0; vtx++){
 			int provoking = 2 - ((data_index_++) % 2);
-			vsource_read(vr, vtx, &data_[provoking]);
+			w[provoking] = vsource_ref(vr, vtx, &data_[provoking], refs);
 			skip--;
 			start++;
 		}
 		for(vtx = start; vtx < vertex_count; vtx++){
 			int provoking = 2 - ((data_index_++) % 2), wind = (data_index_ - 1) % 2;
 			int alt = cull == CULL_OFF ? cull : (cull ^ wind);
-			vsource_read(vr, vtx, &data_[provoking]);
-			send_triangle(alt, data_, provoking, wind != 0);
+			w[provoking] = vsource_ref(vr, vtx, &data_[provoking], refs);
+			send_triangle(alt, w, provoking, wind != 0);
 		}
+		window_keep(w);
 		if(is_imm_draw && data_index_ >= 3){
 			int wind = (data_index_ - 1) % 2, provoking = 2 - wind;
 			int alt = cull == CULL_OFF ? cull : (cull ^ wind);
-			send_triangle(alt, data_, provoking, wind != 0);
+			send_triangle(alt, w, provoking, wind != 0);
 		}
 		break;
 	}
@@ -1875,12 +2048,19 @@ static void load_morph_weights(void){
 	for(i = 0; i < 8; i++) morph_weights[i] = ge_f24(ge.cmd[GE_MORPHWEIGHT0 + i]);
 }
 
+/* La primitiva de los vértices inmediatos */
+static u32 imm_prim = 0xFFFFFFFFu, imm_flags;
+static int imm_first_sent;
+
 /* Pruebas: lo que una llamada deja a la siguiente, como al arrancar */
 void ge_vertex_test_reset(void){
 	last_uv[0] = last_uv[1] = 0.0f;
 	last_normal[0] = last_normal[1] = last_normal[2] = 0.0f;
 	data_index_ = 0;
 	prev_prim_ = GE_PRIM_POINTS;
+	imm_prim = 0xFFFFFFFFu;
+	imm_flags = 0;
+	imm_first_sent = 0;
 	mc.valid = 0;
 }
 
@@ -2090,10 +2270,8 @@ void ge_bounding_box(u32 count){
 
 /* --- Vértices inmediatos (comandos 0xF0-0xF9) ------------------------------- */
 
-/* Como SoftGPU de PPSSPP: cada VAP se envía en el acto */
-static u32 imm_prim = 0xFFFFFFFFu, imm_flags;
-static int imm_first_sent;
-
+/* Como SoftGPU de PPSSPP: cada VAP se envía en el acto (imm_prim, imm_flags
+   e imm_first_sent, arriba) */
 void ge_immediate_vertex(void){
 	static const int fl_cmd[6] = { GE_ANTIALIASENABLE, GE_SHADEMODE, GE_CULLFACEENABLE, GE_TEXTUREMAPENABLE,
 	                               GE_FOGENABLE, GE_DITHERENABLE };
@@ -2146,9 +2324,8 @@ void ge_immediate_vertex(void){
 	cv.v.color0 = color0;
 	cv.v.color1 = (ge.cmd[GE_LIGHTMODE] & 1) && !through ? (ge.cmd[GE_VSCV] & 0xFFFFFF) : 0;
 	cv.v.fogdepth = (float)(ge.cmd[GE_VFC] & 0xFF) / 255.0f;
-	cv.v.x = ge_f2i(x * 16.0f);
-	cv.v.y = ge_f2i(y * 16.0f);
-	cv.v.z = (u16)(u32)z;
+	ge_vertex_set_xyz(&cv.v, ge_f2i(x * 16.0f), ge_f2i(y * 16.0f), (u16)(u32)z);
+	ge_set_clip_flags(&cv);
 
 	vformat_setup(&f, ge.cmd[GE_VERTEXTYPE] | (3u << 7));
 	memset(&vr, 0, sizeof(vr));

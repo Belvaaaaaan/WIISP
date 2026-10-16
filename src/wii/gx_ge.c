@@ -66,6 +66,7 @@
 #include <ogc/lwp_watchdog.h>
 #include "wii/gx_ge.h"
 #include "wii/gx_tiles.h"
+#include "wii/gx_emit.h"
 
 #define EFB_W 640
 #define EFB_H 528
@@ -2338,7 +2339,14 @@ static int prepare(int full){
 	return 1;
 }
 
-static void drawn(void){
+/* prepare(0) no haría nada: ni búferes ni estado nuevos, ni restaurar, ni
+   alfa por píxel que promover (gx_envio_rapido) */
+static inline int prepare_idle(void){
+	return !targets_dirty && !skip_draws && (!touch_c || restored_c) && (!touch_z || !cur_z || restored_z) &&
+	       stencil_val < 0 && !reads_dst_alpha && !want_promote && !gx_dirty;
+}
+
+static inline void drawn(void){
 	if(writes_c && !efb_c_newer){
 		efb_c_newer = 1;
 		if(cur_c->state != GPU_NEWER){ cur_c->state = GPU_NEWER; recompute_watch(); }
@@ -2351,12 +2359,6 @@ static void drawn(void){
 
 /* --- Primitivas ---------------------------------------------------------------- */
 
-static inline int fog_byte(float fogdepth){
-	if(!(fogdepth > 0.0f)) return 0;
-	if(fogdepth >= 1.0f) return 255;
-	return (int)(fogdepth * 255.0f);
-}
-
 static inline void put(float x, float y, float z, float s, float t, float q, core_u32 c0, core_u32 c1){
 	wgPipe->F32 = x;
 	wgPipe->F32 = y;
@@ -2368,28 +2370,22 @@ static inline void put(float x, float y, float z, float s, float t, float q, cor
 	wgPipe->U32 = __builtin_bswap32(c1);
 }
 
-/* Una uv NaN o infinita muestrea el texel 0 en la PSP */
-static inline float finite_uv(float f){
-	return f - f == 0.0f ? f : 0.0f;
+static inline void put_words(const GxVtxWords *w){
+	put(w->f[0], w->f[1], w->f[2], w->f[3], w->f[4], w->f[5], w->c[0], w->c[1]);
 }
 
-/* La perspectiva de las texturas la hace GX con s/w, t/w y q = 1/w y la
-   división s/q en cada píxel. q puede ser muy pequeña (0,001 con w = 1000) y
-   el hardware la interpola con menos precisión que un float: todo el
-   triángulo se multiplica por la w más cercana, s/q no cambia y q queda en
-   (0, 1]. k es ese factor (1 sin normalizar). */
-static inline float tex_scale3(const GeVertex *v0, const GeVertex *v1, const GeVertex *v2){
-	float w = v0->clipw;
-	if(v1->clipw < w) w = v1->clipw;
-	if(v2->clipw < w) w = v2->clipw;
-	return w > 0.0f && w < 3.0e38f ? w : 1.0f;
+/* El estado de gx_emit.h, de los globales de aquí */
+static inline void emit_ctx(GxEmitCtx *e){
+	e->tex_on = tex_on; e->through = through; e->tex_proj = tex_proj; e->flat = flat; e->tex_norm = tex_norm;
+	e->inv_tw = inv_tw; e->inv_th = inv_th; e->tex_su = tex_su; e->tex_sv = tex_sv; e->pos_off = pos_off;
 }
 
-/* v da posición, uv y niebla; cv los colores; k el factor de tex_scale3 */
+/* v da posición, uv y niebla; cv los colores; k el factor de gx_tex_scale3
+   (el de siempre; gx_vertex_ref en gx_emit.h hace las mismas cuentas) */
 static inline void put_vertex(const GeVertex *v, const GeVertex *cv, float k){
 	float s = 0.0f, t = 0.0f, q = 1.0f;
 	if(tex_on){
-		s = finite_uv(v->s); t = finite_uv(v->t);
+		s = gx_finite_uv(v->s); t = gx_finite_uv(v->t);
 		if(through){ s *= inv_tw; t *= inv_th; }
 		else {
 			float iw = k / v->clipw;
@@ -2398,7 +2394,7 @@ static inline void put_vertex(const GeVertex *v, const GeVertex *cv, float k){
 		}
 	}
 	put((float)v->x * (1.0f / 16.0f) + pos_off, (float)v->y * (1.0f / 16.0f) + pos_off, (float)v->z, s, t, q,
-	    cv->color0, (cv->color1 & 0xFFFFFF) | ((core_u32)fog_byte(v->fogdepth) << 24));
+	    cv->color0, (cv->color1 & 0xFFFFFF) | ((core_u32)gx_fog_byte(v->fogdepth) << 24));
 }
 
 /* --- Censo: qué parte de una textura sobre un framebuffer se lee ----------- */
@@ -2507,7 +2503,32 @@ static void rtt_note_triangle(const GeVertex *v0, const GeVertex *v1, const GeVe
 	}
 }
 
-static void gx_triangle(const GeVertex *v0, const GeVertex *v1, const GeVertex *v2){
+/* gx_envio_rapido / ge_verificar: triángulos comprobados contra la referencia */
+static u32 verif_tris, verif_tris_bad, verif_tris_logged;
+
+static void __attribute__((noinline)) verify_triangle(const GeVertex *v0, const GeVertex *v1, const GeVertex *v2){
+	GxVtxWords r[3], w[3];
+	GxEmitCtx ec, *e = &ec;
+	int i;
+	emit_ctx(e);
+	gx_triangle_ref(r, v0, v1, v2, e);
+	gx_triangle_fast(w, v0, v1, v2, e);
+	verif_tris++;
+	if(!memcmp(r, w, sizeof(r))) return;
+	verif_tris_bad++;
+	if(verif_tris_logged++ < 16){
+		const u32 *a = (const u32 *)(const void *)r, *b = (const u32 *)(const void *)w;
+		char line[400];
+		size_t len = (size_t)snprintf(line, sizeof(line), "[VERIF] GX triangulo (tex %d through %d proj %d plano %d norm %d):",
+		                              e->tex_on, e->through, e->tex_proj, e->flat, e->tex_norm);
+		for(i = 0; i < 24 && len + 32 < sizeof(line); i++)
+			if(a[i] != b[i]) len += (size_t)snprintf(line + len, sizeof(line) - len, " [%d] %08X/%08X", i, (unsigned)a[i], (unsigned)b[i]);
+		hle_log_quiet("%s\n", line);
+	}
+}
+
+/* El de siempre (sin gx_envio_rapido) */
+static void __attribute__((noinline)) gx_triangle_ref_path(const GeVertex *v0, const GeVertex *v1, const GeVertex *v2){
 	const GeVertex *c;
 	float k;
 	if(!prepare(0)) return;
@@ -2520,7 +2541,7 @@ static void gx_triangle(const GeVertex *v0, const GeVertex *v1, const GeVertex *
 	}
 	if(rtt_cur && tex_on) rtt_note_triangle(v0, v1, v2);
 	c = flat ? v2 : NULL;
-	k = tex_on && !through && tex_norm ? tex_scale3(v0, v1, v2) : 1.0f;
+	k = tex_on && !through && tex_norm ? gx_tex_scale3(v0, v1, v2) : 1.0f;
 	GX_Begin(GX_TRIANGLES, GX_VTXFMT0, 3);
 	put_vertex(v0, c ? c : v0, k);
 	put_vertex(v1, c ? c : v1, k);
@@ -2529,12 +2550,43 @@ static void gx_triangle(const GeVertex *v0, const GeVertex *v1, const GeVertex *
 	drawn();
 }
 
+/* gx_envio_rapido: entre dos triángulos de la misma llamada no suele haber
+   nada que preparar (se mira sin llamar a nadie) y los valores de los tres
+   vértices se calculan antes de escribir el primero (gx_emit.h) */
+static void gx_triangle(const GeVertex *v0, const GeVertex *v1, const GeVertex *v2){
+	GxVtxWords w;
+	GxEmitLocal l;
+	const GeVertex *c;
+	if(!opt_on[OPT_GX_ENVIO]){ gx_triangle_ref_path(v0, v1, v2); return; }
+	if(!prepare_idle() && !prepare(0)) return;
+	if(use_clut_gpu && tex_on){
+		const GeVertex *vv[3] = { v0, v1, v2 };
+		if(!clut_gpu_triangle_ok(vv)){
+			clut_gpu_fallback();
+			prepare_state();
+		}
+	}
+	if(rtt_cur && tex_on) rtt_note_triangle(v0, v1, v2);
+	/* Antes de cargar el estado: así no se guarda en la pila para la llamada */
+	GX_Begin(GX_TRIANGLES, GX_VTXFMT0, 3);
+	l.tex_on = tex_on; l.through = through; l.tex_proj = tex_proj;
+	l.inv_tw = inv_tw; l.inv_th = inv_th; l.tex_su = tex_su; l.tex_sv = tex_sv; l.pos_off = pos_off;
+	l.k = tex_on && !through && tex_norm ? gx_tex_scale3(v0, v1, v2) : 1.0f;
+	c = flat ? v2 : NULL;
+	w = gx_vertex_fast(v0, c ? c : v0, &l); put_words(&w);
+	w = gx_vertex_fast(v1, c ? c : v1, &l); put_words(&w);
+	w = gx_vertex_fast(v2, c ? c : v2, &l); put_words(&w);
+	GX_End();
+	if(opt_on[OPT_GE_VERIF]) verify_triangle(v0, v1, v2);
+	drawn();
+}
+
 /* Esquina de un sprite: x de vx, y de vy; s y t según la orientación */
 static void put_corner(const GeVertex *vx, const GeVertex *vy, const GeVertex *v1, int swap_st, float iw){
 	float s = 0.0f, t = 0.0f, q = 1.0f;
 	if(tex_on){
-		s = finite_uv(swap_st ? vy->s : vx->s);
-		t = finite_uv(swap_st ? vx->t : vy->t);
+		s = gx_finite_uv(swap_st ? vy->s : vx->s);
+		t = gx_finite_uv(swap_st ? vx->t : vy->t);
 		if(through){ s *= inv_tw; t *= inv_th; }
 		else {
 			if(tex_proj) q = vx->q;
@@ -2542,7 +2594,7 @@ static void put_corner(const GeVertex *vx, const GeVertex *vy, const GeVertex *v
 		}
 	}
 	put((float)vx->x * (1.0f / 16.0f) + pos_off, (float)vy->y * (1.0f / 16.0f) + pos_off, (float)v1->z, s, t, q,
-	    v1->color0, (v1->color1 & 0xFFFFFF) | ((core_u32)fog_byte(v1->fogdepth) << 24));
+	    v1->color0, (v1->color1 & 0xFFFFFF) | ((core_u32)gx_fog_byte(v1->fogdepth) << 24));
 }
 
 static void draw_sprite(const GeVertex *v0, const GeVertex *v1){
@@ -2696,6 +2748,13 @@ void gx_ge_texture_report(char *buf, size_t size){
 	         tc_unstable_count(&tcache), lazy_textures ? "" : " (sin espaciado)");
 	tex_stats_base = *t;
 	prof_clut_hashes = 0;
+	if(opt_on[OPT_GE_VERIF]){
+		size_t len = strlen(buf);
+		if(len + 120 < size)
+			snprintf(buf + len, size - len, "\nVerificacion del envio a GX (ge_verificar): %u triangulos comparados, %u distintos",
+			         (unsigned)verif_tris, (unsigned)verif_tris_bad);
+		verif_tris = verif_tris_bad = 0;
+	}
 }
 
 static unsigned tk_ms(u64 t){ return (unsigned)ticks_to_millisecs(t); }

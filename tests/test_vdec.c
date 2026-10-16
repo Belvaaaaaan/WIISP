@@ -42,7 +42,17 @@ static void put32(u32 v){
 
 static void putf(float f){ u32 u; memcpy(&u, &f, 4); put32(u); }
 
+static u32 xyz_bad;   /* vértices con fx, fy o fz distintos de (float)x... */
+static u32 cur_kind;
+
+static int same_bits(float a, float b){ return !memcmp(&a, &b, 4); }
+
 static void put_v(const GeVertex *v){
+	if(!same_bits(v->fx, (float)v->x) || !same_bits(v->fy, (float)v->y) || !same_bits(v->fz, (float)v->z)){
+		if(xyz_bad < 4) printf("  primitiva %X vertice: x %d fx %.3f y %d fy %.3f z %u fz %.3f clipw %g\n", (unsigned)cur_kind, v->x, (double)v->fx, v->y,
+		                       (double)v->fy, (unsigned)v->z, (double)v->fz, (double)v->clipw);
+		xyz_bad++;
+	}
 	putf(v->s); putf(v->t); putf(v->q); putf(v->clipw);
 	put32(v->color0); put32(v->color1);
 	put32((u32)v->x); put32((u32)v->y); put32(v->z);
@@ -50,11 +60,11 @@ static void put_v(const GeVertex *v){
 }
 
 static void c_begin(void){ put32(0xB0u); }
-static void c_tri(const GeVertex *a, const GeVertex *b, const GeVertex *c){ put32(0x77u); put_v(a); put_v(b); put_v(c); }
-static void c_rect(const GeVertex *a, const GeVertex *b){ put32(0x66u); put_v(a); put_v(b); }
-static void c_clear(const GeVertex *a, const GeVertex *b){ put32(0x55u); put_v(a); put_v(b); }
-static void c_line(const GeVertex *a, const GeVertex *b){ put32(0x44u); put_v(a); put_v(b); }
-static void c_point(const GeVertex *a){ put32(0x33u); put_v(a); }
+static void c_tri(const GeVertex *a, const GeVertex *b, const GeVertex *c){ cur_kind = 0x77; put32(0x77u); put_v(a); put_v(b); put_v(c); }
+static void c_rect(const GeVertex *a, const GeVertex *b){ cur_kind = 0x66; put32(0x66u); put_v(a); put_v(b); }
+static void c_clear(const GeVertex *a, const GeVertex *b){ cur_kind = 0x55; put32(0x55u); put_v(a); put_v(b); }
+static void c_line(const GeVertex *a, const GeVertex *b){ cur_kind = 0x44; put32(0x44u); put_v(a); put_v(b); }
+static void c_point(const GeVertex *a){ cur_kind = 0x33; put32(0x33u); put_v(a); }
 static void c_flush(void){}
 
 static const GeHwRenderer cap_hw = { c_begin, c_tri, c_rect, c_clear, c_line, c_point, c_flush };
@@ -68,7 +78,30 @@ typedef struct {
 	u32 cmd[256];
 	float world[12], view[12], proj[16], tgen[12], bone[8][12];
 	u32 vt[3], prim[3], count[3];
+	u32 imm_n, imm[16][10];   /* vértices inmediatos después (comandos 0xF0-0xF9) */
 } Case;
+
+/* Otra secuencia para los vértices inmediatos: las llamadas de la huella no
+   cambian */
+static u32 rs_imm = 77;
+static u32 rnd_imm(void){ rs_imm ^= rs_imm << 13; rs_imm ^= rs_imm >> 17; rs_imm ^= rs_imm << 5; return rs_imm; }
+static float frnd_imm(float lo, float hi){ return lo + (hi - lo) * (float)(rnd_imm() & 0xFFFFFF) / 16777215.0f; }
+
+static void random_imm(Case *c){
+	u32 i;
+	c->imm_n = rnd_imm() % 3 == 0 ? 1 + rnd_imm() % 16 : 0;
+	for(i = 0; i < c->imm_n; i++){
+		u32 *m = c->imm[i], prim = i == 0 ? rnd_imm() % 7 : (rnd_imm() % 6 ? GE_PRIM_CONTINUE : rnd_imm() % 8);
+		m[0] = (c->cmd[GE_OFFSETX] + (u32)(int)(frnd_imm(-60.0f, 540.0f) * 16.0f)) & 0xFFFF;   /* VSCX */
+		m[1] = (c->cmd[GE_OFFSETY] + (u32)(int)(frnd_imm(-60.0f, 330.0f) * 16.0f)) & 0xFFFF;   /* VSCY */
+		m[2] = rnd_imm() & 0xFFFF;                                                             /* VSCZ */
+		m[3] = f24(frnd_imm(-2.0f, 2.0f)); m[4] = f24(frnd_imm(-2.0f, 2.0f)); m[5] = f24(frnd_imm(0.5f, 2.0f));
+		m[6] = rnd_imm() & 0xFFFFFF;                                                           /* VCV */
+		m[7] = (prim << 8) | (rnd_imm() & 0x00FFF8FF);                                         /* VAP */
+		m[8] = rnd_imm() & 0xFF;                                                               /* VFC */
+		m[9] = rnd_imm() & 0xFFFFFF;                                                           /* VSCV */
+	}
+}
 
 static const u32 csz[4] = { 0, 1, 2, 4 };
 
@@ -209,7 +242,10 @@ static void write_case_data(const Case *c){
 	}
 }
 
-static void run_case(const Case *c, int opt, GeStats *st){
+static size_t cap_draws;   /* lo capturado antes de los vértices inmediatos */
+
+/* opt: los interruptores de los vértices; ens: ge_ensamblar_rapido */
+static void run_case(const Case *c, int opt, int ens, GeStats *st){
 	int k;
 	ge_vertex_test_reset();
 	memcpy(ge.cmd, c->cmd, sizeof(ge.cmd));
@@ -220,6 +256,7 @@ static void run_case(const Case *c, int opt, GeStats *st){
 	memcpy(ge.bone, c->bone, sizeof(ge.bone));
 	opt_on[OPT_GE_VDEC_ESP] = (u8)opt;
 	opt_on[OPT_GE_TRI_RAPIDO] = (u8)opt;
+	opt_on[OPT_GE_ENSAMBLAR] = (u8)ens;
 	memset(&ge_stats, 0, sizeof(ge_stats));
 	cap_n = 0;
 	for(k = 0; k < 3; k++){
@@ -229,75 +266,163 @@ static void run_case(const Case *c, int opt, GeStats *st){
 		put32(0xD0u + (u32)k);
 		ge_draw_prim(c->prim[k], c->count[k]);
 	}
+	cap_draws = cap_n;
+	for(k = 0; k < (int)c->imm_n; k++){
+		int j;
+		for(j = 0; j < 10; j++) ge.cmd[GE_VSCX + j] = c->imm[k][j];
+		put32(0xE0u);
+		ge_immediate_vertex();
+	}
 	*st = ge_stats;
+}
+
+/* ge_floorf con el truco de 1,5 * 2^23 contra el de siempre */
+static float floorf_ref(float f){
+	if(f > -8388608.0f && f < 8388608.0f){
+		float t = (float)(int)f;
+		return t > f ? t - 1.0f : t;
+	}
+	return f;
+}
+
+static void test_floorf(void){
+	u32 saved = rs;   /* otra secuencia: los casos de después no cambian */
+	static const float edge[] = { 0.0f, -0.0f, 0.5f, -0.5f, 1.5f, -1.5f, 2.5f, -2.5f, 0.49999997f, -0.49999997f,
+	                              4194303.5f, -4194303.5f, 4194304.0f, -4194304.0f, 4194304.5f, 8388607.5f, -8388607.5f,
+	                              1e-30f, -1e-30f, 65535.5f, 65536.0f, -65535.75f };
+	u32 i, bad = 0;
+	for(i = 0; i < sizeof(edge) / sizeof(edge[0]); i++)
+		if(!same_bits(ge_floorf(edge[i]), floorf_ref(edge[i]))) bad++;
+	for(i = 0; i < 4000000; i++){
+		u32 b = rnd();
+		float f;
+		if(i & 1){
+			/* Alrededor de los enteros y medios de la pantalla */
+			f = (float)(int)(rnd() % 200000u) - 100000.0f + (float)(rnd() % 8) * 0.125f;
+			if(rnd() & 1) f += (rnd() & 1 ? 1 : -1) * 1e-3f * (float)(rnd() & 7);
+		} else memcpy(&f, &b, 4);
+		if(!same_bits(ge_floorf(f), floorf_ref(f)) && !(f != f && floorf_ref(f) != floorf_ref(f))) bad++;
+	}
+	CHECK_EQ(bad, 0);
+	rs = saved;
+}
+
+/* El área con coordenadas enormes (through, posición en float): exacta es
+   -1 (se dibuja al revés), en double saldría 0 (2^60 - 1 se redondea a
+   2^60). GE_CF_SMALL tiene que mandarlo al cálculo de 64 bits. */
+static void test_area_big(void){
+	static const float pos[9] = { 67108864.0f, 67108864.0f, 0.0f, 0.0625f, 0.0f, 0.0f, 0.0f, -0.0625f, 0.0f };
+	Case c;
+	GeStats s0, s1;
+	u32 *a0, n0, i;
+	u8 *p = mem_ptr(VBASE, sizeof(pos));
+	memset(&c, 0, sizeof(c));
+	c.cmd[GE_SCISSOR2] = c.cmd[GE_REGION2] = 479 | (271 << 10);
+	c.cmd[GE_SHADEMODE] = 1;
+	for(i = 0; i < 3; i++){ c.vt[i] = 0x800180u; c.prim[i] = GE_PRIM_TRIANGLES; }
+	c.count[0] = 3;
+	for(i = 0; i < 9 && p; i++){ u32 x; memcpy(&x, &pos[i], 4); p[4 * i] = (u8)x; p[4 * i + 1] = (u8)(x >> 8); p[4 * i + 2] = (u8)(x >> 16); p[4 * i + 3] = (u8)(x >> 24); }
+	run_case(&c, 0, 0, &s0);
+	n0 = (u32)cap_n;
+	a0 = malloc(cap_n * sizeof(u32) + 4);
+	if(!a0) return;
+	memcpy(a0, cap, cap_n * sizeof(u32));
+	run_case(&c, 1, 1, &s1);
+	CHECK_EQ(s0.primitives, 1);
+	CHECK_EQ(s1.primitives, 1);
+	CHECK(n0 == cap_n && !memcmp(a0, cap, n0 * sizeof(u32)));
+	free(a0);
 }
 
 void test_vdec(void){
 	const GeHwRenderer *saved_hw = ge_hw;
 	int saved_fast = ge_fast_math, saved_opt = opt_on[OPT_GE_VDEC_ESP], saved_skin = opt_on[OPT_GE_SKIN_RAPIDO];
-	int saved_tri = opt_on[OPT_GE_TRI_RAPIDO];
-	int n, bad = 0, total_prims = 0;
+	int saved_tri = opt_on[OPT_GE_TRI_RAPIDO], saved_ens = opt_on[OPT_GE_ENSAMBLAR];
+	int n, bad = 0, ens_bad = 0, total_prims = 0;
+	size_t imm_words = 0;
 	u32 golden = 2166136261u;   /* lo que sale con los interruptores apagados */
 	Case c;
 	u32 *a = NULL;
 	size_t an = 0;
 
 	printf("Vertices del GE: camino por lotes contra uno a uno\n");
+	test_floorf();
 	ge_hw = &cap_hw;
 	ge_fast_math = 1;
 	opt_on[OPT_GE_SKIN_RAPIDO] = 1;
 	for(n = 0; n < 3000; n++){
-		GeStats sa, sb;
+		GeStats sa, sb, sc;
+		int k;
 		random_case(&c);
+		random_imm(&c);
 		write_case_data(&c);
-		run_case(&c, 0, &sa);
+		run_case(&c, 0, 0, &sa);
 		free(a);
 		a = malloc(cap_n * sizeof(u32) + 4);
 		if(!a) break;
 		memcpy(a, cap, cap_n * sizeof(u32));
 		an = cap_n;
-		for(size_t i = 0; i < an; i++){ golden ^= a[i]; golden *= 16777619u; }
-		run_case(&c, 1, &sb);
-		total_prims += (int)sb.primitives;
-		if(an != cap_n || memcmp(a, cap, an * sizeof(u32)) || sa.vertices != sb.vertices || sa.vertex_reads != sb.vertex_reads ||
-		   sa.tris != sb.tris || sa.tris_drawn != sb.tris_drawn || sa.vertices_skinned != sb.vertices_skinned ||
-		   sa.primitives != sb.primitives){
+		for(size_t i = 0; i < cap_draws; i++){ golden ^= a[i]; golden *= 16777619u; }
+		imm_words += an - cap_draws;
+		/* Con los interruptores de los vértices; después también con
+		   ge_ensamblar_rapido, que no cambia ni los contadores (ge_tri_rapido
+		   cuenta como fuera de pantalla algunos que el camino viejo contaba
+		   como de espaldas) */
+		for(k = 0; k < 2; k++){
+			GeStats *sb_k = k ? &sc : &sb;
+			run_case(&c, 1, k, sb_k);
+			if(k) total_prims += (int)sc.primitives;
+			if(an == cap_n && !memcmp(a, cap, an * sizeof(u32)) && sa.vertices == sb_k->vertices &&
+			   sa.vertex_reads == sb_k->vertex_reads && sa.tris == sb_k->tris && sa.tris_drawn == sb_k->tris_drawn &&
+			   sa.vertices_skinned == sb_k->vertices_skinned && sa.primitives == sb_k->primitives &&
+			   sa.tris_back + sa.tris_outside == sb_k->tris_back + sb_k->tris_outside &&
+			   sa.tris_clipped == sb_k->tris_clipped && sa.tris_cull_off == sb_k->tris_cull_off)
+				continue;
 			if(bad++ < 5){
 				size_t i = 0;
 				while(i < an && i < cap_n && a[i] == cap[i]) i++;
-				printf("  caso %d: vt %06X %06X %06X prim %u %u %u n %u %u %u: distinto en la palabra %u de %u/%u\n", n,
+				printf("  caso %d (%d): vt %06X %06X %06X prim %u %u %u n %u %u %u: distinto en la palabra %u de %u/%u\n", n, k,
 				       (unsigned)c.vt[0], (unsigned)c.vt[1], (unsigned)c.vt[2], (unsigned)c.prim[0], (unsigned)c.prim[1],
 				       (unsigned)c.prim[2], (unsigned)c.count[0], (unsigned)c.count[1], (unsigned)c.count[2],
 				       (unsigned)i, (unsigned)an, (unsigned)cap_n);
 			}
 		}
+		if(memcmp(&sb, &sc, sizeof(sb))) ens_bad++;
 	}
 	CHECK_EQ(bad, 0);
+	CHECK_EQ(ens_bad, 0);
+	CHECK_EQ(xyz_bad, 0);
 	CHECK(total_prims > 3000);
+	CHECK(imm_words > 10000);   /* los inmediatos de verdad dibujan */
+	test_area_big();
 	/* El modo de verificación del Wii no encuentra nada aquí */
 	{
 		char rep[200];
 		ge_vdec_verif_report(rep, sizeof(rep));
-		opt_on[OPT_GE_VDEC_VERIF] = 1;
+		opt_on[OPT_GE_VERIF] = 1;
 		for(n = 0; n < 300; n++){
 			GeStats sv;
 			random_case(&c);
+			random_imm(&c);
 			write_case_data(&c);
-			run_case(&c, 1, &sv);
+			run_case(&c, 1, 1, &sv);
 		}
-		opt_on[OPT_GE_VDEC_VERIF] = 0;
+		opt_on[OPT_GE_VERIF] = 0;
 		ge_vdec_verif_report(rep, sizeof(rep));
-		CHECK(strstr(rep, " 0 distintos") != NULL);
+		CHECK(strstr(rep, " 0 distintos;") != NULL);
+		CHECK(strstr(rep, " 0 distintos") != strstr(rep, " 0 distintos;") || strstr(strstr(rep, ";"), " 0 distintos") != NULL);
 		CHECK(strstr(rep, " 0 comparados") == NULL);
 		printf("  %s\n", rep);
 		n = 3000;
 	}   /* que de verdad se dibuje */
-	printf("  %d tandas, %d primitivas comparadas (huella %08X)\n", n, total_prims, (unsigned)golden);
+	printf("  %d tandas, %d primitivas comparadas, %u palabras de vertices inmediatos (huella %08X)\n", n, total_prims,
+	       (unsigned)imm_words, (unsigned)golden);
 	free(a);
 	ge_hw = saved_hw;
 	ge_fast_math = saved_fast;
 	opt_on[OPT_GE_VDEC_ESP] = (u8)saved_opt;
 	opt_on[OPT_GE_SKIN_RAPIDO] = (u8)saved_skin;
 	opt_on[OPT_GE_TRI_RAPIDO] = (u8)saved_tri;
+	opt_on[OPT_GE_ENSAMBLAR] = (u8)saved_ens;
 	ge_vertex_test_reset();
 }

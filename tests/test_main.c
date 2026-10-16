@@ -539,6 +539,7 @@ int main(int argc, char **argv){
 	test_gxtiles();
 	test_skin();
 	test_vdec();
+	test_gxemit();
 	test_vfpu();
 	test_wiimote();
 	test_interp();

@@ -156,8 +156,19 @@ typedef struct {
 	u32 color1;         /* RGB especular */
 	int x, y;           /* GE_OUTSIDE en x: fuera del rango de pantalla */
 	u16 z;
+	u16 clip_flags;     /* GE_CF_*: lo que miran los descartes (GeClipVertex) */
 	float fogdepth;
+	/* x, y, z en float, idénticos a (float)x...: el renderizador por
+	   hardware no tiene que convertirlos en cada triángulo en que sale el
+	   vértice. Los ponen round_to_screen (ge_vertex.c), ge_vertex_set_xyz y
+	   ge_vertex_mark_outside. */
+	float fx, fy, fz;
 } GeVertex;
+
+static inline void ge_vertex_set_xyz(GeVertex *v, int x, int y, u16 z){
+	v->x = x; v->y = y; v->z = z;
+	v->fx = (float)x; v->fy = (float)y; v->fz = (float)z;
+}
 
 #define GE_OUTSIDE 0x7FFFFFFF
 
@@ -166,6 +177,56 @@ typedef struct {
 	float clip[4];
 	GeVertex v;
 } GeClipVertex;
+
+/* Lo que los descartes de un triángulo miran de cada vértice, calculado una
+   vez con el vértice (ge_clip_flags) y no en cada triángulo en que sale:
+   fuera de cada plano (|c| > w, como outside_mask), más allá del plano
+   cercano, w negativa, w positiva y fuera del rango de pantalla. SMALL: x e
+   y caben en 21 bits, así que el área de un triángulo con los tres así es
+   exacta en double desde fx y fy (productos de 22 bits por 22) */
+enum {
+	GE_CF_XP = 0x01, GE_CF_XN = 0x02, GE_CF_YP = 0x04, GE_CF_YN = 0x08, GE_CF_ZP = 0x10, GE_CF_ZN = 0x20,
+	GE_CF_NEAR = 0x40, GE_CF_WNEG = 0x80, GE_CF_WPOS = 0x100, GE_CF_OUTSIDE = 0x200, GE_CF_SMALL = 0x400
+};
+
+static inline u32 ge_clip_flags_planes(const float *c){
+	u32 f = 0;
+	if(c[0] > c[3]) f |= GE_CF_XP;
+	if(-c[0] > c[3]) f |= GE_CF_XN;
+	if(c[1] > c[3]) f |= GE_CF_YP;
+	if(-c[1] > c[3]) f |= GE_CF_YN;
+	if(c[2] > c[3]) f |= GE_CF_ZP;
+	if(-c[2] > c[3]) f |= GE_CF_ZN;
+	if(c[2] < -c[3]) f |= GE_CF_NEAR;
+	if(c[3] < 0.0f) f |= GE_CF_WNEG;
+	if(c[3] > 0.0f) f |= GE_CF_WPOS;
+	return f;
+}
+
+/* c: coordenadas de recorte; x, y: las de pantalla ya puestas */
+static inline u32 ge_clip_flags_xy(const float *c, int x, int y){
+	u32 f;
+	/* Lo común, dentro de todos los planos con w > 0: ninguna otra
+	   comparación sale cierta (con NaN no entra aquí) */
+	if(__builtin_fabsf(c[0]) <= c[3] && __builtin_fabsf(c[1]) <= c[3] && __builtin_fabsf(c[2]) <= c[3] && c[3] > 0.0f)
+		f = GE_CF_WPOS;
+	else f = ge_clip_flags_planes(c);
+	if((((u32)x + 0x100000u) | ((u32)y + 0x100000u)) < 0x200000u) f |= GE_CF_SMALL;
+	else if(x == GE_OUTSIDE) f |= GE_CF_OUTSIDE;
+	return f;
+}
+
+static inline u32 ge_clip_flags(const GeClipVertex *cv){ return ge_clip_flags_xy(cv->clip, cv->v.x, cv->v.y); }
+static inline void ge_set_clip_flags(GeClipVertex *cv){ cv->v.clip_flags = (u16)ge_clip_flags(cv); }
+
+/* Fuera del rango de pantalla. fx sigue igual a (float)x (un vértice así
+   puede llegar a dibujarse: lo arrastra una primitiva que continúa) y las
+   banderas que dependen de x, como las daría ge_clip_flags */
+static inline void ge_vertex_mark_outside(GeVertex *v){
+	v->x = GE_OUTSIDE;
+	v->fx = (float)GE_OUTSIDE;
+	v->clip_flags = (u16)((v->clip_flags & ~GE_CF_SMALL) | GE_CF_OUTSIDE);
+}
 
 /* --- Geometría (ge_vertex.c) ------------------------------------------ */
 
@@ -179,6 +240,7 @@ void ge_immediate_vertex(void);
 
 void ge_raster_begin(void);   /* lee el estado del GE antes de una tanda */
 void ge_raster_triangle(const GeVertex *v0, const GeVertex *v1, const GeVertex *v2);
+void ge_raster_triangle_ccw(const GeVertex *v0, const GeVertex *v1, const GeVertex *v2);   /* área > 0 ya vista */
 void ge_raster_rect(const GeVertex *v0, const GeVertex *v1);
 void ge_raster_clear_rect(const GeVertex *v0, const GeVertex *v1);
 void ge_raster_line(const GeVertex *v0, const GeVertex *v1);

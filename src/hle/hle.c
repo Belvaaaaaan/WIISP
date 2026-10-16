@@ -458,7 +458,7 @@ static void profile_ge_lines(const GeStats *g, const GeStats *b, u32 vblanks){
 	}
 	ge_vtype_census(line, sizeof(line));
 	hle_log("[TIEMPOS] %s\n", line);
-	if(opt_on[OPT_GE_VDEC_VERIF]){
+	if(opt_on[OPT_GE_VERIF]){
 		ge_vdec_verif_report(line, sizeof(line));
 		hle_log("[TIEMPOS] %s\n", line);
 	}

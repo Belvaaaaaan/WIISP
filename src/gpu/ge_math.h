@@ -85,8 +85,15 @@ float ge_light_pow(float v, float e);
    Broadway no tiene instrucciones de raíz ni de redondeo: sqrtf y floorf
    de newlib son rutinas de cientos de ciclos. */
 
-/* floorf sin libm; idéntico salvo que -0 da +0 */
+/* floorf sin libm; idéntico salvo que -0 da +0. Con |f| < 2^22, sumar y
+   restar 1,5 * 2^23 redondea al entero más cercano sin pasar por un entero
+   (en el Broadway, float -> int -> float va por la memoria); si se pasó, uno
+   menos. Mismo resultado que el camino de siempre, que sigue para el resto. */
 static inline float ge_floorf(float f){
+	if(f > -4194304.0f && f < 4194304.0f){
+		float t = (f + 12582912.0f) - 12582912.0f;
+		return t > f ? t - 1.0f : t;
+	}
 	if(f > -8388608.0f && f < 8388608.0f){
 		float t = (float)(int)f;
 		return t > f ? t - 1.0f : t;
