@@ -878,6 +878,38 @@ los contadores de 32 bits).
   son little-endian: hay que darles la vuelta antes), y el ensamblado y
   el envío a GX por triángulo.
 
+### v0.5.13: decodificadores por formato y triángulos sin descarte de caras
+
+Resultado de la 0.5.12 en el Wii (sin/con, con `prof_pmc`): 12 capturas
+iguales; escena de 170,1 s a 151,5 s; peleas del 19,5-23 % al 23,3-27,5 %;
+matrices reutilizadas el 100 % (comandos de ~7000 a ~2800 ciclos por
+llamada); framebuffers en pelea del 4,3 % al 0,8 %; leer + transformar de
+~1040 a ~860 ciclos por vértice. El GE va a IPC ~0,9 con casi cero fallos
+de caché: el coste son instrucciones. DBZ usa casi solo `uv16 c4444 p16`
+(~50 %) y `uv8 p16 w8x2/4/6/8` (~50 %), y **no activa el descarte de
+caras**: cada triángulo se procesaba en los dos sentidos.
+
+Perfil de instrucciones PowerPC por función con qemu (`-d
+in_asm,exec,nochain` y un script que suma instrucciones por bloque
+ejecutado; banco de tiras de 20 vértices como las de DBZ). Cambios:
+- `ge_vdec_esp`, segunda parte: decodificadores con el formato como
+  constante para los de DBZ (`decode_plain`, `BATCH` en `batch_range`);
+  `fast_skin_plain` compartido con el camino viejo y desenrollado (la
+  matriz mezclada en registros); sin `memset` del vértice (todos los
+  campos se escriben); copia de vértices palabra a palabra (era un memcpy
+  por vértice); `floor_to_int` (una conversión menos en `round_to_screen`).
+- `ge_tri_rapido` (nuevo): sin descarte de caras, los descartes de un
+  triángulo (que no dependen del orden) se hacen una vez y, si no hay que
+  recortar, solo se envía el sentido con área positiva (el otro lo iba a
+  tirar el rasterizador).
+- Banco: por vértice, `uv16 c4444 p16` de 1521 a 950 instrucciones y
+  `uv8 p16 w8x4` de 2156 a 1226.
+- Verificación: tests/test_vdec.c compara ahora con los dos interruptores
+  y apunta una huella de lo que sale con ellos apagados, que no cambió
+  (x86 4D4A1D8B, PowerPC 0657B177): lo compartido sigue dando los mismos
+  bits que la 0.5.12. Mutaciones detectadas. pspautotests A/B: 0
+  diferencias (salvo el ruido conocido de malloc).
+
 ### Para el siguiente chat (empezar aquí)
 
 Metodología acordada (detalle en `docs/HOJA_DE_RUTA.md`): primero medir

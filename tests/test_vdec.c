@@ -219,6 +219,7 @@ static void run_case(const Case *c, int opt, GeStats *st){
 	memcpy(ge.tgen, c->tgen, sizeof(ge.tgen));
 	memcpy(ge.bone, c->bone, sizeof(ge.bone));
 	opt_on[OPT_GE_VDEC_ESP] = (u8)opt;
+	opt_on[OPT_GE_TRI_RAPIDO] = (u8)opt;
 	memset(&ge_stats, 0, sizeof(ge_stats));
 	cap_n = 0;
 	for(k = 0; k < 3; k++){
@@ -234,7 +235,9 @@ static void run_case(const Case *c, int opt, GeStats *st){
 void test_vdec(void){
 	const GeHwRenderer *saved_hw = ge_hw;
 	int saved_fast = ge_fast_math, saved_opt = opt_on[OPT_GE_VDEC_ESP], saved_skin = opt_on[OPT_GE_SKIN_RAPIDO];
+	int saved_tri = opt_on[OPT_GE_TRI_RAPIDO];
 	int n, bad = 0, total_prims = 0;
+	u32 golden = 2166136261u;   /* lo que sale con los interruptores apagados */
 	Case c;
 	u32 *a = NULL;
 	size_t an = 0;
@@ -253,6 +256,7 @@ void test_vdec(void){
 		if(!a) break;
 		memcpy(a, cap, cap_n * sizeof(u32));
 		an = cap_n;
+		for(size_t i = 0; i < an; i++){ golden ^= a[i]; golden *= 16777619u; }
 		run_case(&c, 1, &sb);
 		total_prims += (int)sb.primitives;
 		if(an != cap_n || memcmp(a, cap, an * sizeof(u32)) || sa.vertices != sb.vertices || sa.vertex_reads != sb.vertex_reads ||
@@ -270,11 +274,12 @@ void test_vdec(void){
 	}
 	CHECK_EQ(bad, 0);
 	CHECK(total_prims > 3000);   /* que de verdad se dibuje */
-	printf("  %d tandas, %d primitivas comparadas\n", n, total_prims);
+	printf("  %d tandas, %d primitivas comparadas (huella %08X)\n", n, total_prims, (unsigned)golden);
 	free(a);
 	ge_hw = saved_hw;
 	ge_fast_math = saved_fast;
 	opt_on[OPT_GE_VDEC_ESP] = (u8)saved_opt;
 	opt_on[OPT_GE_SKIN_RAPIDO] = (u8)saved_skin;
+	opt_on[OPT_GE_TRI_RAPIDO] = (u8)saved_tri;
 	ge_vertex_test_reset();
 }

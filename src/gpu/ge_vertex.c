@@ -239,9 +239,36 @@ static void ge_skin(const VFormat *f, const u8 *in, float *pos, float *nrm){
    productos de 24 bits por hueso y un acumulador con su redondeo). El
    resultado difiere del exacto en el último bit de float24, como el resto de
    la geometría rápida. */
+/* Sin morph (component lee igual que raw_weight/raw_comp): el cuerpo, en
+   línea, con los formatos como parámetros; el camino por lotes lo usa con
+   constantes (mismas expresiones, mismos bits) */
+static inline __attribute__((always_inline)) void fast_skin_plain(const VFormat *f, const u8 *in, float *pos, float *nrm,
+                                                                  const int wt, const int pfmt, const int nfmt){
+	float m[12] = { 0.0f }, src[3];
+	int b, k, c;
+	for(b = 0; b < f->nweights; b++){
+		float w = raw_weight(in + f->off_w, wt, b);
+		const float *bm = ge.bone[b];
+		if(w == 0.0f) continue;
+		/* Desenrollado, la matriz mezclada se queda en registros (cada
+		   elemento hace la misma operación: mismo resultado) */
+#pragma GCC unroll 12
+		for(k = 0; k < 12; k++) m[k] += w * bm[k];
+	}
+	if(pfmt){
+		for(c = 0; c < 3; c++) src[c] = raw_comp(in + f->off_pos, pfmt, c);
+		for(c = 0; c < 3; c++) pos[c] = m[9 + c] + src[0] * m[c] + src[1] * m[3 + c] + src[2] * m[6 + c];
+	}
+	if(nfmt){
+		for(c = 0; c < 3; c++) src[c] = raw_comp(in + f->off_nrm, nfmt, c);
+		for(c = 0; c < 3; c++) nrm[c] = src[0] * m[c] + src[1] * m[3 + c] + src[2] * m[6 + c];
+	}
+}
+
 static void fast_skin(const VFormat *f, const u8 *in, float *pos, float *nrm){
 	float m[12] = { 0.0f }, src[3];
 	int b, k, c;
+	if(f->nmorph == 1){ fast_skin_plain(f, in, pos, nrm, f->wt, f->pos, f->nrm); return; }
 	for(b = 0; b < f->nweights; b++){
 		float w = component(f, in, f->off_w, b, RD_WEIGHT, f->wt);
 		const float *bm = ge.bone[b];
@@ -275,6 +302,28 @@ static inline u8 sat_u8_trunc(float v){
 /* Prescalado de uv del decodificador (solo con UV gen 3 en modo transformado) */
 static int uv_prescale;
 static float uv_ps_scale[2], uv_ps_off[2];
+
+/* Lo que hace decode_vertex sin morph ni through, con el formato como
+   parámetro (tc, col, nrm, pos, wt; skin = ge_skin_rapido), en línea. Solo
+   escribe lo que read_vertex va a leer: la uv si hay, el color si hay, la
+   posición y la normal si hay. */
+static inline __attribute__((always_inline)) void decode_plain(const VFormat *f, const u8 *p, DecVertex *d,
+                                                               const int tc, const int col, const int nrm,
+                                                               const int pos, const int wt){
+	int i;
+	if(tc) for(i = 0; i < 2; i++) d->uv[i] = raw_weight(p + f->off_tc, tc, i);
+	if(col >= 4) d->color0 = color_to_8888(col, p + f->off_col);
+	else if(col) d->color0 = 0;
+	if(wt){
+		fast_skin_plain(f, p, d->pos, d->nrm, wt, pos, nrm);
+		return;
+	}
+	for(i = 0; i < 3; i++){
+		d->pos[i] = raw_comp(p + f->off_pos, pos, i);
+		if(pos == 3) d->pos[i] = clean_nan_inf(d->pos[i]);
+		if(nrm) d->nrm[i] = raw_comp(p + f->off_nrm, nrm, i);
+	}
+}
 
 static void decode_vertex(const VFormat *f, const u8 *p, DecVertex *d){
 	int i;
@@ -921,6 +970,15 @@ static void compute_transform_state(const VFormat *f){
    cuenta para el rango, salvo que se pida (always) */
 #define SCREEN_BOUND (4095.0f + 15.5f / 16.0f)
 
+/* ge_f2i(ge_floorf(f)) sin volver a convertir el entero ya redondeado */
+static inline int floor_to_int(float f){
+	if(f > -8388608.0f && f < 8388608.0f){
+		int i = (int)f;
+		return (float)i > f ? i - 1 : i;
+	}
+	return ge_f2i(f);
+}
+
 static int round_to_screen(float sx, float sy, float sz, const float *clip, int depth_clip, int always, GeVertex *v){
 	int outside = 0;
 	if(depth_clip){
@@ -930,8 +988,8 @@ static int round_to_screen(float sx, float sy, float sz, const float *clip, int 
 		else if(sz > 65535.0f) sz = 65535.0f;
 	} else if(sx > SCREEN_BOUND || sy >= SCREEN_BOUND || sx < 0 || sy < 0 || sz < 0.0f || sz >= 65536.0f)
 		outside = 1;
-	v->x = (int)((u32)ge_f2i(ge_floorf(sx * 16.0f)) - (ge.cmd[GE_OFFSETX] & 0xFFFF));
-	v->y = (int)((u32)ge_f2i(ge_floorf(sy * 16.0f)) - (ge.cmd[GE_OFFSETY] & 0xFFFF));
+	v->x = (int)((u32)floor_to_int(sx * 16.0f) - (ge.cmd[GE_OFFSETX] & 0xFFFF));
+	v->y = (int)((u32)floor_to_int(sy * 16.0f) - (ge.cmd[GE_OFFSETY] & 0xFFFF));
 	v->z = (u16)(u32)ge_f2i(sz);
 	return outside;
 }
@@ -979,7 +1037,7 @@ static inline __attribute__((always_inline)) void read_vertex_body(const VFormat
 	float pos[3], normal[3];
 	int i;
 
-	memset(out, 0, sizeof(*out));
+	/* Todos los campos se escriben más abajo en todos los caminos */
 	memcpy(pos, d->pos, sizeof(pos));
 
 	if(f->tc){ last_uv[0] = d->uv[0]; last_uv[1] = d->uv[1]; }
@@ -1090,6 +1148,7 @@ static inline __attribute__((always_inline)) void read_vertex_body(const VFormat
 			else lighting_process(v, pos, worldnormal, n_rsqrt, &ts.light);
 		}
 	} else {
+		out->clip[0] = out->clip[1] = out->clip[2] = out->clip[3] = 0.0f;
 		v->x = ge_f2i(pos[0] * 16.0f);
 		v->y = ge_f2i(pos[1] * 16.0f);
 		v->z = (u16)(u32)ge_f2i(pos[2]);
@@ -1321,32 +1380,42 @@ static void add_tri_flat(const GeClipVertex *a, const GeClipVertex *b, const GeC
 	} else ge_raster_triangle(&a->v, &b->v, &c->v);
 }
 
+/* Los descartes de un triángulo antes de recortar (no dependen del orden de
+   los vértices); 1 si se descarta. mask: hay que recortar con el plano
+   cercano */
+static int triangle_rejected(const GeClipVertex *v0, const GeClipVertex *v1, const GeClipVertex *v2, int *maskp){
+	int mask = 0;
+	if(!ge_through()){
+		int depth_clip = ge.cmd[GE_DEPTHCLAMPENABLE] & 1;
+		ge_tri_flags |= GE_TRI_OUTSIDE;   /* hasta que pase los descartes */
+		if(outside_range_before_clip(v0, depth_clip) || outside_range_before_clip(v1, depth_clip) ||
+		   outside_range_before_clip(v2, depth_clip)) return 1;
+		/* Con w negativa en todos también se descarta */
+		if(v0->clip[3] < 0.0f && v1->clip[3] < 0.0f && v2->clip[3] < 0.0f) return 1;
+		mask |= calc_clip_mask(v0->clip);
+		mask |= calc_clip_mask(v1->clip);
+		mask |= calc_clip_mask(v2->clip);
+		if(outside_mask(v0->clip) & outside_mask(v1->clip) & outside_mask(v2->clip)) return 1;
+		/* Sin recorte de profundidad, la parte detrás del plano cercano se
+		   dibuja con la z extrapolada; un vértice detrás de la cámara
+		   (w <= 0) descarta el triángulo */
+		if(!depth_clip){
+			if(!(v0->clip[3] > 0.0f && v1->clip[3] > 0.0f && v2->clip[3] > 0.0f)) return 1;
+			mask = 0;
+		}
+		ge_tri_flags &= ~GE_TRI_OUTSIDE;
+	}
+	*maskp = mask;
+	return 0;
+}
+
 static void process_triangle(const GeClipVertex *v0, const GeClipVertex *v1, const GeClipVertex *v2,
                              const GeClipVertex *provoking, int reversed){
 	int mask = 0, i, num_outside = 0, num_tris = 0, outside[3];
 	const GeClipVertex *src[3], *tris[2][3];
 	GeClipVertex made[2];
 
-	if(!ge_through()){
-		int depth_clip = ge.cmd[GE_DEPTHCLAMPENABLE] & 1;
-		ge_tri_flags |= GE_TRI_OUTSIDE;   /* hasta que pase los descartes */
-		if(outside_range_before_clip(v0, depth_clip) || outside_range_before_clip(v1, depth_clip) ||
-		   outside_range_before_clip(v2, depth_clip)) return;
-		/* Con w negativa en todos también se descarta */
-		if(v0->clip[3] < 0.0f && v1->clip[3] < 0.0f && v2->clip[3] < 0.0f) return;
-		mask |= calc_clip_mask(v0->clip);
-		mask |= calc_clip_mask(v1->clip);
-		mask |= calc_clip_mask(v2->clip);
-		if(outside_mask(v0->clip) & outside_mask(v1->clip) & outside_mask(v2->clip)) return;
-		/* Sin recorte de profundidad, la parte detrás del plano cercano se
-		   dibuja con la z extrapolada; un vértice detrás de la cámara
-		   (w <= 0) descarta el triángulo */
-		if(!depth_clip){
-			if(!(v0->clip[3] > 0.0f && v1->clip[3] > 0.0f && v2->clip[3] > 0.0f)) return;
-			mask = 0;
-		}
-		ge_tri_flags &= ~GE_TRI_OUTSIDE;
-	}
+	if(triangle_rejected(v0, v1, v2, &mask)) return;
 
 	if(mask == 0){
 		add_tri_flat(v0, v1, v2, provoking);
@@ -1402,9 +1471,24 @@ static void send_triangle(int cull, const GeClipVertex *v, int provoking, int re
 	u32 drawn = ge_stats.primitives;
 	ge_tri_flags = 0;
 	if(cull == CULL_OFF){
+		int mask;
 		ge_stats.tris_cull_off++;
-		process_triangle(&v[0], &v[1], &v[2], &v[provoking], reversed);
-		process_triangle(&v[2], &v[1], &v[0], &v[provoking], !reversed);
+		if(!opt_on[OPT_GE_TRI_RAPIDO]){
+			process_triangle(&v[0], &v[1], &v[2], &v[provoking], reversed);
+			process_triangle(&v[2], &v[1], &v[0], &v[provoking], !reversed);
+		} else if(triangle_rejected(&v[0], &v[1], &v[2], &mask)){
+			/* ge_tri_rapido: los descartes no dependen del orden: una vez */
+		} else if(mask){
+			process_triangle(&v[0], &v[1], &v[2], &v[provoking], reversed);
+			process_triangle(&v[2], &v[1], &v[0], &v[provoking], !reversed);
+		} else {
+			/* Sin recortar, el rasterizador solo dibuja el sentido con área
+			   positiva: el otro (o ninguno con área 0) se iba a descartar */
+			s64 d01x = (s64)v[0].v.x - v[1].v.x, d01y = (s64)v[0].v.y - v[1].v.y;
+			s64 d02x = (s64)v[0].v.x - v[2].v.x, d02y = (s64)v[0].v.y - v[2].v.y;
+			if(d01x * d02y - d01y * d02x > 0) add_tri_flat(&v[0], &v[1], &v[2], &v[provoking]);
+			else add_tri_flat(&v[2], &v[1], &v[0], &v[provoking]);
+		}
 	} else if(cull == CULL_CW){
 		process_triangle(&v[2], &v[1], &v[0], &v[provoking], !reversed);
 	} else {
@@ -1432,6 +1516,17 @@ typedef struct {
 
 static GeClipVertex *vcache;
 static int vcache_cap;
+
+/* Copia de un vértice palabra a palabra (una copia de estructura acababa
+   en una llamada a memcpy por vértice) */
+typedef u32 __attribute__((may_alias)) cv_word;
+typedef char cv_size_ok[sizeof(GeClipVertex) == 56 ? 1 : -1];
+static inline void copy_cv(GeClipVertex *d, const GeClipVertex *s){
+	cv_word *o = (cv_word *)(void *)d;
+	const cv_word *i = (const cv_word *)(const void *)s;
+	o[0] = i[0]; o[1] = i[1]; o[2] = i[2]; o[3] = i[3]; o[4] = i[4]; o[5] = i[5]; o[6] = i[6];
+	o[7] = i[7]; o[8] = i[8]; o[9] = i[9]; o[10] = i[10]; o[11] = i[11]; o[12] = i[12]; o[13] = i[13];
+}
 
 static u32 index_at(const VSource *s, int i){
 	if(s->idx_list) return s->idx_list[i];
@@ -1462,9 +1557,9 @@ static void vsource_read(const VSource *s, int vtx, GeClipVertex *out){
 	ge_stats.vertex_reads++;
 	if(s->use_indices){
 		u32 idx = index_at(s, vtx);
-		if(s->use_cache){ *out = s->cache[idx - s->lower]; return; }
+		if(s->use_cache){ copy_cv(out, &s->cache[idx - s->lower]); return; }
 		read_raw(s, idx, out);
-	} else if(s->batch) *out = s->cache[vtx];
+	} else if(s->batch) copy_cv(out, &s->cache[vtx]);
 	else read_raw(s, (u32)vtx, out);
 }
 
@@ -1486,11 +1581,26 @@ static int batch_range(const VSource *s, u32 first, int n, GeClipVertex *dst){
 	off = ((s->vaddr + first * size) & PSP_ADDR_MASK) - PSP_RAM_BASE;
 	if(off >= psp_mem.ram_size || (u64)size * (u32)n > psp_mem.ram_size - off) return 0;
 	p = psp_mem.ram + off;
-	for(i = 0; i < n; i++, p += size){
-		DecVertex d;
-		decode_vertex(f, p, &d);
-		read_vertex_body(f, &d, &dst[i], 1);
+	/* Formatos con decodificador propio (los del censo de [TIEMPOS]: DBZ usa
+	   casi solo estos); el resto, con el genérico */
+#define BATCH(tc, col, nrm, pos, wt) \
+	for(i = 0; i < n; i++, p += size){ DecVertex d; d.color0 = 0; decode_plain(f, p, &d, tc, col, nrm, pos, wt); read_vertex_body(f, &d, &dst[i], 1); }
+	switch((f->vtype & 0x7FF) | (f->wt && !opt_on[OPT_GE_SKIN_RAPIDO] ? 0x800 : 0)){
+	case 0x11A: BATCH(2, 6, 0, 2, 0); break;    /* uv16 c4444 p16 */
+	case 0x11E: BATCH(2, 7, 0, 2, 0); break;    /* uv16 c8888 p16 */
+	case 0x19F: BATCH(3, 7, 0, 3, 0); break;    /* uvf c8888 pf */
+	case 0x301: BATCH(1, 0, 0, 2, 1); break;    /* uv8 p16, pesos de 8 bits */
+	case 0x321: BATCH(1, 0, 1, 2, 1); break;    /* uv8 n8 p16, pesos de 8 bits */
+	case 0x341: BATCH(1, 0, 2, 2, 1); break;    /* uv8 n16 p16, pesos de 8 bits */
+	default:
+		for(i = 0; i < n; i++, p += size){
+			DecVertex d;
+			decode_vertex(f, p, &d);
+			read_vertex_body(f, &d, &dst[i], 1);
+		}
+		break;
 	}
+#undef BATCH
 	ge_stats.vertices += (u32)n;
 	if(f->wt) ge_stats.vertices_skinned += (u32)n;
 	return 1;

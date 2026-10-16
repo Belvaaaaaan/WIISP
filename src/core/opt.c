@@ -24,6 +24,7 @@ const OptInfo opt_info[OPT_N] = {
 	[OPT_GE_Z_RANGO]     = { "ge_z_rango",     1, 1 },
 	[OPT_GE_VDEC_ESP]    = { "ge_vdec_esp",    1, 1 },
 	[OPT_GE_VDEC_PSQ]    = { "ge_vdec_psq",    0, 0 },
+	[OPT_GE_TRI_RAPIDO]  = { "ge_tri_rapido",  1, 1 },
 	[OPT_GE_BBOX]        = { "ge_bbox",        0, 0 },
 	[OPT_GE_CHAROLAS]    = { "ge_charolas",    0, 0 },
 	[OPT_CPU_SIN_EXTRA]  = { "cpu_sin_extra",  1, 1 },
