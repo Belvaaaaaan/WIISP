@@ -55,6 +55,12 @@ make -j8                                       # wiisp.dol para el Wii
 **Paquete para el usuario**: un zip con `apps/wiisp/boot.dol` (copia de
 `wiisp.dol`) y `apps/wiisp/meta.xml` (copia de `dist/apps/wiisp/meta.xml`,
 subiendo su `<version>`). Se descomprime en la raíz de la SD.
+**Con cada compilación se entrega también su `autotest.txt`** (pedido del
+usuario), escrito para lo que esa versión necesita medir. Ojo: WIISP usa
+primero `sd:/wiisp/autotest.txt` y solo si no existe el de `apps/wiisp/`;
+un autotest viejo en `sd:/wiisp/` gana al del zip (pasó con la 0.5.14.1).
+Corridas: normalmente "sin" y "con" (con `.log` y `.capturas.txt`); "verif"
+solo cuando hay un camino rápido nuevo, y con `capturas 0`.
 
 ## Objetivo actual: que arranque GTA: Liberty City Stories (ULUS10041)
 
@@ -1094,7 +1100,11 @@ devkitPPC B3A2BCD3). pspautotests 275/275; A/B con `prof_estado` en x86
 en A/A, y unos de savedata que no se repiten). En el banco con el estado
 fijo, todo sale "igual" y 17 de cada 18 triángulos "listos".
 
-Autotest: sin (`prof_estado` 0), con (1) y verif (1 y `ge_verificar`).
+Autotest: la primera entrega llevaba sin/con/verif, pero en el Wii corrió
+el autotest viejo de `sd:/wiisp/` (las tres con `prof_estado=0`; sirvió de
+repetición de la 0.5.14: 12 de 12 capturas iguales, verificación sin
+diferencias). Basta una corrida: `capturas 0`, `prof_pmc 1`,
+`prof_estado 1`, `sufijo censo`.
 Qué decidir con el resultado (pelea): si V/T/R y GX salen iguales en la
 mayoría de llamadas, el plan de la 0.5.15 (`ge_estado_sucio`: no rehacer
 V/T/R ni emitir `apply_gx` si sus entradas no cambiaron, y `tri_listo` en
