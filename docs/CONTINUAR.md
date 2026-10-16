@@ -1025,6 +1025,18 @@ sin). Los programas de tests/guest pasan.
 Autotest: tres corridas: sin (los tres nuevos apagados), con (encendidos)
 y verif (encendidos y `ge_verificar`).
 
+### Resultado de la 0.5.14 en el Wii (sin / con / verif, con `prof_pmc`)
+
+- Capturas: 12 de 12 iguales entre sin y con.
+- `ge_verificar`: 22,2 millones de vértices, 20,0 millones de descartes y
+  9,15 millones de triángulos enviados a GX comparados: 0 distintos.
+- Peleas del 27,9-30,0 % al 31,6-34,1 % (~+13 %); la escena entera de
+  ~135,6 s a ~126,5 s reales. GE en pelea del 52-56 % al 45-50 % del tiempo.
+- PMC del GE en pelea (ciclos): ensamblar de 421-439 a 240-246 por
+  triángulo (−44 %), enviar de 525-543 a 392-432 por primitiva (−20 %),
+  leer de 570 a 502 por vértice (−12 %, IPC 0,67: espera a fdivs y a las
+  conversiones a entero por la memoria más que instrucciones).
+
 ### Para el siguiente chat (empezar aquí)
 
 Metodología acordada (detalle en `docs/HOJA_DE_RUTA.md`): primero medir
@@ -1037,10 +1049,7 @@ Metodología acordada (detalle en `docs/HOJA_DE_RUTA.md`): primero medir
   `ge_z_rango`, `ge_mtx_cache` y `registro_diferido` (0.5.11), `prof_pmc`
   (0.5.11.1), 1.2 `ge_vdec_esp` y `ge_tri_rapido` (0.5.12-0.5.13) y
   `gx_envio_rapido`, `ge_ensamblar_rapido` y 1.2b `ge_vdec_psq` (0.5.14).
-- Siguiente: que el usuario corra el `autotest.txt` de la 0.5.14 (sin /
-  con / verif) y mande los `.capturas.txt` y los `.log`: capturas iguales,
-  0 distintos en las tres verificaciones de `[TIEMPOS]` y la velocidad de
-  las peleas. Candidatos después (por el banco de qemu): el estado por
+- 0.5.14 comprobada en el Wii (arriba). Candidatos siguientes (por el banco de qemu): el estado por
   llamada (`ge_raster_begin` ~600 instrucciones por llamada y
   `setup_targets` + `apply_gx` ~720: rehacerlo solo si cambió, 1.4
   `ge_charolas`), `round_to_screen` (~110 por vértice: tres conversiones a
