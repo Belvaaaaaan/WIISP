@@ -459,9 +459,11 @@ static void autotest_run(const char *path, const char *prefix, int max_frames){
 		char partidas[640], base[660];
 		snprintf(partidas, sizeof(partidas), "%s.partidas", path);
 		snprintf(base, sizeof(base), "%s_base", partidas);
-		if(app_preparar_partidas(partidas, base)) printf("  no se pudieron preparar %s\n", partidas);
+		int bad = app_preparar_partidas(partidas, base);
+		if(bad) printf("  no se pudieron preparar %s\n", partidas);
 		snprintf(out, sizeof(out), "%s.log", prefix);
 		hle_set_log_file(out);
+		if(bad) hle_log("[GUION] no se pudieron preparar %s: se usan las partidas normales\n", partidas);
 	}
 	if(app_load(path, 8, NULL) == 0){
 		char err[160];

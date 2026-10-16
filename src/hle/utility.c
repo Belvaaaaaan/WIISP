@@ -701,7 +701,7 @@ static long long save_time(const char *game, const char *name){
 	char dirname[40], dir[400];
 	struct stat st;
 	snprintf(dirname, sizeof(dirname), "%.13s%.20s", game, name);
-	if(save_dir(dirname, dir, sizeof(dir)) || stat(dir, &st) || !S_ISDIR(st.st_mode)) return 0;
+	if(save_dir(dirname, dir, sizeof(dir)) || io_host_stat(dir, &st) || !S_ISDIR(st.st_mode)) return 0;
 	return (long long)st.st_mtime + 1;
 }
 
@@ -842,7 +842,7 @@ static void do_list(void){
 			u32 ent = entries + count * 0x48;
 			if(e->d_name[0] == '.' || !wildcard_match(pat, e->d_name)) continue;
 			snprintf(path, sizeof(path), "%s/%s", root, e->d_name);
-			if(stat(path, &st) || !S_ISDIR(st.st_mode) || !mem_valid(ent, 0x48)) continue;
+			if(io_host_stat(path, &st) || !S_ISDIR(st.st_mode) || !mem_valid(ent, 0x48)) continue;
 			mem_write32(ent, 0x11FF);
 			hle_write_datetime(ent + 4, (u64)st.st_ctime * 1000000ull);
 			hle_write_datetime(ent + 20, (u64)st.st_atime * 1000000ull);
@@ -891,7 +891,7 @@ static u32 do_files(const char *dirname){
 			k = sys ? 2 : in_file_list(list, nm) ? 0 : 1;
 			if(nm[0] == '.' || has_lower(nm)) continue;
 			snprintf(path, sizeof(path), "%s/%s", dir, nm);
-			if(stat(path, &st) || S_ISDIR(st.st_mode) || !base[k] || cnt[k] >= max[k]) continue;
+			if(io_host_stat(path, &st) || S_ISDIR(st.st_mode) || !base[k] || cnt[k] >= max[k]) continue;
 			ent = base[k] + cnt[k]++ * 80;
 			if(!mem_valid(ent, 80)) continue;
 			mem_write32(ent, 0x21FF);

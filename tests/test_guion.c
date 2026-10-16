@@ -19,6 +19,8 @@
 #include "frontend/guion.h"
 #include "frontend/app.h"
 #include "core/opt.h"
+#include "hle/hle.h"
+#include <utime.h>
 #include "core/prof.h"
 
 static void test_parse(void){
@@ -188,6 +190,28 @@ static void test_partidas(void){
 	CHECK(access(p, F_OK) != 0);
 	snprintf(p, sizeof(p), "%s/ULUS10537DATA00/DATA.BIN", dir);
 	CHECK(file_is(p, "partida"));
+	/* Las fechas que ve el juego son las de la base, no las de la copia */
+	{
+		struct stat st;
+		struct utimbuf ut = { 1500000000, 1500000000 };
+		char d2[300], b2[300];
+		snprintf(b2, sizeof(b2), "%s/ULUS10537DATA00", base);
+		snprintf(d2, sizeof(d2), "%s/ULUS10537DATA00", dir);
+		CHECK_EQ(utime(b2, &ut), 0);
+		io_set_savedata_dir(dir);
+		io_set_savedata_base(base);
+		CHECK_EQ(io_host_stat(d2, &st), 0);
+		CHECK_EQ((long long)st.st_mtime, 1500000000);
+		snprintf(p, sizeof(p), "%s/NUEVA.BIN", dir);
+		CHECK_EQ(write_file(p, "x"), 0);
+		CHECK_EQ(io_host_stat(p, &st), 0);   /* no está en la base: fecha fija */
+		CHECK_EQ((long long)st.st_mtime, (long long)HLE_EPOCH_BASE);
+		io_set_savedata_base(NULL);
+		CHECK_EQ(io_host_stat(d2, &st), 0);
+		CHECK((long long)st.st_mtime != 1500000000);
+		io_set_savedata_dir(NULL);
+		remove(p);
+	}
 	/* Sin base: carpeta vacía */
 	CHECK_EQ(guion_preparar_partidas(dir, "no-existe"), 0);
 	CHECK(access(p, F_OK) != 0);

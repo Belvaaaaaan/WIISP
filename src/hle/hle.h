@@ -19,7 +19,7 @@
 
 /* Versión de WIISP (la misma que dist/apps/wiisp/meta.xml): sale en el
    menú y al principio de wiisp.log */
-#define WIISP_VERSION "0.5.13.1"
+#define WIISP_VERSION "0.5.13.2"
 
 typedef void (*HleFunc)(void);
 
@@ -366,6 +366,12 @@ int  io_host_path(const char *psp_path, char *out, u32 size);
 /* Carpeta para ms0:/PSP/SAVEDATA (NULL o "" = la de ms0:/). Se conserva
    entre juegos. */
 void io_set_savedata_dir(const char *dir);
+/* Copia base de las partidas de un guion (NULL: ninguna): sus fechas son
+   las que ve el juego */
+void io_set_savedata_base(const char *base);
+struct stat;
+/* stat de un archivo del anfitrión, con las fechas de la base si toca */
+int io_host_stat(const char *path, struct stat *st);
 u8  *io_load_fd(u32 fd, u32 *len);
 
 /* Escribe una ScePspDateTime (16 bytes) a partir de microsegundos Unix (misc.c) */

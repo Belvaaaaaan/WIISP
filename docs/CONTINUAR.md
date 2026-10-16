@@ -938,6 +938,22 @@ juego, registro, huellas, capturas y estadísticas (`session_open`,
 `session_path` en wii/main.c). Las partidas y la configuración siguen
 donde estaban.
 
+### v0.5.13.2: misma partida en cada corrida (fechas de la base)
+
+La diferencia de las capturas 2000-2800 de la 0.5.13 la encontró el
+usuario: **otra partida** (otro nombre de usuario), no las optimizaciones.
+En el registro, las dos corridas piden la lista (savedata modo 4) pero
+"sin" carga ULUS10537DAT0 y "con" DAT1: `choose` elige la más reciente por
+la fecha de la carpeta, y las partidas se copian de la base en cada
+corrida con la fecha de la copia (si el segundo cambiaba entre DAT0 y
+DAT1, ganaba DAT1). Arreglado: `io_host_stat` (io.c) da, para lo que está
+en las partidas del guion, las fechas de la copia base (atime = mtime, la
+de acceso cambia al copiar) y una fija (`HLE_EPOCH_BASE`) para lo que no
+está en ella; lo usan Getstat, Dread y las listas de savedata. También
+quita la diferencia de RAM entre reproducciones (las fechas que el HLE
+copiaba a la memoria). Si preparar las partidas falla, ahora lo dice el
+registro (`[GUION] no se pudieron preparar`). Prueba en tests/test_guion.c.
+
 ### Para el siguiente chat (empezar aquí)
 
 Metodología acordada (detalle en `docs/HOJA_DE_RUTA.md`): primero medir

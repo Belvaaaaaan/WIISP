@@ -507,9 +507,10 @@ void app_set_before_capture(void (*fn)(void)){ before_capture = fn; }
 int app_preparar_partidas(const char *dir, const char *base){
 	if(guion_preparar_partidas(dir, base)) return -1;
 	io_set_savedata_dir(dir);
+	io_set_savedata_base(base);
 	return 0;
 }
-void app_set_savedata_dir(const char *dir){ io_set_savedata_dir(dir); }
+void app_set_savedata_dir(const char *dir){ io_set_savedata_dir(dir); io_set_savedata_base(NULL); }
 
 const char *app_game_id(void){ return module.disc_id; }
 

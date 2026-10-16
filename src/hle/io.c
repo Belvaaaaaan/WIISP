@@ -247,6 +247,32 @@ static int resolve_str(const char *raw, Resolved *r){
 	return n < sizeof(r->path) ? 0 : -1;   /* nunca una ruta recortada */
 }
 
+/* Con un guion, las partidas se copian de nuevo en cada corrida desde una
+   copia base y salen con la fecha de la copia: el juego que carga "la más
+   reciente" podía elegir otra según si el reloj cambiaba de segundo entre
+   dos copias. Con la base puesta, las fechas son las de la base (y una fija
+   para lo que no está en ella): cada corrida ve las mismas. */
+static char savedata_base[256];
+
+void io_set_savedata_base(const char *base){
+	snprintf(savedata_base, sizeof(savedata_base), "%s", base ? base : "");
+}
+
+int io_host_stat(const char *path, struct stat *st){
+	struct stat b;
+	char bp[700];
+	size_t n = strlen(savedata_dir);
+	if(stat(path, st)) return -1;
+	if(!savedata_base[0] || !n || strncmp(path, savedata_dir, n) || (path[n] && path[n] != '/')) return 0;
+	snprintf(bp, sizeof(bp), "%s%s", savedata_base, path + n);
+	if(!stat(bp, &b)){
+		st->st_ctime = b.st_ctime;
+		st->st_mtime = b.st_mtime;
+		st->st_atime = b.st_mtime;   /* la de acceso cambia al copiarla */
+	} else st->st_ctime = st->st_mtime = st->st_atime = (time_t)HLE_EPOCH_BASE;
+	return 0;
+}
+
 void io_set_savedata_dir(const char *dir){
 	snprintf(savedata_dir, sizeof(savedata_dir), "%s", dir ? dir : "");
 }
@@ -591,7 +617,7 @@ static void getstat(void){
 		write_disc_stat(ARG(1), &e);
 	} else {
 		struct stat st;
-		if(stat(r.path, &st)){ RETURN(SCE_ERROR_FILE_NOT_FOUND); return; }
+		if(io_host_stat(r.path, &st)){ RETURN(SCE_ERROR_FILE_NOT_FOUND); return; }
 		write_stat(ARG(1), &st);
 	}
 	RETURN(0);
@@ -654,7 +680,7 @@ static void sceIoDread(void){
 		if(!e){ RETURN(0); return; }
 		memset(mem_ptr(out, 344), 0, 344);
 		snprintf(full, sizeof(full), "%s/%s", dirs[i].path, e->d_name);
-		if(!stat(full, &st)) write_stat(out, &st);
+		if(!io_host_stat(full, &st)) write_stat(out, &st);
 		put_dirent_name(out, e->d_name);
 	}
 	mem_write32(out + 344, d_private);
