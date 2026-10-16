@@ -255,6 +255,7 @@ static void run_case(const Case *c, int opt, int ens, GeStats *st){
 	memcpy(ge.tgen, c->tgen, sizeof(ge.tgen));
 	memcpy(ge.bone, c->bone, sizeof(ge.bone));
 	opt_on[OPT_GE_VDEC_ESP] = (u8)opt;
+	opt_on[OPT_GE_VDEC_PSQ] = (u8)opt;   /* solo cambia algo en el Wii (y en qemu con psq_l emulado) */
 	opt_on[OPT_GE_TRI_RAPIDO] = (u8)opt;
 	opt_on[OPT_GE_ENSAMBLAR] = (u8)ens;
 	memset(&ge_stats, 0, sizeof(ge_stats));
@@ -334,10 +335,42 @@ static void test_area_big(void){
 	free(a0);
 }
 
+/* Los formatos con decodificador propio (y psq_l en el Wii), que al azar
+   salen poco: con y sin índices, con 1-8 pesos */
+static void test_batch_formats(Case *c){
+	static const u32 fmt[6] = { 0x11A, 0x11E, 0x19F, 0x301, 0x321, 0x341 };
+	u32 *a0 = NULL;
+	int n, k, bad = 0, prims = 0;
+	for(n = 0; n < 600; n++){
+		GeStats s0, s1;
+		size_t n0;
+		random_case(c);
+		for(k = 0; k < 3; k++){
+			c->vt[k] = fmt[rnd() % 6] | (rnd() % 4 == 0 ? (1 + rnd() % 2) << 11 : 0) | ((rnd() % 8) << 14);
+			if(c->prim[k] == GE_PRIM_CONTINUE && k == 0) c->prim[k] = GE_PRIM_TRIANGLE_STRIP;
+		}
+		write_case_data(c);
+		run_case(c, 0, 0, &s0);
+		free(a0);
+		n0 = cap_n;
+		a0 = malloc(n0 * sizeof(u32) + 4);
+		if(!a0) break;
+		memcpy(a0, cap, n0 * sizeof(u32));
+		run_case(c, 1, 1, &s1);
+		prims += (int)s1.primitives;
+		if(n0 != cap_n || memcmp(a0, cap, n0 * sizeof(u32)) || s0.vertices != s1.vertices || s0.primitives != s1.primitives)
+			bad++;
+	}
+	free(a0);
+	CHECK_EQ(bad, 0);
+	CHECK(prims > 3000);
+	printf("  formatos con decodificador propio: %d tandas, %d primitivas\n", n, prims);
+}
+
 void test_vdec(void){
 	const GeHwRenderer *saved_hw = ge_hw;
 	int saved_fast = ge_fast_math, saved_opt = opt_on[OPT_GE_VDEC_ESP], saved_skin = opt_on[OPT_GE_SKIN_RAPIDO];
-	int saved_tri = opt_on[OPT_GE_TRI_RAPIDO], saved_ens = opt_on[OPT_GE_ENSAMBLAR];
+	int saved_tri = opt_on[OPT_GE_TRI_RAPIDO], saved_ens = opt_on[OPT_GE_ENSAMBLAR], saved_psq = opt_on[OPT_GE_VDEC_PSQ];
 	int n, bad = 0, ens_bad = 0, total_prims = 0;
 	size_t imm_words = 0;
 	u32 golden = 2166136261u;   /* lo que sale con los interruptores apagados */
@@ -395,6 +428,7 @@ void test_vdec(void){
 	CHECK(total_prims > 3000);
 	CHECK(imm_words > 10000);   /* los inmediatos de verdad dibujan */
 	test_area_big();
+	test_batch_formats(&c);
 	/* El modo de verificación del Wii no encuentra nada aquí */
 	{
 		char rep[200];
@@ -424,5 +458,6 @@ void test_vdec(void){
 	opt_on[OPT_GE_SKIN_RAPIDO] = (u8)saved_skin;
 	opt_on[OPT_GE_TRI_RAPIDO] = (u8)saved_tri;
 	opt_on[OPT_GE_ENSAMBLAR] = (u8)saved_ens;
+	opt_on[OPT_GE_VDEC_PSQ] = (u8)saved_psq;
 	ge_vertex_test_reset();
 }

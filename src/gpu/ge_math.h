@@ -85,6 +85,24 @@ float ge_light_pow(float v, float e);
    Broadway no tiene instrucciones de raíz ni de redondeo: sqrtf y floorf
    de newlib son rutinas de cientos de ciclos. */
 
+/* Sumas de productos con la fusión (fmadds) escrita: en PowerPC el
+   compilador fusiona a * b + c * d en fmadds(a, b, c * d) o en fmadds(c, d,
+   a * b) según el orden en que le queden las operaciones, que puede cambiar
+   entre dos copias en línea del mismo código (el camino por lotes y el de
+   uno en uno) y dar un bit distinto. Así es la que hace con el código en
+   orden (el primer producto se fusiona), en todas las copias. En x86 no
+   hay fusión: el mismo orden de sumas (x + y = y + x en IEEE). */
+#if defined(__PPC__) || defined(__powerpc__) || defined(GEKKO)
+#define GE_FMADD(a, b, c) __builtin_fmaf((a), (b), (c))
+#else
+#define GE_FMADD(a, b, c) ((a) * (b) + (c))
+#endif
+
+/* a0 * b0 + a1 * b1 + a2 * b2 */
+static inline float ge_dot3_fused(float a0, float b0, float a1, float b1, float a2, float b2){
+	return GE_FMADD(a2, b2, GE_FMADD(a0, b0, a1 * b1));
+}
+
 /* floorf sin libm; idéntico salvo que -0 da +0. Con |f| < 2^22, sumar y
    restar 1,5 * 2^23 redondea al entero más cercano sin pasar por un entero
    (en el Broadway, float -> int -> float va por la memoria); si se pasó, uno

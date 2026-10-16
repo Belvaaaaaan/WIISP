@@ -127,6 +127,64 @@ static inline __attribute__((always_inline)) float raw_weight(const u8 *p, int f
 	}
 }
 
+/* --- ge_vdec_psq (1.2b): conversiones con psq_l -------------------------------
+   El Broadway convierte al cargar: psq_l lee un entero de 8 o 16 bits y lo
+   deja en float por 2^-escala, con el tipo y la escala de un GQR. Los de 8
+   bits salen tal cual (s8/128, u8/128). Los de 16 están en little-endian y
+   psq_l los leería al revés: van en dos bytes, el bajo sin signo por 2^-15
+   y el alto (con o sin signo) por 2^-7, sumados. Los dos sumandos y el
+   resultado tienen como mucho 16 bits significativos, así que todo es exacto
+   en float: los mismos bits que (float)x * (1/32768), sin pasar el entero
+   por la memoria para convertirlo (el Broadway no tiene fcfid).
+   libogc solo guarda GQR0 (que el compilador necesita en 0) al cambiar de
+   hilo o atender una excepción: los GQR2-4 se ponen antes de cada lote. */
+#ifdef GEKKO
+/* GQR2: u8 por 2^-7; GQR3: s8 por 2^-7; GQR4: u8 por 2^-15 (para la carga:
+   escala << 24 | tipo << 16, con 4 = u8 y 6 = s8) */
+static inline void psq_setup(void){
+	__asm__ __volatile__("mtspr 914,%0\n\tmtspr 915,%1\n\tmtspr 916,%2"
+	                     :: "r"(0x07040000u), "r"(0x07060000u), "r"(0x0F040000u));
+}
+
+#define PSQ_LOAD(r, p, off, gqr) __asm__ __volatile__("psq_l %0," #off "(%1),1," #gqr : "=f"(r) : "b"(p))
+
+static inline __attribute__((always_inline)) float psq_u8(const u8 *p){ float r; PSQ_LOAD(r, p, 0, 2); return r; }
+static inline __attribute__((always_inline)) float psq_s8(const u8 *p){ float r; PSQ_LOAD(r, p, 0, 3); return r; }
+static inline __attribute__((always_inline)) float psq_u16le(const u8 *p){
+	float lo, hi;
+	PSQ_LOAD(lo, p, 0, 4);
+	PSQ_LOAD(hi, p, 1, 2);
+	return hi + lo;
+}
+static inline __attribute__((always_inline)) float psq_s16le(const u8 *p){
+	float lo, hi;
+	PSQ_LOAD(lo, p, 0, 4);
+	PSQ_LOAD(hi, p, 1, 3);
+	return hi + lo;
+}
+#endif
+
+/* raw_comp y raw_weight; psq (constante): con psq_l en el Wii */
+static inline __attribute__((always_inline)) float raw_comp_q(const u8 *p, int fmt, int i, const int psq){
+#ifdef GEKKO
+	if(psq && fmt == 1) return psq_s8(p + i);
+	if(psq && fmt == 2) return psq_s16le(p + 2 * i);
+#else
+	(void)psq;
+#endif
+	return raw_comp(p, fmt, i);
+}
+
+static inline __attribute__((always_inline)) float raw_weight_q(const u8 *p, int fmt, int i, const int psq){
+#ifdef GEKKO
+	if(psq && fmt == 1) return psq_u8(p + i);
+	if(psq && fmt == 2) return psq_u16le(p + 2 * i);
+#else
+	(void)psq;
+#endif
+	return raw_weight(p, fmt, i);
+}
+
 static inline u32 c5to8(u32 v){ return (v << 3) | (v >> 2); }
 static inline u32 c6to8(u32 v){ return (v << 2) | (v >> 4); }
 
@@ -244,11 +302,11 @@ static void ge_skin(const VFormat *f, const u8 *in, float *pos, float *nrm){
    línea, con los formatos como parámetros; el camino por lotes lo usa con
    constantes (mismas expresiones, mismos bits) */
 static inline __attribute__((always_inline)) void fast_skin_plain(const VFormat *f, const u8 *in, float *pos, float *nrm,
-                                                                  const int wt, const int pfmt, const int nfmt){
+                                                                  const int wt, const int pfmt, const int nfmt, const int psq){
 	float m[12] = { 0.0f }, src[3];
 	int b, k, c;
 	for(b = 0; b < f->nweights; b++){
-		float w = raw_weight(in + f->off_w, wt, b);
+		float w = raw_weight_q(in + f->off_w, wt, b, psq);
 		const float *bm = ge.bone[b];
 		if(w == 0.0f) continue;
 		/* Desenrollado, la matriz mezclada se queda en registros (cada
@@ -256,20 +314,25 @@ static inline __attribute__((always_inline)) void fast_skin_plain(const VFormat 
 #pragma GCC unroll 12
 		for(k = 0; k < 12; k++) m[k] += w * bm[k];
 	}
+	/* También desenrollados: así la matriz no pasa por la pila */
 	if(pfmt){
-		for(c = 0; c < 3; c++) src[c] = raw_comp(in + f->off_pos, pfmt, c);
+#pragma GCC unroll 3
+		for(c = 0; c < 3; c++) src[c] = raw_comp_q(in + f->off_pos, pfmt, c, psq);
+#pragma GCC unroll 3
 		for(c = 0; c < 3; c++) pos[c] = m[9 + c] + src[0] * m[c] + src[1] * m[3 + c] + src[2] * m[6 + c];
 	}
 	if(nfmt){
-		for(c = 0; c < 3; c++) src[c] = raw_comp(in + f->off_nrm, nfmt, c);
-		for(c = 0; c < 3; c++) nrm[c] = src[0] * m[c] + src[1] * m[3 + c] + src[2] * m[6 + c];
+#pragma GCC unroll 3
+		for(c = 0; c < 3; c++) src[c] = raw_comp_q(in + f->off_nrm, nfmt, c, psq);
+#pragma GCC unroll 3
+		for(c = 0; c < 3; c++) nrm[c] = ge_dot3_fused(src[0], m[c], src[1], m[3 + c], src[2], m[6 + c]);
 	}
 }
 
 static void fast_skin(const VFormat *f, const u8 *in, float *pos, float *nrm){
 	float m[12] = { 0.0f }, src[3];
 	int b, k, c;
-	if(f->nmorph == 1){ fast_skin_plain(f, in, pos, nrm, f->wt, f->pos, f->nrm); return; }
+	if(f->nmorph == 1){ fast_skin_plain(f, in, pos, nrm, f->wt, f->pos, f->nrm, 0); return; }
 	for(b = 0; b < f->nweights; b++){
 		float w = component(f, in, f->off_w, b, RD_WEIGHT, f->wt);
 		const float *bm = ge.bone[b];
@@ -305,24 +368,30 @@ static int uv_prescale;
 static float uv_ps_scale[2], uv_ps_off[2];
 
 /* Lo que hace decode_vertex sin morph ni through, con el formato como
-   parámetro (tc, col, nrm, pos, wt; skin = ge_skin_rapido), en línea. Solo
-   escribe lo que read_vertex va a leer: la uv si hay, el color si hay, la
-   posición y la normal si hay. */
+   parámetro (tc, col, nrm, pos, wt; skin = ge_skin_rapido; psq =
+   ge_vdec_psq), en línea. Solo escribe lo que read_vertex va a leer: la uv
+   si hay, el color si hay, la posición y la normal si hay. */
 static inline __attribute__((always_inline)) void decode_plain(const VFormat *f, const u8 *p, DecVertex *d,
                                                                const int tc, const int col, const int nrm,
-                                                               const int pos, const int wt){
+                                                               const int pos, const int wt, const int psq){
 	int i;
-	if(tc) for(i = 0; i < 2; i++) d->uv[i] = raw_weight(p + f->off_tc, tc, i);
+	/* Desenrollados: cada valor va directo a su registro (si no, pasan por
+	   la pila); mismas operaciones */
+	if(tc){
+#pragma GCC unroll 2
+		for(i = 0; i < 2; i++) d->uv[i] = raw_weight_q(p + f->off_tc, tc, i, psq);
+	}
 	if(col >= 4) d->color0 = color_to_8888(col, p + f->off_col);
 	else if(col) d->color0 = 0;
 	if(wt){
-		fast_skin_plain(f, p, d->pos, d->nrm, wt, pos, nrm);
+		fast_skin_plain(f, p, d->pos, d->nrm, wt, pos, nrm, psq);
 		return;
 	}
+#pragma GCC unroll 3
 	for(i = 0; i < 3; i++){
-		d->pos[i] = raw_comp(p + f->off_pos, pos, i);
+		d->pos[i] = raw_comp_q(p + f->off_pos, pos, i, psq);
 		if(pos == 3) d->pos[i] = clean_nan_inf(d->pos[i]);
-		if(nrm) d->nrm[i] = raw_comp(p + f->off_nrm, nrm, i);
+		if(nrm) d->nrm[i] = raw_comp_q(p + f->off_nrm, nrm, i, psq);
 	}
 }
 
@@ -587,13 +656,13 @@ static void lighting_compute_state(LightState *s, int has_color0){
 
 /* Con ge_fast_math (backend por hardware) float normal y en línea */
 static inline float vdot(const float *a, const float *b){
-	return ge_fast_math ? a[0] * b[0] + a[1] * b[1] + a[2] * b[2] : ge_dot(a, b);
+	return ge_fast_math ? ge_dot3_fused(a[0], b[0], a[1], b[1], a[2], b[2]) : ge_dot(a, b);
 }
 
 static inline float vnormalize(float *v){
 	float d2, d, r;
 	if(!ge_fast_math) return ge_normalize(v);
-	d2 = v[0] * v[0] + v[1] * v[1] + v[2] * v[2];
+	d2 = ge_dot3_fused(v[0], v[0], v[1], v[1], v[2], v[2]);
 	if(!(d2 > 0.0f) || !isfinite(d2)) return 0.0f;
 	r = ge_fast_rsqrt(d2);
 	d = d2 * r;
@@ -629,7 +698,10 @@ static void ge_light_vector(const float *lpos, const float *mpos, float *L){
 	memcpy(L, out, sizeof(out));
 }
 
-static float ge_shade_map_coord(int l, const float *mpos, const float *wn, float n_rsqrt, const float *view_dir){
+/* noinline (como lighting_process_fast): una sola copia compilada para el
+   camino por lotes y el de uno en uno, con las mismas fusiones */
+static float __attribute__((noinline)) ge_shade_map_coord(int l, const float *mpos, const float *wn, float n_rsqrt,
+                                                          const float *view_dir){
 	float L[3];
 	int i;
 	light_vec(GE_LX0, l, L);
@@ -670,8 +742,11 @@ static inline void light_color_scale(int *x, float f){
 }
 
 /* Las mismas luces en float, sin pasar por enteros en cada luz: los
-   factores de 8 bits del GE se aproximan con su producto en float */
-static void lighting_process_fast(GeVertex *v, const float *mpos, const float *wn, float n_rsqrt, const LightState *s){
+   factores de 8 bits del GE se aproximan con su producto en float. noinline:
+   una sola copia compilada para el camino por lotes y el de uno en uno (las
+   sumas de productos dan el mismo bit con la misma fusión) */
+static void __attribute__((noinline)) lighting_process_fast(GeVertex *v, const float *mpos, const float *wn, float n_rsqrt,
+                                                            const LightState *s){
 	float fc[4], spec[4] = { 0, 0, 0, 0 }, vc[4], wpos[3] = { 0, 0, 0 };
 	const float *mac = s->mat_ambient_f, *mdc = s->mat_diffuse_f, *msc = s->mat_specular_f;
 	int i, light, out[4];
@@ -992,7 +1067,9 @@ static inline float offset_float(int k, u32 o){
 	return off_val[k];
 }
 
-static int round_to_screen(float sx, float sy, float sz, const float *clip, int depth_clip, int always, GeVertex *v){
+/* En línea: en el bucle de cada vértice, sin guardar nada en la pila para la llamada */
+static inline __attribute__((always_inline)) int round_to_screen(float sx, float sy, float sz, const float *clip,
+                                                                 int depth_clip, int always, GeVertex *v){
 	int outside = 0;
 	if(depth_clip){
 		if((always || !(clip[2] < -clip[3])) && (sx >= SCREEN_BOUND || sy >= SCREEN_BOUND || sx < 0 || sy < 0))
@@ -1084,8 +1161,6 @@ static inline __attribute__((always_inline)) void read_vertex_body(const VFormat
 	}
 
 	if(f->nrm) memcpy(last_normal, d->nrm, sizeof(last_normal));
-	memcpy(normal, last_normal, sizeof(normal));
-	if(ts.negate_normals) for(i = 0; i < 3; i++) normal[i] = -normal[i];
 
 	v->color0 = f->col ? d->color0 : material_ambient_rgba();
 	v->color1 = 0;
@@ -1097,7 +1172,8 @@ static inline __attribute__((always_inline)) void read_vertex_body(const VFormat
 			   respecto al GE, pero igual en todas las pasadas */
 			const float *m = ts.matrix;
 			float iw;
-			for(i = 0; i < 4; i++) out->clip[i] = pos[0] * m[i] + pos[1] * m[4 + i] + pos[2] * m[8 + i] + m[12 + i];
+#pragma GCC unroll 4
+			for(i = 0; i < 4; i++) out->clip[i] = ge_dot3_fused(pos[0], m[i], pos[1], m[4 + i], pos[2], m[8 + i]) + m[12 + i];
 			iw = 1.0f / out->clip[3];
 			sx = out->clip[0] * iw * ts.screen_scale[0] + ts.screen_add[0];
 			sy = out->clip[1] * iw * ts.screen_scale[1] + ts.screen_add[1];
@@ -1126,8 +1202,15 @@ static inline __attribute__((always_inline)) void read_vertex_body(const VFormat
 			fz = ge_product24((double)ge_trunc24(ge_add(vz, ts.fog_end)) * ts.fog_slope);
 			v->fogdepth = (float)ge_fog_factor(fz) * (1.0f / 256.0f);
 		} else if(ts.enable_fog){
-			float f4 = ts.pos_to_fog[0] * pos[0] + ts.pos_to_fog[1] * pos[1] + ts.pos_to_fog[2] * pos[2] + ts.pos_to_fog[3];
+			float f4 = ge_dot3_fused(ts.pos_to_fog[0], pos[0], ts.pos_to_fog[1], pos[1], ts.pos_to_fog[2], pos[2]) + ts.pos_to_fog[3];
 			v->fogdepth = (float)ge_fog_factor(f4) * (1.0f / 256.0f);
+		}
+
+		/* La normal (la última que llegó) solo si se usa: luces o uv a partir
+		   de ella */
+		if(ts.light.uses_world_normal || ts.uv_gen_mode == 1){
+			memcpy(normal, last_normal, sizeof(normal));
+			if(ts.negate_normals) for(i = 0; i < 3; i++) normal[i] = -normal[i];
 		}
 
 		/* La normal se queda como la deja la matriz de mundo: las luces
@@ -1158,7 +1241,7 @@ static inline __attribute__((always_inline)) void read_vertex_body(const VFormat
 			/* Aquí no se usan la escala ni el desplazamiento de uv */
 			if(fast){
 				const float *m = ge.tgen;
-				for(i = 0; i < 3; i++) r[i] = src[0] * m[i] + src[1] * m[3 + i] + src[2] * m[6 + i] + m[9 + i];
+				for(i = 0; i < 3; i++) r[i] = ge_dot3_fused(src[0], m[i], src[1], m[3 + i], src[2], m[6 + i]) + m[9 + i];
 			} else for(i = 0; i < 3; i++) r[i] = texgen_component(src, ge.tgen, i);
 			v->s = r[0]; v->t = r[1]; v->q = r[2];
 		} else if(ts.uv_gen_mode == 2){
@@ -1813,21 +1896,36 @@ static int batch_range(const VSource *s, u32 first, int n, GeClipVertex *dst){
 	const VFormat *f = s->f;
 	const u8 *p;
 	u32 size = f->size, off;
-	int i;
+	int i, psq = 0;
 	if(!opt_on[OPT_GE_VDEC_ESP] || !ge_fast_math || f->through || f->nmorph > 1 || s->zero || s->list || n <= 0)
 		return 0;
 	off = ((s->vaddr + first * size) & PSP_ADDR_MASK) - PSP_RAM_BASE;
 	if(off >= psp_mem.ram_size || (u64)size * (u32)n > psp_mem.ram_size - off) return 0;
 	p = psp_mem.ram + off;
 	if(opt_on[OPT_GE_VERIF]) verify_begin(s, p, n);
+#ifdef GEKKO
+	psq = opt_on[OPT_GE_VDEC_PSQ];
+	if(psq) psq_setup();
+#endif
 	/* Formatos con decodificador propio (los del censo de [TIEMPOS]: DBZ usa
-	   casi solo estos); el resto, con el genérico */
-#define BATCH(tc, col, nrm, pos, wt) \
-	for(i = 0; i < n; i++, p += size){ DecVertex d; d.color0 = 0; decode_plain(f, p, &d, tc, col, nrm, pos, wt); read_vertex_body(f, &d, &dst[i], 1); }
+	   casi solo estos), con y sin psq_l; el resto, con el genérico */
+	/* El formato de f es el del caso (el switch lo garantiza): dicho así (en
+	   cada vuelta: las escrituras en dst podrían cambiar f, para el
+	   compilador), quita las comprobaciones de f en read_vertex_body y sabe
+	   que no lee la normal que no se decodificó */
+#define BATCH1(TC, COL, NRM, POS, WT, Q) \
+	for(i = 0; i < n; i++, p += size){ \
+		DecVertex d; \
+		if(f->tc != (TC) || f->col != (COL) || f->nrm != (NRM) || f->pos != (POS) || f->wt != (WT)) __builtin_unreachable(); \
+		d.color0 = 0; \
+		decode_plain(f, p, &d, TC, COL, NRM, POS, WT, Q); \
+		read_vertex_body(f, &d, &dst[i], 1); \
+	}
+#define BATCH(TC, COL, NRM, POS, WT) do { if(psq){ BATCH1(TC, COL, NRM, POS, WT, 1) } else { BATCH1(TC, COL, NRM, POS, WT, 0) } } while(0)
 	switch((f->vtype & 0x7FF) | (f->wt && !opt_on[OPT_GE_SKIN_RAPIDO] ? 0x800 : 0)){
 	case 0x11A: BATCH(2, 6, 0, 2, 0); break;    /* uv16 c4444 p16 */
 	case 0x11E: BATCH(2, 7, 0, 2, 0); break;    /* uv16 c8888 p16 */
-	case 0x19F: BATCH(3, 7, 0, 3, 0); break;    /* uvf c8888 pf */
+	case 0x19F: { BATCH1(3, 7, 0, 3, 0, 0) } break;    /* uvf c8888 pf: nada que convertir */
 	case 0x301: BATCH(1, 0, 0, 2, 1); break;    /* uv8 p16, pesos de 8 bits */
 	case 0x321: BATCH(1, 0, 1, 2, 1); break;    /* uv8 n8 p16, pesos de 8 bits */
 	case 0x341: BATCH(1, 0, 2, 2, 1); break;    /* uv8 n16 p16, pesos de 8 bits */
@@ -1840,6 +1938,7 @@ static int batch_range(const VSource *s, u32 first, int n, GeClipVertex *dst){
 		break;
 	}
 #undef BATCH
+#undef BATCH1
 	if(opt_on[OPT_GE_VERIF]) verify_end(f, psp_mem.ram + off, n, dst);
 	ge_stats.vertices += (u32)n;
 	if(f->wt) ge_stats.vertices_skinned += (u32)n;
