@@ -954,6 +954,73 @@ quita la diferencia de RAM entre reproducciones (las fechas que el HLE
 copiaba a la memoria). Si preparar las partidas falla, ahora lo dice el
 registro (`[GUION] no se pudieron preparar`). Prueba en tests/test_guion.c.
 
+### v0.5.14: envío a GX, ensamblado y psq_l (`gx_envio_rapido`, `ge_ensamblar_rapido`, `ge_vdec_psq`)
+
+Resultado de la 0.5.13.2 en el Wii (sin = `ge_vdec_esp` y `ge_tri_rapido`
+apagados; con = encendidos y verificando cada vértice): 12 de 12 capturas
+iguales, ~22 millones de vértices comparados sin diferencias; peleas del
+22-26 % al 27-29 % (con la verificación puesta).
+
+Medido con el banco de qemu (gx_ge.c y ge_vertex.c compilados con
+devkitPPC, libogc de mentira, tiras de 20 vértices `uv16 c4444 p16`):
+instrucciones por triángulo de **1694 a ~1150** (−32 %); `uv8 p16 w8x4`
+(skinning) a ~1300. Tres interruptores nuevos, idénticos bit a bit:
+
+- `gx_envio_rapido` (wii/gx_emit.h y `gx_triangle`): los valores de los
+  tres vértices se calculan antes de escribir el FIFO (que es volatile: el
+  compilador releía el estado tras cada escritura); x, y, z ya en float
+  desde el GE (`fx`, `fy`, `fz` en GeVertex, iguales a `(float)x`...);
+  k / w = 1 sin dividir para el vértice de la w mínima; uv finita con
+  `fsel`; la niebla en 1 por sus bits; y sin llamar a `prepare(0)` si no
+  hay nada que preparar (`prepare_idle`). De 348 a 280 instrucciones.
+- `ge_ensamblar_rapido`: los descartes de cada triángulo miran banderas
+  calculadas una vez por vértice (`clip_flags`, `GE_CF_*`, en
+  `round_to_screen`; en una tira cada vértice se comprobaba en tres
+  triángulos): de ~165 a ~25 por triángulo, más ~35 por vértice. La
+  ventana de triángulos apunta a los vértices del caché de la llamada en
+  vez de copiar 68 bytes por vértice (`vsource_ref`; al acabar, `data_`
+  queda como antes para PRIM continuar y el modo inmediato). El área se
+  calcula una vez (en double desde fx/fy si las coordenadas caben en 21
+  bits, exacto; si no, en 64 bits) y el rasterizador no la repite
+  (`ge_raster_triangle_ccw`).
+- `ge_vdec_psq` (1.2b, solo Wii): los componentes de 8 bits se convierten
+  al cargarlos con `psq_l`; los de 16 bits, que están en little-endian, en
+  dos bytes sumados (el bajo sin signo por 2^-15 y el alto por 2^-7): todo
+  exacto, sin pasar el entero por la memoria. libogc solo guarda GQR0 al
+  cambiar de hilo: GQR2-4 se ponen antes de cada lote (nadie más los usa:
+  revisado en libogc.a). ~35 instrucciones menos por vértice.
+- Sin interruptor (mismos bits; las huellas no cambian): las sumas de
+  productos con la fusión escrita (`ge_dot3_fused`, `GE_FMADD`): el
+  compilador podía fusionar `a*b + c*d` distinto en dos copias en línea
+  del mismo código, y GCC 13 lo hizo al desenrollar; ahora es la misma en
+  todas. `lighting_process_fast` y `ge_shade_map_coord`, una sola copia
+  (noinline). En el lote: bucles cortos desenrollados (sin `memset` ni pila
+  para la matriz del skinning), `round_to_screen` en línea, la normal solo
+  si se usa y el formato del caso dicho al compilador.
+- `ge_vdec_verificar` pasa a `ge_verificar` y compara además, en el Wii,
+  fx/fy/fz y las banderas de cada vértice, los descartes de cada triángulo
+  (`[VERIF] descartes`) y cada triángulo enviado a GX (`[VERIF] GX`); los
+  totales salen en `[TIEMPOS]`.
+
+Encontrado de paso: un vértice fuera de pantalla (`GE_OUTSIDE`) que una
+primitiva que continúa en through llega a dibujar tenía `fx` viejo; ahora
+`ge_vertex_mark_outside` deja fx = (float)GE_OUTSIDE. Y `ge_tri_rapido`
+cuenta como "fuera de pantalla" algunos triángulos que el camino viejo
+contaba como "de espaldas" (solo la estadística).
+
+Verificación: tests/test_gxemit.c (200000 triángulos al azar, rápido
+contra referencia); tests/test_vdec.c compara además `ge_ensamblar_rapido`
+solo (contadores incluidos), vértices en modo inmediato (`cull_xy` = 0),
+el área con coordenadas enormes y 600 tandas con los formatos de
+decodificador propio. En x86, en PowerPC (GCC 13) y con ge_vertex.c
+compilado por devkitPPC en qemu, con `psq_l` emulado por SIGILL (438179
+cargas): 0 diferencias, huellas sin cambios (x86 4D4A1D8B, PowerPC
+0657B177, devkitPPC B3A2BCD3); las mutaciones a mano se detectan.
+pspautotests A/B: ver abajo.
+
+Autotest: tres corridas: sin (los tres nuevos apagados), con (encendidos)
+y verif (encendidos y `ge_verificar`).
+
 ### Para el siguiente chat (empezar aquí)
 
 Metodología acordada (detalle en `docs/HOJA_DE_RUTA.md`): primero medir
@@ -962,18 +1029,19 @@ Metodología acordada (detalle en `docs/HOJA_DE_RUTA.md`): primero medir
 - Hechos: pasos 1, 3, 4 y 5 (guion de DBZ grabado en el Wii; registros del
   Broadway en wiisp.log; línea base r1-r8), `ge_tex_clut` (0.5.7.8),
   `ge_skin_rapido` (0.5.8), 2.1 `cpu_sin_extra` (0.5.9), las texturas de
-  framebuffer (`ge_rtt_gpu`, `ge_fb_relleno`, `ge_fb_hueco`, 0.5.10) y
-  `ge_z_rango`, `ge_mtx_cache` y `registro_diferido` (0.5.11).
-- Siguiente: que el usuario corra el `autotest.txt` "sin/con" de la
-  0.5.11 (sin: `ge_z_rango`, `ge_mtx_cache` y `registro_diferido` a 0) y
-  mande los `.capturas.txt` y los `.log`: imágenes idénticas, cuánto se
-  reutilizan las matrices y qué formatos de vértice usa DBZ. Con eso,
-  1.2/1.2b: un camino por vértice para MR sin memsets ni switch por
-  componente, con psq_l/GQR para 8/16 bits y la salida (x, y, z) en float
-  para no convertir de entero a float otra vez en `put_vertex`; verificado
-  vértice a vértice contra el actual. Después: el 4444 de 64x64 de DBZ
-  (subida, hueco y decodificación, ~0,4 s de cada 30), los índices CI8
-  con dcbt (0,55 s), el limitador de cuadros y las fechas de las partidas.
+  framebuffer (`ge_rtt_gpu`, `ge_fb_relleno`, `ge_fb_hueco`, 0.5.10),
+  `ge_z_rango`, `ge_mtx_cache` y `registro_diferido` (0.5.11), `prof_pmc`
+  (0.5.11.1), 1.2 `ge_vdec_esp` y `ge_tri_rapido` (0.5.12-0.5.13) y
+  `gx_envio_rapido`, `ge_ensamblar_rapido` y 1.2b `ge_vdec_psq` (0.5.14).
+- Siguiente: que el usuario corra el `autotest.txt` de la 0.5.14 (sin /
+  con / verif) y mande los `.capturas.txt` y los `.log`: capturas iguales,
+  0 distintos en las tres verificaciones de `[TIEMPOS]` y la velocidad de
+  las peleas. Candidatos después (por el banco de qemu): el estado por
+  llamada (`ge_raster_begin` ~600 instrucciones por llamada y
+  `setup_targets` + `apply_gx` ~720: rehacerlo solo si cambió, 1.4
+  `ge_charolas`), `round_to_screen` (~110 por vértice: tres conversiones a
+  entero por la memoria), y lo de antes: el 4444 de 64x64 de DBZ, los
+  índices CI8 con dcbt, el limitador de cuadros.
 
 Pendiente de antes: la primera tanda del GE (skinning rápido, matrices al
 cambiar, color constante; ver el carrito) entra en los pasos 6-11 con su

@@ -58,7 +58,7 @@ void ge_get_stats(GeStats *out);
 /* Censo de formatos de vértice desde el último informe (los más usados
    primero) en una línea, y lo pone a cero */
 void ge_vtype_census(char *buf, size_t size);
-/* ge_verificar: vértices comparados y distintos desde el último informe */
+/* ge_verificar: vértices y descartes comparados y distintos desde el último informe */
 void ge_vdec_verif_report(char *buf, size_t size);
 
 /* Sube cada vez que la CPU se sincroniza con el GE (sceGeDrawSync,
