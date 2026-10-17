@@ -78,6 +78,9 @@ extern unsigned long long ge_prof[8];
 /* La RAM de la PSP (32 MB) no cabe en MEM1 (24 MB), así que se recorta
    del principio de la arena de MEM2 antes de que malloc la use.
    Se llama al arrancar, antes de crear hilos. */
+/* Dónde empieza el montón en cada memoria (para la línea de memoria) */
+static u32 heap1_ini, heap2_ini;
+
 void *plat_alloc_big(size_t size){
 	u8 *lo, *hi;
 
@@ -86,6 +89,7 @@ void *plat_alloc_big(size_t size){
 	hi = (u8 *)SYS_GetArena2Hi();
 	if(lo + size > hi) return NULL;
 	SYS_SetArena2Lo(lo + size);
+	heap2_ini = (u32)(lo + size);   /* lo que el montón tome de MEM2 irá detrás */
 	return lo;
 }
 
@@ -155,15 +159,20 @@ static void profile_hook(char *buf, size_t size){
 			}
 		}
 	} else snprintf(buf, size, "modo EXACTO (dibujo por software)");
-	/* Memoria: para ver fugas en sesiones largas o al cambiar de juego */
+	/* Memoria: para ver fugas en sesiones largas o al cambiar de juego. El
+	   montón empieza en MEM1 y sigue en MEM2 (detrás de la RAM de la PSP):
+	   mallinfo cuenta como en uso el hueco de direcciones entre las dos, así
+	   que lo que usa de verdad es lo que pidió a cada una menos lo libre */
 	len = (int)strlen(buf);
 	if((size_t)len + 200 < size){
 		struct mallinfo mi = mallinfo();
 		unsigned tb, tn, sn, sb, df;
+		u32 pedido = ((u32)SYS_GetArena1Lo() - heap1_ini) + ((u32)SYS_GetArena2Lo() - heap2_ini);
+		u32 en_uso = pedido > (u32)mi.fordblks ? pedido - (u32)mi.fordblks : 0;
 		gx_ge_memory(&tb, &tn, &sn, &sb, &df);
 		snprintf(buf + len, size - (size_t)len, "%smemoria: monton %u KB en uso y %u KB libres dentro; MEM1 libre %u KB, "
 		         "MEM2 libre %u KB; texturas %u KB (%u); buferes %u (%u KB); %u por liberar",
-		         len ? "\n" : "", (unsigned)mi.uordblks / 1024, (unsigned)mi.fordblks / 1024,
+		         len ? "\n" : "", en_uso / 1024, (unsigned)mi.fordblks / 1024,
 		         (unsigned)((u32)SYS_GetArena1Hi() - (u32)SYS_GetArena1Lo()) / 1024,
 		         (unsigned)((u32)SYS_GetArena2Hi() - (u32)SYS_GetArena2Lo()) / 1024, tb / 1024, tn, sn, sb / 1024, df);
 	}
@@ -225,6 +234,7 @@ static void run_program(void){
 	}
 	sampler_start();
 	printf("\n--- Ejecutando (mantener HOME o Z+START para volver) ---\n");
+	hle_set_log_screen(0);   /* la consola no se ve: solo a wiisp.log */
 	while(!exited){
 		Input in;
 		u64 t;
@@ -282,6 +292,7 @@ static void run_program(void){
 		}
 	}
 	sampler_stop();
+	hle_set_log_screen(1);
 	video_show_console();
 	/* Antes de olvidar las texturas: el informe final las cuenta */
 	if(!exited) hle_dump_state("detenido por el usuario");
@@ -503,6 +514,7 @@ static void autotest_run(const char *path, const char *prefix, int max_frames){
 			if(app_guion_fin()) max_frames = (int)app_guion_fin() + 1;
 		} else prof_set_clock(NULL, 0);   /* las pruebas miden con lo suyo */
 		gx_ge_profile(&ps, &pst, &pp, cnt);
+		hle_set_log_screen(0);   /* como al jugar: la consola no se ve */
 		for(frames = 0; frames < max_frames && !exited; frames++){
 			exited = app_run_frame();
 			video_draw_psp_frame(NULL);
@@ -512,6 +524,7 @@ static void autotest_run(const char *path, const char *prefix, int max_frames){
 			sampler_stop();
 			prof_set_clock(NULL, 0);
 		}
+		hle_set_log_screen(1);
 		app_get_stats(&done_frames, &instr);
 		snprintf(out, sizeof(out), "%s.stats", prefix);
 		st = fopen(out, "a");
@@ -636,6 +649,7 @@ int main(int argc, char **argv){
 	char path[512], config[300], appdir[300] = "";
 	const char *slash;
 
+	heap1_ini = (u32)SYS_GetArena1Lo();
 	video_init();
 	input_init();
 	app_set_osk(wii_osk);   /* teclado en pantalla para los juegos que lo piden */

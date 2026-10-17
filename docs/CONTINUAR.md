@@ -1296,6 +1296,34 @@ Autotest: sin (`registro_hilo` 0 y `gx_paralelo` 0) y con (1 y 1), con
 capturas, `prof_pmc`, `prof_tirones` y `prof_es`; sin verif (no hay camino
 rápido nuevo del GE).
 
+### Resultado de la 0.5.16 en el Wii (DBZ, sin / con) y arreglos para la siguiente
+
+Capturas 12 de 12 iguales. Menús de 128 % a 140 %, "esperar GX" de 12,1 %
+a 2,4 %; la escena entera de 124 s a 117 s; peleas +3 %. El escritor del
+registro hizo los fsync en 30-56 ms sin que la emulación esperara. Los
+tirones de las peleas (200-230 ms cada 30 s, cubeta "registro") eran el
+informe de `[TIEMPOS]` escrito también en la consola de texto del Wii
+(oculta, pero se dibuja y se desplaza; en los menús era el 3-6 % que
+quedaba de "registro"). `prof_es`: 1 s de E/S cada 30 s en los menús,
+6-7,7 MB/s, 98 % seguidas, como mucho ~300 ms escondibles: el hilo de E/S
+no compensa. Peor tirón de la selección de personajes: 700-850 ms de pura
+CPU (el intérprete).
+
+Ya en el código (van con la siguiente versión): `hle_set_log_screen`, que
+el Wii apaga mientras se juega y en el autotest (a la consola solo van las
+líneas `[CPU]`; a wiisp.log todo igual), y la línea de memoria, que contaba
+como en uso el hueco de direcciones entre MEM1 y MEM2 (decía 284 MB): ahora
+es lo que el montón pidió a cada una menos lo libre.
+
+Plan acordado para lo siguiente (detalle en la conversación de la 0.5.16):
+2.2 `cpu_predec` (bloques de tarjetas de 8 bytes con computed goto, reloj
+exacto por bloque, salidas a mitad de bloque reconstruidas, invalidación
+por páginas de código con `cpu_predec_verif`, arena en MEM2 porque MEM1
+solo tiene 156 KB libres), después leer vértices sin esperas (`psq_st` para
+x, y, z, división antes, banderas sin saltos, paired singles con
+`ge_verificar`), CI8 en la GPU (copia 565 como CI14 con una TLUT de 16K
+entradas) y los comandos del GE con un puntero.
+
 ### Para el siguiente chat (empezar aquí)
 
 Metodología acordada (detalle en `docs/HOJA_DE_RUTA.md`): primero medir

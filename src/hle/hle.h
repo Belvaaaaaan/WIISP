@@ -125,6 +125,11 @@ void hle_log_quiet(const char *fmt, ...) __attribute__((format(printf, 1, 2)));
 /* Además de stderr, el registro va a este archivo (NULL = ninguno). Se
    vacía en cada línea para que sobreviva a un cuelgue. */
 void hle_set_log_file(const char *path);
+/* Con 0, hle_log ya no escribe en la pantalla (en el Wii, la consola de
+   texto: aunque no se vea mientras se juega, cada línea se dibuja y la
+   desplaza, ~200 ms por informe de [TIEMPOS]); los fallos de la CPU sí.
+   A wiisp.log va todo igual. */
+void hle_set_log_screen(int on);
 /* Vuelve a abrir el registro añadiendo al final (sin borrarlo) */
 void hle_reopen_log_file(const char *path);
 /* Asegura que lo escrito llega a la SD (también lo hace solo cada segundo) */

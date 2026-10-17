@@ -348,11 +348,14 @@ static void log_v_hilo(int lazy, const char *fmt, va_list ap){
 	}
 }
 
+static int log_screen = 1;
+void hle_set_log_screen(int on){ log_screen = on; }
+
 static void log_v(int to_screen, int lazy, const char *fmt, va_list ap){
 	va_list ap2;
 	int old = prof_switch(PROF_REGISTRO);
 	va_copy(ap2, ap);
-	if(to_screen) vfprintf(stderr, fmt, ap);
+	if(to_screen && (log_screen || !strncmp(fmt, "[CPU]", 5))) vfprintf(stderr, fmt, ap);
 	if(log_file && log_written < LOG_FILE_MAX && log_total < LOG_TOTAL_MAX && log_hilo()){
 		log_v_hilo(lazy, fmt, ap2);
 	} else if(log_file && log_written < LOG_FILE_MAX && log_total < LOG_TOTAL_MAX){
