@@ -28,7 +28,8 @@ al repositorio), `gcc-powerpc-linux-gnu` y `qemu-user`. Las salidas van a
 - `sigill_ppc.c`: emula con SIGILL lo que un PowerPC normal no tiene o es
   privilegiado (mfmsr/mtmsr, mfspr/mtspr con los GQR, psq_l con W = 1).
   `PSQ_INFORME=1` dice cuántos psq_l emuló.
-- `build_tests_dkp.sh`: las pruebas del PC con ge_vertex.c y test_gxemit.c
+- `build_tests_dkp.sh`: las pruebas del PC con ge_vertex.c, test_gxemit.c,
+  interp.c y predec.c
   compilados por devkitPPC; correr `qemu-ppc $SALIDA/tests-dkp` desde la
   raíz del repositorio. Huella de test_vdec con devkitPPC: B3A2BCD3.
 - `build_cli_gx.sh` + `stub_estado.c`: el CLI dibujando por gx_ge.c
@@ -48,3 +49,8 @@ al repositorio), `gcc-powerpc-linux-gnu` y `qemu-user`. Las salidas van a
 - `ab_opt.py`: pspautotests A/B con un interruptor a 0 y a 1
   (`ab_opt.py CLI PSPAUTOTESTS LISTA SALIDA opcion[,opcion] [hilos] [MR]`).
   `gpu/complex` y `malloc/malloc` cambian entre corridas (fechas, malloc).
+- `cpu_banco.c` + `medir_cpu.sh`: instrucciones PowerPC por instrucción de
+  la PSP del intérprete (copias, llamadas y ramas, como el código normal de
+  un juego), restando una corrida de 20 vueltas a una de 40.
+  `medir_cpu.sh --opt cpu_predec=0` es el intérprete de antes: 28,7;
+  con `cpu_predec` (0.5.17): 17,4.

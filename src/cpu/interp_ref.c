@@ -21,6 +21,7 @@
 #include <math.h>
 #include <stdio.h>
 #include "cpu/cpu.h"
+#include "cpu/predec.h"
 #include "cpu/vfpu.h"
 #include "core/memory.h"
 
@@ -58,9 +59,10 @@ static inline const u8 *ptr_r(u32 addr, u32 size, u32 instr){
 static inline u32 ld32(u32 a, u32 i){ const u8 *p = ptr_r(a, 4, i); return p ? rd_le32(p) : 0; }
 static inline u32 ld16(u32 a, u32 i){ const u8 *p = ptr_r(a, 2, i); return p ? rd_le16(p) : 0; }
 static inline u32 ld8 (u32 a, u32 i){ const u8 *p = ptr_r(a, 1, i); return p ? *p : 0; }
-static inline void st32(u32 a, u32 v, u32 i){ u8 *p = ptr(a, 4, i); if(p) wr_le32(p, v); }
-static inline void st16(u32 a, u32 v, u32 i){ u8 *p = ptr(a, 2, i); if(p) wr_le16(p, (u16)v); }
-static inline void st8 (u32 a, u32 v, u32 i){ u8 *p = ptr(a, 1, i); if(p) *p = (u8)v; }
+/* Una escritura donde hay código predecodificado lo tira (cpu/predec.h) */
+static inline void st32(u32 a, u32 v, u32 i){ u8 *p = ptr(a, 4, i); if(p){ wr_le32(p, v); cpu_predec_ptr_written(p, 4); } }
+static inline void st16(u32 a, u32 v, u32 i){ u8 *p = ptr(a, 2, i); if(p){ wr_le16(p, (u16)v); cpu_predec_ptr_written(p, 2); } }
+static inline void st8 (u32 a, u32 v, u32 i){ u8 *p = ptr(a, 1, i); if(p){ *p = (u8)v; cpu_predec_ptr_written(p, 1); } }
 
 /* ------------------------------------------------------------------ */
 /* Saltos                                                             */
@@ -221,10 +223,18 @@ static u32 float_to_int(float v, int mode){
 }
 
 /* Un NaN generado por la FPU de la PSP es siempre 0x7FC00000 (x86 da
-   0xFFC00000; PowerPC ya coincide). Si una entrada era NaN, se propaga. */
+   0xFFC00000; PowerPC ya coincide). Si una entrada era NaN, se propaga el
+   de la primera que lo sea, silencioso: así no depende del orden en que el
+   compilador ponga los operandos (con dos NaN distintos, x86 y PowerPC
+   devuelven el del primero que les toque). */
 static inline void set_arith(u32 fd, float r, float a, float b){
-	F(fd) = r;
-	if(isnan(r) && !isnan(a) && !isnan(b)) FI(fd) = 0x7FC00000u;
+	union { float f; u32 u; } ua, ub;
+	if(!isnan(r)){ F(fd) = r; return; }
+	ua.f = a;
+	ub.f = b;
+	if(isnan(a)) FI(fd) = ua.u | 0x00400000u;
+	else if(isnan(b)) FI(fd) = ub.u | 0x00400000u;
+	else FI(fd) = 0x7FC00000u;
 }
 
 static void op_cop1_s(u32 instr, u32 pc){

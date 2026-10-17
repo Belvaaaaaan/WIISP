@@ -1324,6 +1324,71 @@ x, y, z, división antes, banderas sin saltos, paired singles con
 `ge_verificar`), CI8 en la GPU (copia 565 como CI14 con una TLUT de 16K
 entradas) y los comandos del GE con un puntero.
 
+### v0.5.17: intérprete predecodificado (`cpu_predec`, 2.2)
+
+`cpu/predec.c` (encendido). Cada trozo de código se traduce una vez a un
+bloque de tarjetas y se ejecuta con computed goto:
+- Bloque: desde una dirección hasta el primer salto con su delay slot, un
+  syscall, una instrucción sin tarjeta o 64 instrucciones. Tarjeta de 8
+  bytes en el Wii: la dirección de su código y los operandos ya preparados
+  (registros como desplazamientos en bytes, inmediato con signo). Ninguna
+  escribe en $zero: las que lo harían son nop o (cargas, sc) van al
+  intérprete. Cada una carga el código de la siguiente al principio, así el
+  `mtctr` va pronto y el `bctr` no espera.
+- Reloj exacto: un bloque solo se ejecuta entero si caben sus n
+  instrucciones en lo que queda de `cpu_run` (se descuentan al entrar); si
+  no, lo hace el intérprete de una en una. Las salidas a mitad (memoria
+  lenta, VFPU, mtic, parar, el bloque se reescribió) reconstruyen pc, npc
+  y el reloj con la posición de la tarjeta, también en el delay slot; el
+  branch likely no tomado no cuenta el delay slot. Lo que no tiene tarjeta
+  (instrucciones que fallan, break, un salto en el delay slot, código fuera
+  de la RAM) lo ejecuta el intérprete de siempre (`cpu_run_interp(1)`).
+- Enlaces: cada bloque guarda el que lo sigue y el del destino del salto;
+  la tabla (16K cubetas) solo se mira si el enlace no vale. Arena de 4 MB
+  en MEM2 (MEM1 solo tiene 156 KB libres); si se llena se vacía entera.
+- Código que cambia: zonas de 1 KB (`cpu_code_map`, 32 KB). Las escrituras
+  de la CPU (también en `cpu_run_interp` y `cpu_run_ref`), de la VFPU
+  (sv.s, sv.q), `mem_write*` y `mem_note_write` (archivos, DMA, módulos,
+  memset y memcpy del kernel) tiran los bloques de las zonas tocadas; si
+  cae en el bloque que corre, se sale al acabar la instrucción.
+  `sceKernelIcacheInvalidate*` no hace nada (un juego que lo llame en cada
+  cuadro vaciaría todo; las escrituras ya se siguen).
+- `cpu_verificar` (apagado): cada bloque comprueba al entrar que sus
+  instrucciones siguen en la RAM; si no, `[PREDEC] bloque viejo` en el
+  registro (faltaría un aviso de escritura) y se rehace. En las 572
+  pspautotests, ninguno.
+- `[TIEMPOS] CPU predecodificada`: % de instrucciones en bloques, bloques
+  hechos y tirados, escrituras en código, búsquedas, arena.
+
+Arreglo de paso (los dos intérpretes): con dos NaN de entrada, la FPU
+devolvía el que tocara según el orden en que el compilador pusiera los
+operandos (x86 y PowerPC dan el del primero); ahora es siempre el de la
+primera fuente que lo sea, silencioso.
+
+Medido (banco de qemu, `tools/banco/medir_cpu.sh`, copias, llamadas y
+ramas): de 28,7 a 17,4 instrucciones del Broadway por instrucción de la
+PSP; addiu de 24 a 10, lw de 29 a 16 (devkitPPC). En el PC (fuera de
+orden) de 342 a 441 MIPS. El paso de un bloque a otro cuesta ~20
+instrucciones (bloques cortos: 3-4 por instrucción): eso y las fusiones son
+la 2.3. La VFPU sigue por `vfpu_exec`.
+
+Verificación: tests/test_interp.c compara los tres intérpretes (referencia,
+el de antes y el predecodificado) en 5400 programas aleatorios cortados en
+trozos aleatorios, 2000 de ellos que se reescriben a sí mismos mientras
+corren (nops y basura), con el código cruzando una zona de 1 KB; el estado
+entero tiene que coincidir, también el pc del último fallo. Casos dirigidos:
+`cpu_verificar` con código cambiado sin aviso, enlaces a bloques de otra
+zona reescritos (por el destino del salto y cayendo al siguiente) y
+`bltzal ra` con ra negativo. Las 9 mutaciones probadas (inmediato sin
+signo, una instrucción de más o de menos al salir, el pc del delay slot al
+llamar fuera, no salir al reescribirse, ra antes de leerlo, el delay slot
+del likely no tomado, enlaces sin mirar left o si siguen vivos) se ven.
+Huellas de test_vdec sin cambios; pspautotests 275/275 y A/B con
+`cpu_predec` (solo `malloc`); tests/guest 22/22; recarga con ASan.
+
+Autotest: sin (`cpu_predec` 0) y con (1), con capturas, `prof_pmc` y
+`prof_tirones`; verif (1 y `cpu_verificar`) sin capturas.
+
 ### Para el siguiente chat (empezar aquí)
 
 Metodología acordada (detalle en `docs/HOJA_DE_RUTA.md`): primero medir
@@ -1338,11 +1403,12 @@ Metodología acordada (detalle en `docs/HOJA_DE_RUTA.md`): primero medir
   `gx_envio_rapido`, `ge_ensamblar_rapido` y 1.2b `ge_vdec_psq` (0.5.14) y
   el censo `prof_estado` (0.5.14.1), `ge_estado_sucio` y `prof_tirones`
   (0.5.15), la recarga, `registro_hilo`, `gx_paralelo` y `prof_es`
-  (0.5.16).
+  (0.5.16), 2.2 `cpu_predec` (0.5.17).
 - Herramientas para medir sin el Wii (banco de qemu con el código de
   devkitPPC, perfil por función, psq_l emulado, A/B): `tools/banco/LEEME.md`.
-- **En curso: 0.5.16** (arriba): falta el resultado del Wii (sin/con).
-  Siguiente: las peleas (leer vértices: `round_to_screen`, la división por
+- **En curso: 0.5.17** (`cpu_predec`, arriba): falta el resultado del Wii
+  (sin/con/verif). Después, 2.3 (fusiones, el paso entre bloques, tarjetas
+  de FPU y VFPU). Siguiente también: las peleas (leer vértices: `round_to_screen`, la división por
   w y tres conversiones a entero por la memoria, IPC 0,66; los índices CI8
   con dcbt) y, con lo que mida `prof_es`, las lecturas del disco. Juntar
   llamadas (`ge_charolas`, 1.4) sigue aparte. Otros candidatos medidos:

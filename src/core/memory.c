@@ -6,6 +6,7 @@
 **/
 
 #include "core/memory.h"
+#include "cpu/predec.h"
 
 PspMemory psp_mem;
 MemVramHook mem_vram_hook;
@@ -55,7 +56,9 @@ static int page_span(u32 addr, u32 len, u32 *first, u32 *last){
 }
 
 void mem_note_write(u32 addr, u32 len){
-	u32 first, last, p;
+	u32 first, last, p, off = (addr & PSP_ADDR_MASK) - PSP_RAM_BASE;
+	/* El código predecodificado de esa memoria ya no vale */
+	if(off < psp_mem.ram_size && len) cpu_predec_written(off, len <= psp_mem.ram_size - off ? len : psp_mem.ram_size - off);
 	if(!page_span(addr, len, &first, &last)) return;
 	if(stamp_taken){ write_stamp++; stamp_taken = 0; }
 	for(p = first; p <= last; p++) page_stamp[p] = write_stamp;
@@ -91,6 +94,7 @@ int mem_init(u8 *ram, u32 ram_size, u8 *vram, u8 *scratch){
 }
 
 void mem_reset(void){
+	cpu_predec_flush();
 	memset(psp_mem.ram, 0, psp_mem.ram_size);
 	memset(psp_mem.vram, 0, PSP_VRAM_SIZE);
 	memset(psp_mem.scratch, 0, PSP_SCRATCH_SIZE);
@@ -179,19 +183,20 @@ u32 mem_read32(u32 addr){
 	return p ? rd_le32(p) : 0;
 }
 
+/* Si caen sobre código predecodificado, lo tiran (cpu/predec.h) */
 void mem_write8(u32 addr, u8 v){
 	u8 *p = mem_ptr(addr, 1);
-	if(p) *p = v;
+	if(p){ *p = v; cpu_predec_ptr_written(p, 1); }
 }
 
 void mem_write16(u32 addr, u16 v){
 	u8 *p = mem_ptr(addr, 2);
-	if(p) wr_le16(p, v);
+	if(p){ wr_le16(p, v); cpu_predec_ptr_written(p, 2); }
 }
 
 void mem_write32(u32 addr, u32 v){
 	u8 *p = mem_ptr(addr, 4);
-	if(p) wr_le32(p, v);
+	if(p){ wr_le32(p, v); cpu_predec_ptr_written(p, 4); }
 }
 
 int mem_read_cstr(u32 addr, char *dst, u32 dst_size){

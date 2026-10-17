@@ -42,6 +42,7 @@
 #include <stdio.h>
 #include "cpu/cpu.h"
 #include "cpu/vfpu.h"
+#include "cpu/predec.h"
 #include "core/memory.h"
 #include "core/opt.h"
 
@@ -74,7 +75,7 @@ u64 cpu_executed;
 
 /* Todo lo que no es la RAM principal: VRAM (con sus ganchos), scratchpad
    y direcciones inválidas (fallo). cpu.pc ya está al día. */
-static __attribute__((noinline)) u32 slow_load(u32 addr, u32 size, u32 instr){
+__attribute__((noinline)) u32 cpu_slow_load(u32 addr, u32 size, u32 instr){
 	const u8 *p = mem_ptr_r_slow(addr, size);
 	if(!p){
 		cpu_fault("acceso a memoria invalido", addr, instr);
@@ -83,7 +84,7 @@ static __attribute__((noinline)) u32 slow_load(u32 addr, u32 size, u32 instr){
 	return size == 4 ? rd_le32(p) : size == 2 ? rd_le16(p) : *p;
 }
 
-static __attribute__((noinline)) void slow_store(u32 addr, u32 size, u32 v, u32 instr){
+__attribute__((noinline)) void cpu_slow_store(u32 addr, u32 size, u32 v, u32 instr){
 	u8 *p = mem_ptr_slow(addr, size);
 	if(!p){
 		cpu_fault("acceso a memoria invalido", addr, instr);
@@ -114,14 +115,22 @@ static u32 float_to_int(float v, int mode){
 }
 
 /* Un NaN generado por la FPU de la PSP es siempre 0x7FC00000 (x86 da
-   0xFFC00000; PowerPC ya coincide). Si una entrada era NaN, se propaga. */
+   0xFFC00000; PowerPC ya coincide). Si una entrada era NaN, se propaga el
+   de la primera que lo sea, silencioso: así no depende del orden en que el
+   compilador ponga los operandos (con dos NaN distintos, x86 y PowerPC
+   devuelven el del primero que les toque). */
 static inline void set_arith(u32 fd, float res, float a, float b){
-	F(fd) = res;
-	if(isnan(res) && !isnan(a) && !isnan(b)) FI(fd) = 0x7FC00000u;
+	union { float f; u32 u; } ua, ub;
+	if(!isnan(res)){ F(fd) = res; return; }
+	ua.f = a;
+	ub.f = b;
+	if(isnan(a)) FI(fd) = ua.u | 0x00400000u;
+	else if(isnan(b)) FI(fd) = ub.u | 0x00400000u;
+	else FI(fd) = 0x7FC00000u;
 }
 
 /* Formato S. Devuelve 0 si la instrucción no existe. */
-static int op_cop1_s(u32 instr, u32 ipc){
+int cpu_cop1_s(u32 instr, u32 ipc){
 	float fs = F(FS), ft = F(FT);
 	switch(FUNC){
 	case 0x00: set_arith(FD, fs + ft, fs, ft); break;
@@ -168,6 +177,11 @@ static int op_cop1_s(u32 instr, u32 ipc){
    pusieron al día cpu_cycles y cpu_executed (seg - left = ejecutadas desde
    entonces). */
 u32 cpu_run(u32 max_cycles){
+	if(opt_on[OPT_CPU_PREDEC]) return cpu_run_predec(max_cycles);
+	return cpu_run_interp(max_cycles);
+}
+
+u32 cpu_run_interp(u32 max_cycles){
 	const u64 start = cpu_cycles;
 	u64 end = start + max_cycles;
 	u8 *const ram = psp_mem.ram;
@@ -198,15 +212,19 @@ u32 cpu_run(u32 max_cycles){
 #define LD(dst, a, size, lim, rd) do { \
 		u32 a_ = (a), o_ = RAM_OFF(a_); \
 		if(likely(o_ < (lim))) dst = rd; \
-		else { SYNC(); dst = slow_load(a_, size, instr); RESUME(); } \
+		else { SYNC(); dst = cpu_slow_load(a_, size, instr); RESUME(); } \
 	} while(0)
 #define LD32(dst, a) LD(dst, a, 4, lim4, rd_le32(ram + o_))
 #define LD16(dst, a) LD(dst, a, 2, lim2, rd_le16(ram + o_))
 #define LD8(dst, a)  LD(dst, a, 1, lim1, ram[o_])
+/* Una escritura donde hay código predecodificado lo tira (cpu/predec.h) */
 #define ST(a, v, size, lim, wr) do { \
 		u32 a_ = (a), o_ = RAM_OFF(a_); \
-		if(likely(o_ < (lim))) wr; \
-		else { SYNC(); slow_store(a_, size, v, instr); RESUME(); } \
+		if(likely(o_ < (lim))){ \
+			wr; \
+			if(unlikely(cpu_code_map[o_ >> PREDEC_ZONA_BITS])) cpu_predec_store(o_, size); \
+		} \
+		else { SYNC(); cpu_slow_store(a_, size, v, instr); RESUME(); } \
 	} while(0)
 #define ST32(a, v) ST(a, v, 4, lim4, wr_le32(ram + o_, v))
 #define ST16(a, v) ST(a, v, 2, lim2, wr_le16(ram + o_, (u16)(v)))
@@ -223,7 +241,7 @@ u32 cpu_run(u32 max_cycles){
 		const u32 ipc = pc;
 		u32 instr, o = RAM_OFF(ipc);
 		if(likely(o < lim4)) instr = rd_le32(ram + o);
-		else { SYNC(); instr = slow_load(ipc, 4, 0); RESUME(); }
+		else { SYNC(); instr = cpu_slow_load(ipc, 4, 0); RESUME(); }
 
 		pc = npc;
 		npc += 4;
@@ -366,7 +384,7 @@ u32 cpu_run(u32 max_cycles){
 				break;
 			}
 			case 0x10:                                                 /* formato S */
-				if(!op_cop1_s(instr, ipc)) FAULT("instruccion FPU desconocida", ipc);
+				if(!cpu_cop1_s(instr, ipc)) FAULT("instruccion FPU desconocida", ipc);
 				break;
 			case 0x14:                                                 /* formato W */
 				if(FUNC == 0x20) F(FD) = (float)(s32)FI(FS);          /* cvt.s.w */

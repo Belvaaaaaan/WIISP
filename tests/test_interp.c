@@ -1,7 +1,8 @@
 /**
  * WIISP - tests/test_interp.c
- * El intérprete (cpu_run con cpu_sin_extra=1) contra el de referencia
- * (cpu_run_ref): programas aleatorios con todas las familias de
+ * El intérprete (cpu_run con cpu_sin_extra=1) y el predecodificado
+ * (cpu_predec, cpu/predec.c) contra el de referencia (cpu_run_ref):
+ * programas aleatorios con todas las familias de
  * instrucciones (ALU, saltos con y sin likely, enlaces, FPU con el riesgo
  * de bc1x, cargas y almacenamientos en la RAM y sus espejos, el scratchpad
  * y la VRAM, ll/sc, cache, VFPU, mfic/mtic) y programas con fallos
@@ -9,7 +10,9 @@
  * trozos de tamaño aleatorio, los mismos para los dos, y tienen que acabar
  * en el mismo estado exacto: registros, memoria, pc, npc, ciclos,
  * instrucciones ejecutadas, lo que devuelve cada llamada y la petición de
- * parar.
+ * parar. Algunos programas se reescriben a sí mismos mientras corren
+ * (escriben nops o basura en su propio código): el predecodificado tiene que
+ * tirar sus bloques en el acto.
  *
  * SPDX-License-Identifier: GPL-2.0-or-later
 **/
@@ -19,12 +22,13 @@
 #include <string.h>
 #include <unistd.h>
 #include "cpu/cpu.h"
+#include "cpu/predec.h"
 #include "cpu/vfpu.h"
 #include "core/memory.h"
 #include "core/opt.h"
 #include "test.h"
 
-#define CODE      0x08A00000u
+#define CODE      0x08A00340u   /* cruza una zona de 1 KB del predecodificado */
 #define DATA      0x08B00000u   /* r28 apunta a DATA + 0x800 */
 #define NPROG     96            /* instrucciones aleatorias por programa */
 #define NCHUNKS   24
@@ -100,6 +104,9 @@ static u32 gen_fault(u32 i, int bad29){
 	}
 }
 
+/* Programas que se reescriben: escrituras en su propio código (r30) */
+static int smc;
+
 /* Escribe una o dos instrucciones en code[i]; devuelve cuántas */
 static u32 gen(u32 *code, u32 i, int faults, int bad29){
 	static const u32 alu3[] = { 0x04, 0x06, 0x07, 0x0A, 0x0B, 0x16, 0x17, 0x20, 0x21, 0x22, 0x23,
@@ -116,6 +123,14 @@ static u32 gen(u32 *code, u32 i, int faults, int bad29){
 	u32 f, op;
 
 	if(faults && !rn(48)){ code[i] = gen_fault(i, bad29); return 1; }
+	if(smc && !rn(10)){
+		/* Un nop (sw de $zero) o basura (otro registro) en una instrucción
+		   del programa, delante o detrás */
+		u32 to = rn(NPROG + 2);
+		if(rn(4)) code[i] = itype(0x2B, 30, rn(3) ? 0 : sreg(), to * 4);
+		else code[i] = itype(rn(2) ? 0x28 : 0x29, 30, sreg(), to * 4 + rn(2) * (rn(2) ? 1 : 2));
+		return 1;
+	}
 	switch(rn(24)){
 	case 0:
 		f = PICK(alu3);
@@ -204,8 +219,10 @@ typedef struct {
 	VfpuState vfpu;
 	u64 cycles, executed;
 	int stop, intr;
+	u32 fault_pc, fault_npc, faults;
 	u32 ret[NCHUNKS];
 	u8 data[0x2000], scratch[PSP_SCRATCH_SIZE], vram[VRAM_SNAP];
+	u8 code[(NPROG + 80) * 4];
 } Snap;
 
 static void take(Snap *s){
@@ -215,9 +232,13 @@ static void take(Snap *s){
 	s->executed = cpu_executed;
 	s->stop = cpu_stop_requested;
 	s->intr = hle_get_intr_enabled();
+	s->fault_pc = cpu_fault_pc;
+	s->fault_npc = cpu_fault_npc;
+	s->faults = cpu_fault_count;
 	memcpy(s->data, mem_ptr(DATA, sizeof(s->data)), sizeof(s->data));
 	memcpy(s->scratch, psp_mem.scratch, sizeof(s->scratch));
 	memcpy(s->vram, psp_mem.vram, sizeof(s->vram));
+	memcpy(s->code, mem_ptr(CODE, sizeof(s->code)), sizeof(s->code));
 }
 
 static void put(const Snap *s){
@@ -227,14 +248,22 @@ static void put(const Snap *s){
 	cpu_executed = s->executed;
 	hle_set_intr_enabled(s->intr);
 	cpu_stop_requested = s->stop;
+	cpu_fault_pc = s->fault_pc;
+	cpu_fault_npc = s->fault_npc;
+	cpu_fault_count = s->faults;
 	memcpy(mem_ptr(DATA, sizeof(s->data)), s->data, sizeof(s->data));
 	memcpy(psp_mem.scratch, s->scratch, sizeof(s->scratch));
 	memcpy(psp_mem.vram, s->vram, sizeof(s->vram));
+	/* El código vuelve a ser el de antes: aviso a granel, como al cargar */
+	memcpy(mem_ptr(CODE, sizeof(s->code)), s->code, sizeof(s->code));
+	mem_note_write(CODE, sizeof(s->code));
 }
 
-static void run_chunks(Snap *out, const u32 *chunks, int ref){
+/* modo: 0 el de referencia, 1 el rápido, 2 el predecodificado */
+static void run_chunks(Snap *out, const u32 *chunks, int modo){
 	int k;
-	opt_on[OPT_CPU_SIN_EXTRA] = (u8)!ref;
+	opt_on[OPT_CPU_SIN_EXTRA] = (u8)(modo != 0);
+	opt_on[OPT_CPU_PREDEC] = (u8)(modo == 2);
 	memset(out->ret, 0, sizeof(out->ret));
 	vfpu_live = 1;
 	for(k = 0; k < NCHUNKS; k++){
@@ -260,14 +289,17 @@ static int same(const Snap *a, const Snap *b, int prog){
 	DIF(a->executed != b->executed, "ejecutadas %llu != %llu", (unsigned long long)a->executed, (unsigned long long)b->executed);
 	DIF(a->stop != b->stop || a->intr != b->intr, "parar %d/%d, interrupciones %d/%d", a->stop, b->stop, a->intr, b->intr);
 	DIF(memcmp(a->ret, b->ret, sizeof(a->ret)) != 0, "lo que devuelve cpu_run");
+	DIF(a->faults != b->faults || a->fault_pc != b->fault_pc || a->fault_npc != b->fault_npc,
+	    "fallos %u en %08X/%08X != %u en %08X/%08X", a->faults, a->fault_pc, a->fault_npc, b->faults, b->fault_pc, b->fault_npc);
 	DIF(memcmp(a->data, b->data, sizeof(a->data)) != 0, "RAM");
 	DIF(memcmp(a->scratch, b->scratch, sizeof(a->scratch)) != 0, "scratchpad");
 	DIF(memcmp(a->vram, b->vram, sizeof(a->vram)) != 0, "VRAM");
+	DIF(memcmp(a->code, b->code, sizeof(a->code)) != 0, "codigo");
 #undef DIF
 	return ok;
 }
 
-static void one_program(int prog, int faults, Snap *init, Snap *ra, Snap *rb, u64 *total){
+static void one_program(int prog, int faults, Snap *init, Snap *ra, Snap *rb, Snap *rc, u64 *total){
 	static const u32 slow_bases[] = { 0x00010800u, 0x04000800u, 0x04200800u, 0x48B00800u, 0x88B00800u, 0x04600800u };
 	static const u32 bad_bases[] = { 0x0A000000u, 0x00014000u, 0x04800000u, 0x00000800u };
 	u32 *code = (u32 *)mem_ptr(CODE, (NPROG + 80) * 4);
@@ -281,6 +313,7 @@ static void one_program(int prog, int faults, Snap *init, Snap *ra, Snap *rb, u6
 	code[NPROG + 78] = 0x1000FFFFu;
 	code[NPROG + 79] = 0;
 	for(i = 0; i < NPROG + 80; i++) wr_le32(&code[i], code[i]);
+	mem_note_write(CODE, (NPROG + 80) * 4);   /* como un programa cargado */
 
 	memset(&cpu, 0, sizeof(cpu));
 	for(i = 1; i < 28; i++) cpu.r[i] = rval();
@@ -312,22 +345,25 @@ static void one_program(int prog, int faults, Snap *init, Snap *ra, Snap *rb, u6
 		chunks[k] = !rn(16) ? 0 : rn(3) ? 1 + rn(8) : 1 + rn(160);
 
 	take(init);
-	run_chunks(ra, chunks, 1);
+	run_chunks(ra, chunks, 0);
 	put(init);
-	run_chunks(rb, chunks, 0);
+	run_chunks(rb, chunks, 1);
+	put(init);
+	run_chunks(rc, chunks, 2);
 	*total += ra->executed - init->executed;
 	CHECK(same(ra, rb, prog));
+	CHECK(same(ra, rc, prog));
 }
 
 void test_interp(void){
-	static Snap init, ra, rb;
-	const u8 saved_opt = opt_on[OPT_CPU_SIN_EXTRA];
+	static Snap init, ra, rb, rc;
+	const u8 saved_opt = opt_on[OPT_CPU_SIN_EXTRA], saved_predec = opt_on[OPT_CPU_PREDEC];
 	const int saved_intr = hle_get_intr_enabled(), saved_live = vfpu_live;
 	u64 total = 0;
 	int p, err_fd;
-	printf("interprete contra el de referencia\n");
+	printf("interprete y predecodificado contra el de referencia\n");
 
-	for(p = 0; p < 3000; p++) one_program(p, 0, &init, &ra, &rb, &total);
+	for(p = 0; p < 3000; p++) one_program(p, 0, &init, &ra, &rb, &rc, &total);
 	/* Con fallos: cpu_fault avisa por stderr, que aquí no interesa */
 	fflush(stderr);
 	err_fd = dup(2);
@@ -335,15 +371,113 @@ void test_interp(void){
 		int null_fd = open("/dev/null", O_WRONLY);
 		if(null_fd >= 0){ dup2(null_fd, 2); close(null_fd); }
 	}
-	for(; p < 3400; p++) one_program(p, 1, &init, &ra, &rb, &total);
+	for(; p < 3400; p++) one_program(p, 1, &init, &ra, &rb, &rc, &total);
+	/* Que se reescriben: con nops y, con fallos, con basura */
+	smc = 1;
+	for(; p < 5400; p++) one_program(p, p >= 4900, &init, &ra, &rb, &rc, &total);
+	smc = 0;
 	if(err_fd >= 0){
 		fflush(stderr);
 		dup2(err_fd, 2);
 		close(err_fd);
 	}
 	printf("  %d programas, %llu instrucciones comparadas\n", p, (unsigned long long)total);
+	{
+		PredecStats ps;
+		cpu_predec_stats(&ps);
+		printf("  predecodificado: %llu bloques hechos, %llu tirados, %llu busquedas, %llu instrucciones sueltas, "
+		       "%llu escrituras en codigo\n", (unsigned long long)ps.bloques_hechos, (unsigned long long)ps.bloques_tirados,
+		       (unsigned long long)ps.busquedas, (unsigned long long)ps.pasos, (unsigned long long)ps.escrituras_en_codigo);
+		CHECK(ps.busquedas > 100000);
+		CHECK(ps.bloques_tirados > 1000);
+	}
+
+	/* cpu_verificar: código cambiado sin avisar (lo que pasaría si faltara
+	   un aviso de escritura): el bloque viejo se ve al entrar y se rehace */
+	{
+		u32 *code = (u32 *)mem_ptr(CODE, 16);
+		PredecStats a, b;
+		const u8 saved_verif = opt_on[OPT_CPU_VERIFICAR];
+		opt_on[OPT_CPU_SIN_EXTRA] = 1;
+		opt_on[OPT_CPU_PREDEC] = 1;
+		wr_le32(&code[0], itype(0x09, 2, 2, 1));        /* addiu r2, r2, 1 */
+		wr_le32(&code[1], itype(0x04, 0, 0, 0xFFFE));   /* beq r0, r0, -2 */
+		wr_le32(&code[2], 0);
+		mem_note_write(CODE, 12);
+		memset(&cpu, 0, sizeof(cpu));
+		cpu.pc = CODE;
+		cpu.npc = CODE + 4;
+		cpu_stop_requested = 0;
+		cpu_run(30);                                   /* 10 vueltas: r2 = 10 */
+		CHECK_EQ(cpu.r[2], 10u);
+		wr_le32(&code[0], itype(0x09, 2, 2, 100));      /* sin aviso */
+		opt_on[OPT_CPU_VERIFICAR] = 1;
+		cpu_predec_stats(&a);
+		cpu_run(30);
+		cpu_predec_stats(&b);
+		CHECK_EQ(cpu.r[2], 1010u);
+		CHECK(b.verif_viejos > a.verif_viejos);
+		opt_on[OPT_CPU_VERIFICAR] = saved_verif;
+	}
+	/* Un enlace a un bloque de otra zona que se reescribió: A (al final de
+	   una zona de 1 KB) salta a B (al principio de la siguiente); escribir
+	   en B tira solo su zona, y A ya no puede usar el enlace que guardaba */
+	{
+		const u32 A = 0x08A003F0u, B = 0x08A00400u;
+		cpu_predec_flush();
+		mem_write32(A, itype(0x09, 2, 2, 1));                      /* addiu r2, r2, 1 */
+		mem_write32(A + 4, (2u << 26) | (B >> 2));                 /* j B */
+		mem_write32(A + 8, 0);
+		mem_write32(B, itype(0x09, 3, 3, 1));                      /* addiu r3, r3, 1 */
+		mem_write32(B + 4, (2u << 26) | (A >> 2));                 /* j A */
+		mem_write32(B + 8, 0);
+		memset(&cpu, 0, sizeof(cpu));
+		cpu.pc = A;
+		cpu.npc = A + 4;
+		cpu_run(60);                                               /* 10 vueltas */
+		CHECK_EQ(cpu.r[3], 10u);
+		mem_write32(B, itype(0x09, 3, 3, 100));                     /* addiu r3, r3, 100 */
+		cpu_run(60);
+		CHECK_EQ(cpu.r[3], 1010u);
+		CHECK_EQ(cpu.r[2], 20u);
+	}
+	/* Lo mismo cayendo al bloque siguiente (un branch likely no tomado al
+	   final de una zona) */
+	{
+		const u32 A = 0x08A00BF8u, B = 0x08A00C00u;
+		cpu_predec_flush();
+		mem_write32(A, itype(0x15, 0, 0, 2));                      /* bnel r0, r0: nunca */
+		mem_write32(A + 4, 0);
+		mem_write32(B, itype(0x09, 5, 5, 1));                      /* addiu r5, r5, 1 */
+		mem_write32(B + 4, (2u << 26) | (A >> 2));                 /* j A */
+		mem_write32(B + 8, 0);
+		memset(&cpu, 0, sizeof(cpu));
+		cpu.pc = A;
+		cpu.npc = A + 4;
+		cpu_run(40);                                               /* 10 vueltas de 4 */
+		CHECK_EQ(cpu.r[5], 10u);
+		mem_write32(B, itype(0x09, 5, 5, 100));
+		cpu_run(40);
+		CHECK_EQ(cpu.r[5], 1010u);
+	}
+	/* bltzal ra: la condición usa el ra de antes de enlazar */
+	{
+		const u32 P = 0x08A00800u;
+		mem_write32(P, itype(1, 31, 0x10, 2));                     /* bltzal r31, +2 */
+		mem_write32(P + 4, 0);
+		mem_write32(P + 8, itype(0x09, 0, 4, 1));                   /* addiu r4, r0, 1 */
+		mem_write32(P + 12, itype(0x09, 0, 4, 2));                  /* addiu r4, r0, 2 */
+		memset(&cpu, 0, sizeof(cpu));
+		cpu.r[31] = 0x80000000u;
+		cpu.pc = P;
+		cpu.npc = P + 4;
+		cpu_run(3);
+		CHECK_EQ(cpu.r[4], 2u);
+		CHECK_EQ(cpu.r[31], P + 8);
+	}
 
 	opt_on[OPT_CPU_SIN_EXTRA] = saved_opt;
+	opt_on[OPT_CPU_PREDEC] = saved_predec;
 	hle_set_intr_enabled(saved_intr);
 	vfpu_live = saved_live;
 	cpu_stop_requested = 0;

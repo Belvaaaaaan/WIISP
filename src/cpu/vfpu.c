@@ -22,6 +22,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include "cpu/vfpu.h"
+#include "cpu/predec.h"
 #include "cpu/vfpu_tables.h"
 #include "core/memory.h"
 
@@ -652,6 +653,7 @@ static NOINLINE void op_sv(u32 op, u32 pc){
 		u8 *p = (addr & 3) ? NULL : mem_ptr(addr, 4);
 		if(!p){ valid4(addr, pc, op); return; }
 		wr_le32(p, vfpu.vi[VFPU_INDEX(vt)]);
+		cpu_predec_ptr_written(p, 4);
 	}
 }
 
@@ -683,6 +685,7 @@ static NOINLINE void op_svq(u32 op, u32 pc){
 		wr_le32(p + 4, d.u[1]);
 		wr_le32(p + 8, d.u[2]);
 		wr_le32(p + 12, d.u[3]);
+		cpu_predec_ptr_written(p, 16);
 		break;
 	}
 	case 0x35: {   /* lvl.q / lvr.q */

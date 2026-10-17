@@ -66,7 +66,9 @@ enum {
 	OPT_GE_CHAROLAS,      /* 1.4 agrupar llamadas de dibujo */
 	/* Fase 2: intérprete cacheado */
 	OPT_CPU_SIN_EXTRA,    /* 2.1 sin costo por instrucción */
-	OPT_CPU_PREDEC,       /* 2.2 predecodificación */
+	OPT_CPU_PREDEC,       /* 2.2 predecodificación (cpu/predec.h) */
+	OPT_CPU_VERIFICAR,    /* cada bloque predecodificado comprueba al entrar
+	                         que sus instrucciones siguen en la RAM */
 	OPT_CPU_FUSION,       /* 2.3 especializar y fusionar */
 	OPT_HLE_RAPIDO,       /* 2.4a camino mínimo de CpuSuspendIntr y Memcpy */
 	OPT_HLE_REEMPLAZO,    /* 2.4b reemplazo de funciones por hash */

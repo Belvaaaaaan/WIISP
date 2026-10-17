@@ -24,6 +24,7 @@
 #include "core/opt.h"
 #include "core/tirones.h"
 #include "core/registro.h"
+#include "cpu/predec.h"
 
 /* Todos los imports de todos los módulos cargados: el código del syscall
    de cada stub es su índice aquí */
@@ -234,8 +235,13 @@ void hle_syscall(u32 code){
 	RETURN(resolved[code].name ? 0 : 0x8002013Au);
 }
 
+u32 cpu_fault_pc, cpu_fault_npc, cpu_fault_count;
+
 void cpu_fault(const char *what, u32 addr, u32 instr){
 	char reason[160];
+	cpu_fault_pc = cpu.pc;
+	cpu_fault_npc = cpu.npc;
+	cpu_fault_count++;
 	snprintf(reason, sizeof(reason), "%s en 0x%08X (instr/valor 0x%08X, pc 0x%08X)",
 	         what, addr, instr, cpu.pc);
 	hle_log("[CPU] %s\n", reason);
@@ -440,6 +446,7 @@ static struct {
 	u32 vblanks;
 	RegStats reg;
 	IoCenso es;
+	PredecStats pd;
 	u32 samples[PROF_N], ge_samples[GEF_N];
 	u64 pmc[PROF_PMC_SLOTS][PMC_N];
 	GeStats ge;
@@ -500,6 +507,7 @@ static void profile_snapshot(void){
 	prof_base.vblanks = prof_vblanks;
 	reg_stats(&prof_base.reg);
 	io_censo(&prof_base.es);
+	cpu_predec_stats(&prof_base.pd);
 	memcpy(prof_base.samples, (const void *)prof_samples, sizeof(prof_base.samples));
 	memcpy(prof_base.ge_samples, (const void *)prof_ge_samples, sizeof(prof_base.ge_samples));
 	if(prof_pmc_on) prof_pmc_account();
@@ -716,6 +724,19 @@ void hle_profile_report(const char *why){
 			        1000.0 * (double)r.t_fsync_max / (double)prof_hz,
 			        (unsigned long long)(r.esperas - prof_base.reg.esperas),
 			        1000.0 * (double)(r.t_esperas - prof_base.reg.t_esperas) / (double)prof_hz, r.max_cola / 1024);
+	}
+	if(opt_on[OPT_CPU_PREDEC]){
+		PredecStats p, *b = &prof_base.pd;
+		u64 instr = cpu_executed - prof_base.instr;
+		cpu_predec_stats(&p);
+		hle_log("[TIEMPOS] CPU predecodificada (cpu_predec): %.1f%% de las instrucciones en bloques; %llu bloques hechos, "
+		        "%llu tirados (%llu escrituras en codigo), %llu busquedas, arena %u de %u KB (%llu vaciados)%s\n",
+		        instr ? 100.0 - 100.0 * (double)(p.pasos - b->pasos) / (double)instr : 0.0,
+		        (unsigned long long)(p.bloques_hechos - b->bloques_hechos), (unsigned long long)(p.bloques_tirados - b->bloques_tirados),
+		        (unsigned long long)(p.escrituras_en_codigo - b->escrituras_en_codigo), (unsigned long long)(p.busquedas - b->busquedas),
+		        p.arena_usada / 1024, p.arena_total / 1024, (unsigned long long)(p.vaciados - b->vaciados),
+		        opt_on[OPT_CPU_VERIFICAR] ? (p.verif_viejos ? "; cpu_verificar: HAY BLOQUES VIEJOS ([PREDEC] en el registro)"
+		                                                    : "; cpu_verificar: ningun bloque viejo") : "");
 	}
 	if(opt_on[OPT_PROF_ES]){
 		IoCenso c;

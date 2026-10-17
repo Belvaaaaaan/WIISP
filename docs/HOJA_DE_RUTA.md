@@ -181,6 +181,14 @@ También la prueba de recarga (`--veces`), que encontró estado que pasaba
 de un programa al siguiente (DMA, reloj, UID de LwMutex, uv y normal de
 los vértices, botones del guion). Detalle en docs/CONTINUAR.md.
 
+Hecha (v0.5.17): 2.2 `cpu_predec`, el intérprete predecodificado: bloques
+de tarjetas de 8 bytes con computed goto, reloj exacto por bloque e
+invalidación por zonas de 1 KB, con `cpu_verificar` para comprobarla en el
+Wii. Idéntico ciclo a ciclo al intérprete de antes (tests/test_interp.c,
+pspautotests A/B). En el banco de qemu, de 28,7 a 17,4 instrucciones del
+Broadway por instrucción de la PSP (addiu de 24 a 10, lw de 29 a 16).
+Detalle en docs/CONTINUAR.md.
+
 Primera tanda acordada (todas "más barato", verificables en el PC):
 0.1 `prof_espera`, **skinning rápido** (`ge_skin_rapido`), **matrices al
 cambiar** (`ge_mtx_cache`), **color constante** (`ge_color_const`), 2.1

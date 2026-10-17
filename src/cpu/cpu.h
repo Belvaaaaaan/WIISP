@@ -67,6 +67,15 @@ extern u64 cpu_executed;
    Devuelve las instrucciones ejecutadas. */
 u32 cpu_run(u32 max_cycles);
 
+/* El intérprete sin predecodificar (cpu_run sin cpu_predec) */
+u32 cpu_run_interp(u32 max_cycles);
+
+/* Para el intérprete predecodificado (cpu/predec.c): lo mismo que hace el
+   intérprete con la memoria lenta y con la FPU (formatos S), compartido */
+u32 cpu_slow_load(u32 addr, u32 size, u32 instr);
+void cpu_slow_store(u32 addr, u32 size, u32 v, u32 instr);
+int cpu_cop1_s(u32 instr, u32 ipc);
+
 /* El mismo intérprete en su forma sencilla (todo el estado en memoria y
    todo comprobado en cada instrucción). cpu_run lo usa con cpu_sin_extra=0;
    los dos dan exactamente el mismo resultado, ciclo a ciclo. */
@@ -81,5 +90,8 @@ void hle_set_intr_enabled(int enabled);
 
 /* Llamado ante una instrucción inválida o un fallo grave */
 void cpu_fault(const char *what, u32 addr, u32 instr);
+/* El pc y el npc que vio el último fallo y cuántos hubo (diagnóstico; las
+   pruebas comparan los intérpretes con ellos) */
+extern u32 cpu_fault_pc, cpu_fault_npc, cpu_fault_count;
 
 #endif
