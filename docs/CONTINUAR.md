@@ -1479,6 +1479,61 @@ tres a 0), compacto, sinunir, mem1 (uno más cada vez), con capturas; l2viejo
 y l2 (`prof_pmc_l2`, los tres a 0 y a 1), ctr (`prof_pmc_ctr`) y verif, sin
 capturas.
 
+### Resultado de la 0.5.17.1 en el Wii (DBZ, 8 corridas) y plan acordado
+
+Las 8 corridas ejecutan exactamente lo mismo (8206 `[LLAMADA]` idénticas,
+mismas `[STATS]`); verif: ningún bloque viejo. Ciclos por instrucción de la
+PSP en la corrida completa (análisis aparte, con los registros):
+
+| Cambio | Ciclos/instr | Notas |
+|---|---|---|
+| l2viejo → compacto (bloques en MEM2 en las dos) | 34,50 → 33,15 (−3,9 %) | fallos L1D −14 %, vaciados 6 → 2 |
+| compacto → sinunir | 33,15 → 33,42 (+0,8 %) | +0,67 instr, +5,6 % saltos mal: empeora |
+| sinunir → mem1 | 33,42 → 29,48 (−11,8 %) | lo que gana es MEM1 |
+| los tres (l2viejo → l2) | 34,50 → 29,47 (−14,6 %) | velocidad completa 70,8 → 77,3 % |
+
+- Sin `predec_mem1` los bloques caen donde los ponga malloc (MEM1 en viejo,
+  MEM2 en compacto); MEM1 queda con 4 KB libres. La 0.5.17 los tenía en
+  MEM2. Con bloques en MEM1, la 0.5.17.1 llega al mismo punto del juego un
+  4-6 % antes que la 0.5.17. Comparar por tiempo real hasta un mismo
+  punto del juego, no por ventanas de 30 s reales (cubren tramos distintos).
+- Fallos de datos en L2: 0,065 por instrucción en la pelea, 0,089-0,099
+  en la escena pesada; un fallo a MEM2 cuesta ~66 ciclos más que a MEM1.
+- Espera del CTR: 8,2-8,3 % de los ciclos de la CPU (2,0-3,0 por instr).
+- CPU por dentro (mem1): tarjetas 60-80 % (20-25 ciclos por instrucción,
+  la meta de 2.2); VFPU 11-33 % de la CPU con el 2-9 % de las
+  instrucciones (~127 ciclos cada una); FPU 4-6 % (~50-60 ciclos);
+  intérprete de siempre 1-3 % (~270-390 ciclos); buscar 1,4-1,8 %.
+- Pelea: CPU 51 % del tiempo (tarjetas 34 %, VFPU 12 %); escena pesada: GE
+  51 % (leer vértices 24 %, ensamblar + enviar 16 %), VFPU 12 %.
+- El "registro" más caro en viejo/compacto/sinunir/mem1 son las capturas
+  (`capturas 400`; las otras cuatro corridas iban con 0).
+- Las 1-2 instrucciones del Broadway de más por instrucción en todas las
+  configuraciones vienen seguramente de las medidas nuevas en las tarjetas
+  de FPU/VFPU (contador de 64 bits, fase del muestreo, `compacto ?`).
+
+Plan acordado (una cosa por versión, cada una con su interruptor):
+1. **0.5.17.2** (pequeña): por defecto `predec_sin_unir` 0 y `predec_mem1`
+   1; ventanas por tiempo de juego (`prof_ventana_juego`, N vblanks, que
+   reporten segundos reales); instrucciones por bloque ejecutado y qué cae
+   al intérprete (`prof_bloques`); los contadores de las tarjetas solo con
+   las medidas; autotest midiendo sin capturas y una corrida con capturas
+   solo para comprobar que salen iguales.
+2. **0.5.18**: tarjetas propias para la VFPU (`cpu_vfpu_tarjetas`), paso a:
+   lv.s, lv.q, sv.s, sv.q, mtv/mfv (43 % de las VFPU, solo bits,
+   verificables en el PC contra vfpu_exec). Después b) aritmética simple en
+   C (fmuls, verificable en qemu) y c) paired singles con su interruptor y
+   verificación en el Wii (qemu no las emula).
+3. **0.5.19**: enlace directo entre bloques y mtctr temprano (2.3a,
+   `cpu_enlace`) si `prof_bloques` da bloques de 5-6 instrucciones; si no,
+   fusiones.
+4. Después: leer vértices midiendo antes por partes (~330 instrucciones por
+   vértice; el problema no son las esperas), CI8 en la CPU, comandos del GE
+   con computed goto, HLE (2.4a/b, con histograma de syscalls y perfil por
+   PC). Tiras directas a GX (3.1b) cambian lo que se dibuja: A/B de
+   capturas. Mapa fijo de MEM1 (2.9) midiendo antes qué ocupa MEM1. 2.5
+   junto con el dynarec.
+
 ### Para el siguiente chat (empezar aquí)
 
 Metodología acordada (detalle en `docs/HOJA_DE_RUTA.md`): primero medir
@@ -1497,13 +1552,8 @@ Metodología acordada (detalle en `docs/HOJA_DE_RUTA.md`): primero medir
   las medidas de la CPU (0.5.17.1).
 - Herramientas para medir sin el Wii (banco de qemu con el código de
   devkitPPC, perfil por función, psq_l emulado, A/B): `tools/banco/LEEME.md`.
-- **En curso: 0.5.17.1** (arriba): falta el resultado del Wii (8 corridas).
-  Con él: qué parte de los ciclos de la CPU son fallos de L2, espera del
-  CTR, VFPU, FPU o memoria lenta, y si compactar, no unir los finales y
-  MEM1 ayudan. Después, según lo medido: encadenar los bloques desde la
-  tarjeta de cierre (sin mirar pc ni alive; desenlazar al tirar), `dcbt`
-  del bloque siguiente, cabecera más pequeña, bloques más largos; 2.3
-  (fusiones, tarjetas de VFPU). Siguiente también: las peleas (leer vértices: `round_to_screen`, la división por
+- **Siguiente: 0.5.17.2** y después 0.5.18 (tarjetas VFPU), según el plan
+  acordado de arriba ("Resultado de la 0.5.17.1 en el Wii y plan"). Siguiente también: las peleas (leer vértices: `round_to_screen`, la división por
   w y tres conversiones a entero por la memoria, IPC 0,66; los índices CI8
   con dcbt) y, con lo que mida `prof_es`, las lecturas del disco. Juntar
   llamadas (`ge_charolas`, 1.4) sigue aparte. Otros candidatos medidos:
