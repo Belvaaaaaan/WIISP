@@ -16,6 +16,7 @@ const OptInfo opt_info[OPT_N] = {
 	[OPT_PROF_PMC]       = { "prof_pmc",       1, 0 },
 	[OPT_PROF_ESTADO]    = { "prof_estado",    1, 0 },
 	[OPT_PROF_TIRONES]   = { "prof_tirones",   1, 0 },
+	[OPT_PROF_ES]        = { "prof_es",        1, 0 },
 	[OPT_GE_SKIN_RAPIDO] = { "ge_skin_rapido", 1, 1 },
 	[OPT_GE_MTX_CACHE]   = { "ge_mtx_cache",   1, 1 },
 	[OPT_GE_COLOR_CONST] = { "ge_color_const", 0, 0 },
@@ -43,7 +44,7 @@ const OptInfo opt_info[OPT_N] = {
 	[OPT_GX_VCACHE]      = { "gx_vcache",      0, 0 },
 	[OPT_GX_DLCACHE]     = { "gx_dlcache",     0, 0 },
 	[OPT_GX_TLUT]        = { "gx_tlut",        0, 0 },
-	[OPT_GX_PARALELO]    = { "gx_paralelo",    0, 0 },
+	[OPT_GX_PARALELO]    = { "gx_paralelo",    1, 1 },
 	[OPT_JIT]            = { "jit",            0, 0 },
 	[OPT_JIT_ENLACE]     = { "jit_enlace",     0, 0 },
 	[OPT_JIT_LOCKSTEP]   = { "jit_lockstep",   0, 0 },
@@ -56,6 +57,7 @@ const OptInfo opt_info[OPT_N] = {
 	[OPT_DSP_SALIDA]     = { "dsp_salida",     0, 0 },
 	[OPT_DSP_SAS]        = { "dsp_sas",        0, 0 },
 	[OPT_REGISTRO_DIFERIDO] = { "registro_diferido", 1, 1 },
+	[OPT_REGISTRO_HILO]  = { "registro_hilo",  1, 1 },
 };
 
 u8 opt_on[OPT_N];

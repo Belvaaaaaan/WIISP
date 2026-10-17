@@ -171,6 +171,16 @@ bit y comprobable en el Wii con `ge_verificar`. Juntar llamadas
 (`ge_charolas`) va aparte, después y medido. También `prof_tirones` (los
 vblanks que tardan mucho y en qué). Detalle en docs/CONTINUAR.md.
 
+Hecha (v0.5.16): 3.5 `gx_paralelo`, primera parte (presentar sin esperar a
+la GPU, con un testigo y tres XFB; la imagen sale un vblank después);
+`registro_hilo` (wiisp.log desde otro hilo: los fsync ya no paran la
+emulación); `prof_tirones` por imagen y relativo a lo normal; `prof_es`
+(censo de las lecturas del disco, para decidir si leer en otro hilo sirve:
+con la emulación determinista solo se puede esconder la espera emulada).
+También la prueba de recarga (`--veces`), que encontró estado que pasaba
+de un programa al siguiente (DMA, reloj, UID de LwMutex, uv y normal de
+los vértices, botones del guion). Detalle en docs/CONTINUAR.md.
+
 Primera tanda acordada (todas "más barato", verificables en el PC):
 0.1 `prof_espera`, **skinning rápido** (`ge_skin_rapido`), **matrices al
 cambiar** (`ge_mtx_cache`), **color constante** (`ge_color_const`), 2.1
@@ -178,7 +188,7 @@ cambiar** (`ge_mtx_cache`), **color constante** (`ge_color_const`), 2.1
 
 - **Fase 0 — Medir:** 0.1 espera separada en el profiler (`prof_espera`);
   censo del estado por llamada (`prof_estado`, para 1.4); tirones
-  (`prof_tirones`);
+  (`prof_tirones`); lecturas del disco (`prof_es`);
   0.2 contadores MMCR0/MMCR1 y PMC1-4 del Broadway y muestreo de SRR0
   (`prof_pmc`); 0.3 contar instrucciones PPC por instrucción MIPS con
   objdump (objetivo 15-25 hoy, 6-10 predecodificado).

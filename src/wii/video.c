@@ -8,7 +8,12 @@
  * dos píxeles), 1:1 y centrado. Arriba se dibuja un texto (FPS, MIPS...)
  * con una fuente mínima de 5x7.
  *
- * Hay dos XFB para el juego: se dibuja en uno mientras se muestra el otro.
+ * Hay tres XFB para el juego: se compone en el que lleva más tiempo sin
+ * verse (el que se acaba de dejar de mostrar lo puede seguir leyendo el VI
+ * hasta el siguiente retrazo). Con gx_paralelo la GPU todavía está copiando
+ * la imagen al XFB cuando vuelve gx_ge_present: se muestra (con su texto)
+ * al principio de la presentación siguiente, después de esperar a que esté,
+ * y la emulación del cuadro de en medio va a la vez que la GPU termina.
  *
  * SPDX-License-Identifier: GPL-2.0-or-later
 **/
@@ -23,12 +28,15 @@
 #define GX_FIFO_SIZE (512 * 1024)
 
 static void *console_xfb;
-static u32 *game_xfbs[2];      /* con caché */
-static u32 *game_xfb;
-static int xfb_index;
+#define N_XFB 3
+static u32 *game_xfbs[N_XFB];  /* con caché */
+static u32 *game_xfb;          /* en el que se compone */
+static int xfb_disp = -1, xfb_prev = -1;   /* el que se ve y el que se veía antes */
 static GXRModeObj *rmode;
 static int showing_game;
 static void *gx_fifo;
+static int xfb_pend = -1;       /* imagen que la GPU puede estar copiando (gx_paralelo) */
+static char pend_overlay[64];
 
 #define YUY2_BLACK 0x10801080u
 #define YUY2_WHITE 0xEB80EB80u
@@ -37,8 +45,10 @@ void video_init(void){
 	VIDEO_Init();
 	rmode = VIDEO_GetPreferredMode(NULL);
 	console_xfb = MEM_K0_TO_K1(SYS_AllocateFramebuffer(rmode));
-	game_xfbs[0] = (u32 *)SYS_AllocateFramebuffer(rmode);
-	game_xfbs[1] = (u32 *)SYS_AllocateFramebuffer(rmode);
+	{
+		int i;
+		for(i = 0; i < N_XFB; i++) game_xfbs[i] = (u32 *)SYS_AllocateFramebuffer(rmode);
+	}
 	game_xfb = game_xfbs[0];
 	console_init(console_xfb, 20, 20, rmode->fbWidth, rmode->xfbHeight,
 	             rmode->fbWidth * VI_DISPLAY_PIX_SZ);
@@ -67,6 +77,7 @@ void video_clear_console(void){
 }
 
 void video_show_console(void){
+	xfb_pend = -1;   /* la imagen que faltaba ya no se muestra */
 	if(!showing_game) return;
 	showing_game = 0;
 	VIDEO_SetNextFramebuffer(console_xfb);
@@ -133,12 +144,37 @@ static inline void psp_pixel(const u8 *p, unsigned format, int *r, int *g, int *
 	}
 }
 
-static void show_game_xfb(void){
-	VIDEO_SetNextFramebuffer(game_xfb);
+static void show_xfb(int i){
+	VIDEO_SetNextFramebuffer(game_xfbs[i]);
 	VIDEO_Flush();
 	showing_game = 1;
-	xfb_index ^= 1;
-	game_xfb = game_xfbs[xfb_index];
+	xfb_prev = xfb_disp;
+	xfb_disp = i;
+}
+
+/* Dónde componer: ni el que se ve ni el que espera a la GPU, ni (si se
+   puede) el que se acaba de dejar de ver */
+static int pick_xfb(void){
+	int i;
+	for(i = 0; i < N_XFB; i++) if(i != xfb_disp && i != xfb_pend && i != xfb_prev) return i;
+	for(i = 0; i < N_XFB; i++) if(i != xfb_disp && i != xfb_pend) return i;
+	return 0;
+}
+
+/* gx_paralelo: la imagen de la presentación anterior, cuando la GPU acabe
+   de copiarla, con su texto encima */
+static void show_pending(void){
+	u32 words_per_line = rmode->fbWidth / 2;
+	int i = xfb_pend;
+	if(i < 0) return;
+	xfb_pend = -1;
+	gx_ge_present_wait();
+	game_xfb = game_xfbs[i];
+	if(pend_overlay[0]){
+		draw_text(16, 24, pend_overlay);
+		DCFlushRange(game_xfb + (24 - TEXT_PAD_Y) * words_per_line, TEXT_LINES * words_per_line * 4);
+	}
+	show_xfb(i);
 }
 
 void video_draw_psp_frame(const char *overlay){
@@ -148,14 +184,23 @@ void video_draw_psp_frame(const char *overlay){
 	u32 total_words = words_per_line * rmode->xfbHeight;
 	u32 x0 = (rmode->fbWidth - APP_SCREEN_W) / 4;           /* en palabras */
 	u32 y0 = (rmode->xfbHeight - APP_SCREEN_H) / 2;
+	int cur;
 
+	show_pending();
+	cur = pick_xfb();
+	game_xfb = game_xfbs[cur];
 	if(gx_ge_present(game_xfb, rmode, CONF_GetAspectRatio() == CONF_ASPECT_16_9)){
+		if(gx_ge_present_pendiente()){
+			xfb_pend = cur;
+			snprintf(pend_overlay, sizeof(pend_overlay), "%s", overlay ? overlay : "");
+			return;
+		}
 		if(overlay && overlay[0]){
 			/* Dentro de la zona segura de la tele (sin overscan) */
 			draw_text(16, 24, overlay);
 			DCFlushRange(game_xfb + (24 - TEXT_PAD_Y) * words_per_line, TEXT_LINES * words_per_line * 4);
 		}
-		show_game_xfb();
+		show_xfb(cur);
 		return;
 	}
 
@@ -189,5 +234,5 @@ void video_draw_psp_frame(const char *overlay){
 		draw_text(x0 + TEXT_PAD_X, 24, overlay);
 		DCFlushRange(game_xfb + (24 - TEXT_PAD_Y) * words_per_line, TEXT_LINES * words_per_line * 4);
 	}
-	show_game_xfb();
+	show_xfb(cur);
 }

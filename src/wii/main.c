@@ -58,6 +58,7 @@
 **/
 
 #include <stdio.h>
+#include <malloc.h>
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
@@ -154,6 +155,18 @@ static void profile_hook(char *buf, size_t size){
 			}
 		}
 	} else snprintf(buf, size, "modo EXACTO (dibujo por software)");
+	/* Memoria: para ver fugas en sesiones largas o al cambiar de juego */
+	len = (int)strlen(buf);
+	if((size_t)len + 200 < size){
+		struct mallinfo mi = mallinfo();
+		unsigned tb, tn, sn, sb, df;
+		gx_ge_memory(&tb, &tn, &sn, &sb, &df);
+		snprintf(buf + len, size - (size_t)len, "%smemoria: monton %u KB en uso y %u KB libres dentro; MEM1 libre %u KB, "
+		         "MEM2 libre %u KB; texturas %u KB (%u); buferes %u (%u KB); %u por liberar",
+		         len ? "\n" : "", (unsigned)mi.uordblks / 1024, (unsigned)mi.fordblks / 1024,
+		         (unsigned)((u32)SYS_GetArena1Hi() - (u32)SYS_GetArena1Lo()) / 1024,
+		         (unsigned)((u32)SYS_GetArena2Hi() - (u32)SYS_GetArena2Lo()) / 1024, tb / 1024, tn, sn, sb / 1024, df);
+	}
 }
 
 /* Las opciones con que corre el juego, para las capturas y las huellas:

@@ -24,6 +24,11 @@ void gx_ge_reset(void);
 /* Si el framebuffer que muestra la PSP está en la GPU, lo copia escalado
    al XFB y devuelve 1. Devuelve 0 si hay que convertirlo desde la VRAM. */
 int  gx_ge_present(void *xfb, GXRModeObj *rmode, int widescreen);
+/* Con gx_paralelo, gx_ge_present vuelve sin esperar a que la GPU acabe la
+   imagen: esto espera a que esté en el XFB (1) o no hay ninguna pendiente (0) */
+int  gx_ge_present_wait(void);
+/* ¿La última gx_ge_present dejó la imagen a medias en la GPU? */
+int  gx_ge_present_pendiente(void);
 
 /* Ticks gastados desde la última llamada: preparar búferes y texturas,
    estado de GX y presentar; counts: presentaciones desde la VRAM, bajadas
@@ -47,4 +52,7 @@ void gx_ge_rtt_report(char *buf, size_t size);
 /* Copia a la VRAM emulada todo lo que solo está en la GPU */
 void gx_ge_sync_vram(void);
 
+/* Memoria del renderizador: texturas decodificadas (bytes y cuántas),
+   búferes vivos (cuántos y bytes) y bloques pendientes de liberar */
+void gx_ge_memory(unsigned *tex_bytes, unsigned *tex_n, unsigned *surf_n, unsigned *surf_bytes, unsigned *deferred);
 #endif

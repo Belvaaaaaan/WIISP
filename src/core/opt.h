@@ -30,6 +30,8 @@ enum {
 	                         dibujo se repite (para 1.4); solo mide */
 	OPT_PROF_TIRONES,     /* censo de tirones: los cuadros que tardan mucho
 	                         más de lo normal y en qué se fue el tiempo */
+	OPT_PROF_ES,          /* censo de las lecturas del disco: tamaños, tiempo
+	                         real y cuánto podría esconder leer en otro hilo */
 	/* Primera tanda del GE (resultado idéntico) */
 	OPT_GE_SKIN_RAPIDO,   /* skinning mezclando las matrices por peso */
 	OPT_GE_MTX_CACHE,     /* matrices combinadas solo cuando cambian */
@@ -74,7 +76,8 @@ enum {
 	OPT_GX_VCACHE,        /* 3.2 caché de vértices convertidos */
 	OPT_GX_DLCACHE,       /* 3.3 display lists grabadas */
 	OPT_GX_TLUT,          /* 3.4 paletas como TLUT */
-	OPT_GX_PARALELO,      /* 3.5 CPU y GPU en paralelo */
+	OPT_GX_PARALELO,      /* 3.5 CPU y GPU en paralelo: presentar sin esperar
+	                         a la GPU (la imagen sale un vblank después) */
 	/* Fase 4: dynarec */
 	OPT_JIT,              /* 4.1 emisor y dynarec con hilos */
 	OPT_JIT_ENLACE,       /* 4.2 encadenamiento y pila de retorno */
@@ -90,6 +93,7 @@ enum {
 	OPT_DSP_SAS,          /* 5.2 voces de sceSas en el DSP */
 	/* Fuera de la hoja de ruta */
 	OPT_REGISTRO_DIFERIDO, /* las líneas de diagnóstico no fuerzan un fsync */
+	OPT_REGISTRO_HILO,    /* wiisp.log se escribe desde otro hilo (core/registro.h) */
 	OPT_N
 };
 

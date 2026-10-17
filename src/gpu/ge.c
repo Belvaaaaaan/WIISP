@@ -163,6 +163,10 @@ void ge_init(void){
 	ge_pending_len = 0;
 	psp_mem.vram_translation = 0x400;
 	ge.last_prim = GE_PRIM_TRIANGLES;
+	/* Nada de lo que dejó el programa anterior entre llamadas de dibujo
+	   (última uv y normal, primitivas a medias): como al arrancar */
+	ge_vertex_reset();
+	ge_raster_reset();
 	ge_sucio = GE_SUCIO_TODO;
 	kernel_register_intr(PSP_GE_INTR, &ge_intr_handler);
 }

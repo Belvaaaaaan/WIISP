@@ -143,7 +143,12 @@ static void return_float(float f){ cpu.fpr[0].f = f; RETURN(0); }
 #define POWER_SLOTS_PRIVATE 32
 static u32 power_cb[POWER_SLOTS];
 
-void power_init(void){ memset(power_cb, 0, sizeof(power_cb)); }
+/* Al cargar otro programa: el reloj vuelve al de arranque */
+void power_init(void){
+	memset(power_cb, 0, sizeof(power_cb));
+	cpu_mhz = 222;
+	bus_mhz = 111;
+}
 
 static void scePowerRegisterCallback(void){
 	s32 slot = (s32)ARG(0);

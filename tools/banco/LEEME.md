@@ -37,6 +37,14 @@ al repositorio), `gcc-powerpc-linux-gnu` y `qemu-user`. Las salidas van a
   estado de GX en cada dibujo. Con `ab_opt.py` (CLI = un guion que llame a
   `qemu-ppc $SALIDA/wiisp-cli-gx`) compara dos versiones del renderizador
   de GX en todas las pspautotests.
+  Los punteros se numeran por orden de aparición (la huella no depende de
+  dónde caiga cada cosa en el montón). Con `GX_TRAZA=1` escribe por stderr
+  cada evento y, en cada dibujo, la huella de cada grupo de funciones: con
+  diff entre dos versiones se ve en qué dibujo y qué función cambia.
+- `ab_versiones.py`: dos `wiisp-cli-gx` (por ejemplo del commit anterior,
+  con `git worktree`) en las pspautotests: misma salida y misma huella de
+  GX. Ojo: `gpu/exact/pixel` lee memoria que la GPU de mentira no escribe;
+  con `GLIBC_TUNABLES=glibc.malloc.perturb=85` en las dos sale igual.
 - `ab_opt.py`: pspautotests A/B con un interruptor a 0 y a 1
   (`ab_opt.py CLI PSPAUTOTESTS LISTA SALIDA opcion[,opcion] [hilos] [MR]`).
   `gpu/complex` y `malloc/malloc` cambian entre corridas (fechas, malloc).

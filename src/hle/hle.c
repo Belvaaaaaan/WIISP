@@ -22,6 +22,8 @@
 #include "cpu/vfpu.h"
 #include "core/prof.h"
 #include "core/opt.h"
+#include "core/tirones.h"
+#include "core/registro.h"
 
 /* Todos los imports de todos los módulos cargados: el código del syscall
    de cada stub es su índice aquí */
@@ -262,16 +264,23 @@ void hle_output(const char *text, u32 len){
 #define LOG_TOTAL_MAX (8u * 1024 * 1024)
 static u32 log_written, log_total;
 
+/* registro_hilo: wiisp.log lo escribe otro hilo (core/registro.h) */
+static int log_hilo(void){ return opt_on[OPT_REGISTRO_HILO] && reg_disponible(); }
+
 void hle_set_log_file(const char *path){
+	reg_archivo(NULL);   /* lo que quede en la cola, al archivo de antes */
 	if(log_file) fclose(log_file);
 	log_file = path ? fopen(path, "w") : NULL;
+	reg_archivo(log_file);
 	log_written = log_total = 0;
 	if(log_file) fprintf(log_file, "[WIISP] version " WIISP_VERSION "\n");
 }
 
 void hle_reopen_log_file(const char *path){
+	reg_archivo(NULL);
 	if(log_file) fclose(log_file);
 	log_file = path ? fopen(path, "a") : NULL;
+	reg_archivo(log_file);
 	log_written = 0;
 }
 
@@ -282,10 +291,13 @@ void hle_log_new_program(void){ log_written = 0; }
    vacío. Se sincroniza como mucho una vez por segundo, y siempre en los
    fallos, al terminar y con las estadísticas. */
 void hle_log_sync(void){
-	if(log_file){
-		fflush(log_file);
-		fsync(fileno(log_file));
+	if(!log_file) return;
+	if(reg_pendiente() || log_hilo()){
+		reg_esperar(1);   /* espera: los fallos y el final tienen que quedar */
+		return;
 	}
+	fflush(log_file);
+	fsync(fileno(log_file));
 }
 
 static time_t last_sync;
@@ -297,13 +309,56 @@ static int unsynced;
    segundo, el informe de [TIEMPOS] o log_tick como mucho a los 10 s). */
 #define LOG_LAZY_SECONDS 10
 
+/* Con el hilo: el texto, a la cola. Lo que decide el fsync es lo mismo que
+   sin él; las líneas [CPU] (un fallo de la emulación) esperan a estar en la
+   tarjeta, como antes. */
+static void log_v_hilo(int lazy, const char *fmt, va_list ap){
+	char buf[1024], *p = buf;
+	int n, sync = 0;
+	va_list ap2;
+	va_copy(ap2, ap);
+	n = vsnprintf(buf, sizeof(buf), fmt, ap);
+	if(n >= (int)sizeof(buf)){
+		p = malloc((size_t)n + 1);
+		if(p) vsnprintf(p, (size_t)n + 1, fmt, ap2);
+		else { p = buf; n = (int)sizeof(buf) - 1; }
+	}
+	va_end(ap2);
+	if(n < 0) return;
+	log_written += (u32)n;
+	log_total += (u32)n;
+	if(!lazy || !opt_on[OPT_REGISTRO_DIFERIDO]){
+		time_t now = time(NULL);
+		unsynced = 2;
+		if(now != last_sync || !strncmp(fmt, "[CPU]", 5)){
+			last_sync = now;
+			sync = 1;
+			unsynced = 0;
+		}
+	} else if(!unsynced) unsynced = 1;
+	reg_poner(log_file, p, (u32)n, 0);
+	if(log_written >= LOG_FILE_MAX || log_total >= LOG_TOTAL_MAX){
+		static const char recortado[] = "[registro recortado: el siguiente programa vuelve a escribir]\n";
+		reg_poner(log_file, recortado, sizeof(recortado) - 1, 0);
+	}
+	if(p != buf) free(p);
+	if(sync){
+		if(!strncmp(fmt, "[CPU]", 5)) reg_esperar(1);
+		else reg_pedir_fsync();
+	}
+}
+
 static void log_v(int to_screen, int lazy, const char *fmt, va_list ap){
 	va_list ap2;
 	int old = prof_switch(PROF_REGISTRO);
 	va_copy(ap2, ap);
 	if(to_screen) vfprintf(stderr, fmt, ap);
-	if(log_file && log_written < LOG_FILE_MAX && log_total < LOG_TOTAL_MAX){
-		int n = vfprintf(log_file, fmt, ap2);
+	if(log_file && log_written < LOG_FILE_MAX && log_total < LOG_TOTAL_MAX && log_hilo()){
+		log_v_hilo(lazy, fmt, ap2);
+	} else if(log_file && log_written < LOG_FILE_MAX && log_total < LOG_TOTAL_MAX){
+		int n;
+		reg_esperar(0);   /* si se apagó el hilo, lo de la cola va antes */
+		n = vfprintf(log_file, fmt, ap2);
 		if(n > 0){ log_written += (u32)n; log_total += (u32)n; }
 		if(log_written >= LOG_FILE_MAX || log_total >= LOG_TOTAL_MAX)
 			fputs("[registro recortado: el siguiente programa vuelve a escribir]\n", log_file);
@@ -357,7 +412,11 @@ static void log_tick(void){
 	if(now != last_sync && (unsynced == 2 || !opt_on[OPT_REGISTRO_DIFERIDO] || now - last_sync >= LOG_LAZY_SECONDS)){
 		int old = prof_switch(PROF_REGISTRO);
 		last_sync = now;
-		fsync(fileno(log_file));
+		if(log_hilo()) reg_pedir_fsync();
+		else {
+			reg_esperar(0);
+			fsync(fileno(log_file));
+		}
 		unsynced = 0;
 		prof_switch(old);
 	}
@@ -376,6 +435,8 @@ static struct {
 	int valid;
 	u64 clock, acc[PROF_N], instr, cycles, syscalls, flips, switches, guest_calls;
 	u32 vblanks;
+	RegStats reg;
+	IoCenso es;
 	u32 samples[PROF_N], ge_samples[GEF_N];
 	u64 pmc[PROF_PMC_SLOTS][PMC_N];
 	GeStats ge;
@@ -384,44 +445,42 @@ static u32 prof_vblanks;   /* hle_run_frame lleva la cuenta */
 
 void hle_set_profile_hook(void (*fn)(char *buf, size_t size)){ profile_hook = fn; }
 
-/* prof_tirones: tiempo real de cada vblank emulado. Los de más de
-   TIRON_MS son tirones: cuántos, cuánto suman, en qué cubetas se fue su
-   tiempo y el peor (con su momento en el juego). Lo que tarda escribir el
-   propio informe no cuenta. */
-#define TIRON_MS 50
+/* prof_tirones (core/tirones.c): cada imagen del juego (de un cambio de
+   framebuffer al siguiente, o TIR_VENTANA vblanks si no cambia) con su
+   tiempo real, su tiempo de juego y lo que se llevó cada cubeta. Lo que
+   tarda escribir el propio informe no cuenta. */
 static struct {
 	int valid;
-	u64 last, last_acc[PROF_N];
-	u32 hist[6], n;
-	u64 ticks, acc[PROF_N];
-	u64 worst, worst_acc[PROF_N], worst_cycles;
+	u64 last, last_acc[PROF_N], cycles, flips;
+	u32 vblanks;
+	Tirones t;
 } tir;
 
 static void tirones_tick(void){
-	u64 d;
-	int i, b;
 	if(!prof_clock || !prof_hz) return;
 	prof_flush();
-	if(tir.valid){
-		u64 ms;
-		d = prof_last - tir.last;
-		ms = d * 1000 / prof_hz;
-		b = ms <= 20 ? 0 : ms <= 33 ? 1 : ms <= 50 ? 2 : ms <= 100 ? 3 : ms <= 250 ? 4 : 5;
-		tir.hist[b]++;
-		if(ms > TIRON_MS){
-			tir.n++;
-			tir.ticks += d;
-			for(i = 0; i < PROF_N; i++) tir.acc[i] += prof_acc[i] - tir.last_acc[i];
-			if(d > tir.worst){
-				tir.worst = d;
-				tir.worst_cycles = cpu_cycles;
-				for(i = 0; i < PROF_N; i++) tir.worst_acc[i] = prof_acc[i] - tir.last_acc[i];
-			}
-		}
+	if(!tir.valid){
+		tir.valid = 1;
+		tir.last = prof_last;
+		tir.cycles = cpu_cycles;
+		tir.flips = hle_stat_flips;
+		tir.vblanks = 0;
+		memcpy(tir.last_acc, prof_acc, sizeof(tir.last_acc));
+		return;
 	}
-	tir.valid = 1;
-	tir.last = prof_last;
-	memcpy(tir.last_acc, prof_acc, sizeof(tir.last_acc));
+	tir.vblanks++;
+	if(hle_stat_flips != tir.flips || tir.vblanks >= TIR_VENTANA){
+		u64 acc[PROF_N];
+		int i;
+		for(i = 0; i < PROF_N; i++) acc[i] = prof_acc[i] - tir.last_acc[i];
+		tir_imagen(&tir.t, (double)(prof_last - tir.last) / (double)prof_hz, (double)(cpu_cycles - tir.cycles) / (double)PSP_CPU_HZ,
+		           acc, (double)cpu_cycles / (double)PSP_CPU_HZ);
+		tir.last = prof_last;
+		tir.cycles = cpu_cycles;
+		tir.flips = hle_stat_flips;
+		tir.vblanks = 0;
+		memcpy(tir.last_acc, prof_acc, sizeof(tir.last_acc));
+	}
 }
 
 static void profile_snapshot(void){
@@ -436,6 +495,8 @@ static void profile_snapshot(void){
 	prof_base.switches = kernel_stat_switches;
 	prof_base.guest_calls = kernel_stat_guest_calls;
 	prof_base.vblanks = prof_vblanks;
+	reg_stats(&prof_base.reg);
+	io_censo(&prof_base.es);
 	memcpy(prof_base.samples, (const void *)prof_samples, sizeof(prof_base.samples));
 	memcpy(prof_base.ge_samples, (const void *)prof_ge_samples, sizeof(prof_base.ge_samples));
 	if(prof_pmc_on) prof_pmc_account();
@@ -502,11 +563,15 @@ static void profile_ge_lines(const GeStats *g, const GeStats *b, u32 vblanks){
 		ge_vdec_verif_report(line, sizeof(line));
 		hle_log("[TIEMPOS] %s\n", line);
 	}
-	if(opt_on[OPT_GE_ESTADO_SUCIO] && g->es_gx - b->es_gx + g->es_tri - b->es_tri)
-		hle_log("[TIEMPOS] Estado sucio (ge_estado_sucio): estado de GX que poner %u veces, %.0f%% sin emitir (el mismo); "
+	if(opt_on[OPT_GE_ESTADO_SUCIO] && g->es_gx - b->es_gx + g->es_tri - b->es_tri){
+		/* Con ge_verificar el estado de GX se emite siempre: lo que se habría saltado son las emisiones comprobadas */
+		u32 salt = opt_on[OPT_GE_VERIF] ? (g->es_gx_verif - b->es_gx_verif) + (g->es_gx_verif_sin - b->es_gx_verif_sin)
+		                                : g->es_gx_saltado - b->es_gx_saltado;
+		hle_log("[TIEMPOS] Estado sucio (ge_estado_sucio): estado de GX que poner %u veces, %.0f%% %s (el mismo); "
 		        "triangulos a GX %u, %.0f%% sin preparar nada\n", (unsigned)(g->es_gx - b->es_gx),
-		        pct(g->es_gx_saltado - b->es_gx_saltado, g->es_gx - b->es_gx), (unsigned)(g->es_tri - b->es_tri),
-		        pct(g->es_tri_listo - b->es_tri_listo, g->es_tri - b->es_tri));
+		        pct(salt, g->es_gx - b->es_gx), opt_on[OPT_GE_VERIF] ? "se habria saltado (con ge_verificar se emite igual)" : "sin emitir",
+		        (unsigned)(g->es_tri - b->es_tri), pct(g->es_tri_listo - b->es_tri_listo, g->es_tri - b->es_tri));
+	}
 	if(opt_on[OPT_GE_VERIF] && opt_on[OPT_GE_ESTADO_SUCIO])
 		hle_log("[TIEMPOS] Verificacion del estado de GX (ge_verificar): %u emisiones que se habrian saltado comparadas con "
 		        "libogc, %u distintas (%u sin poder leer libogc); triangulos sin preparar %u comparados, %u distintos\n",
@@ -632,30 +697,67 @@ void hle_profile_report(const char *why){
 		len += (size_t)snprintf(line + len, sizeof(line) - len, " %s %.1f%%", names[b], 100.0 * (double)d[b] / (double)total);
 	}
 	hle_log("%s\n", line);
-	if(opt_on[OPT_PROF_TIRONES] && tir.valid){
-		u64 sum = 0;
-		hle_log("[TIEMPOS] Tirones (prof_tirones): vblanks por tiempo real: hasta 20 ms %u, 20-33 %u, 33-50 %u, 50-100 %u, "
-		        "100-250 %u, mas %u; de mas de %d ms: %u (%.1f s)\n", (unsigned)tir.hist[0], (unsigned)tir.hist[1],
-		        (unsigned)tir.hist[2], (unsigned)tir.hist[3], (unsigned)tir.hist[4], (unsigned)tir.hist[5], TIRON_MS,
-		        (unsigned)tir.n, (double)tir.ticks / (double)prof_hz);
-		for(i = 0; i < PROF_N; i++) sum += tir.acc[i];
-		if(tir.n && sum){
+	{
+		/* El escritor de wiisp.log (registro_hilo): lo suyo no para la
+		   emulación; lo que sí, la espera por cola llena o por un fallo */
+		RegStats r;
+		reg_stats(&r);
+		if(r.bytes != prof_base.reg.bytes || r.esperas != prof_base.reg.esperas || r.fsyncs != prof_base.reg.fsyncs)
+			hle_log("[TIEMPOS] registro en otro hilo: %llu KB en %llu lotes (%.0f ms), %llu fsync (%.0f ms, el peor %.0f ms "
+			        "desde el arranque), fuera de la emulacion; la emulacion espero %llu veces (%.0f ms); cola hasta %u KB\n",
+			        (unsigned long long)((r.bytes - prof_base.reg.bytes) / 1024),
+			        (unsigned long long)(r.lotes - prof_base.reg.lotes),
+			        1000.0 * (double)(r.t_escribir - prof_base.reg.t_escribir) / (double)prof_hz,
+			        (unsigned long long)(r.fsyncs - prof_base.reg.fsyncs),
+			        1000.0 * (double)(r.t_fsync - prof_base.reg.t_fsync) / (double)prof_hz,
+			        1000.0 * (double)r.t_fsync_max / (double)prof_hz,
+			        (unsigned long long)(r.esperas - prof_base.reg.esperas),
+			        1000.0 * (double)(r.t_esperas - prof_base.reg.t_esperas) / (double)prof_hz, r.max_cola / 1024);
+	}
+	if(opt_on[OPT_PROF_ES]){
+		IoCenso c;
+		const IoCenso *b = &prof_base.es;
+		io_censo(&c);
+		if(c.lecturas != b->lecturas){
+			double ms = 1000.0 * (double)(c.t_host - b->t_host) / (double)prof_hz;
+			hle_log("[TIEMPOS] E/S (prof_es): %llu lecturas del disco (%llu asincronas), %llu KB en %.0f ms (%.1f MB/s), "
+			        "seguidas %.0f%%; de hasta 64 KB %llu, hasta 1 MB %llu, mas %llu; la peor desde el arranque %u KB en %.0f ms; "
+			        "leyendo en otro hilo se esconderian como mucho %.0f ms de esos (%llu medidas)\n",
+			        (unsigned long long)(c.lecturas - b->lecturas), (unsigned long long)(c.asincronas - b->asincronas),
+			        (unsigned long long)((c.bytes - b->bytes) / 1024), ms,
+			        ms > 0.0 ? (double)(c.bytes - b->bytes) / 1048576.0 / (ms / 1000.0) : 0.0,
+			        100.0 * (double)(c.seguidas - b->seguidas) / (double)(c.lecturas - b->lecturas),
+			        (unsigned long long)(c.por_tam[0] - b->por_tam[0]), (unsigned long long)(c.por_tam[1] - b->por_tam[1]),
+			        (unsigned long long)(c.por_tam[2] - b->por_tam[2]), c.peor_bytes / 1024,
+			        1000.0 * (double)c.peor_t / (double)prof_hz,
+			        1000.0 * (double)(c.solapable - b->solapable) / (double)prof_hz,
+			        (unsigned long long)(c.medidas - b->medidas));
+		}
+	}
+	if(opt_on[OPT_PROF_TIRONES] && tir.t.imagenes){
+		const Tirones *t = &tir.t;
+		double normal = tir_normal(t);
+		u64 sum = 0, peor = 0;
+		hle_log("[TIEMPOS] Tirones (prof_tirones): %u imagenes, lo normal %.1f s reales por s de juego (%.0f%%); "
+		        "respecto a lo normal: hasta 1,25x %u, 1,25-2x %u, 2-4x %u, mas de 4x %u; tirones (mas del doble y %d ms "
+		        "perdidos): %u, %.2f s perdidos de %.1f s\n", (unsigned)t->imagenes, normal, normal > 0.0 ? 100.0 / normal : 0.0,
+		        (unsigned)t->rel[0], (unsigned)t->rel[1], (unsigned)t->rel[2], (unsigned)t->rel[3], TIR_MIN_MS,
+		        (unsigned)t->n, t->perdido_s, t->real_s);
+		for(i = 0; i < PROF_N; i++){ sum += t->acc[i]; peor += t->peor_acc[i]; }
+		if(t->n && sum){
 			len = (size_t)snprintf(line, sizeof(line), "[TIEMPOS] Tirones: su tiempo en");
 			for(i = 0; i < PROF_N && len < sizeof(line) - 32; i++)
-				if(tir.acc[i] * 50 >= sum)   /* desde el 2 % */
-					len += (size_t)snprintf(line + len, sizeof(line) - len, " %s %.1f%%", names[i], 100.0 * (double)tir.acc[i] / (double)sum);
-			len += (size_t)snprintf(line + len, sizeof(line) - len, "; el peor %.0f ms a los %.1f s de juego:",
-			                        1000.0 * (double)tir.worst / (double)prof_hz, (double)tir.worst_cycles / (double)PSP_CPU_HZ);
+				if(t->acc[i] * 50 >= sum)   /* desde el 2 % */
+					len += (size_t)snprintf(line + len, sizeof(line) - len, " %s %.1f%%", names[i], 100.0 * (double)t->acc[i] / (double)sum);
+			len += (size_t)snprintf(line + len, sizeof(line) - len, "; el peor %.0f ms (%.0f de mas) a los %.1f s de juego:",
+			                        1000.0 * t->peor_s, 1000.0 * t->peor_perdido_s, t->peor_juego_s);
 			for(i = 0; i < PROF_N && len < sizeof(line) - 32; i++)
-				if(tir.worst_acc[i] * 50 >= tir.worst)
+				if(t->peor_acc[i] * 50 >= peor)
 					len += (size_t)snprintf(line + len, sizeof(line) - len, " %s %.0f ms", names[i],
-					                        1000.0 * (double)tir.worst_acc[i] / (double)prof_hz);
+					                        1000.0 * (double)t->peor_acc[i] / (double)prof_hz);
 			hle_log("%s\n", line);
 		}
-		memset(tir.hist, 0, sizeof(tir.hist));
-		memset(tir.acc, 0, sizeof(tir.acc));
-		tir.n = 0;
-		tir.ticks = tir.worst = 0;
+		tir_nuevo_bloque(&tir.t);
 	}
 	hle_log("[TIEMPOS] GE: %u listas, %u comandos, %u vertices, %u primitivas | %llu syscalls, %llu cambios de hilo, "
 	        "%llu llamadas al juego\n",
@@ -678,7 +780,10 @@ void hle_profile_report(const char *why){
 			p = nl + 1;
 		}
 	}
-	hle_log_sync();
+	/* A la tarjeta. Con el hilo, sin esperar: el fsync lo hace el escritor
+	   y la emulación sigue (los fallos y el final sí esperan) */
+	if(log_hilo()) reg_pedir_fsync();
+	else hle_log_sync();
 	profile_snapshot();
 	tir.valid = 0;   /* lo que tardó el informe no es un tirón */
 }
@@ -735,7 +840,10 @@ void hle_log_stats(void){
 		len += (size_t)snprintf(line + len, sizeof(line) - len, " %s %.1f%%", vfpu_stat_name[order[i]],
 		                        100.0 * (double)vfpu_stat[order[i]] / (double)vf);
 	hle_log("%s\n", line);
-	hle_log_sync();
+	/* Cada minuto de juego: con el hilo, sin esperar a la tarjeta (al
+	   terminar, hle_exit espera y cerrar el archivo lo escribe todo) */
+	if(log_hilo()) reg_pedir_fsync();
+	else hle_log_sync();
 }
 
 /* ------------------------------------------------------------------ */
@@ -815,6 +923,8 @@ int hle_init(PspModule *mod, const char *host_dir, const char *exec_name){
 	exited = 0;
 	exit_reason = "";
 	cpu_cycles = 0;
+	tir_init(&tir.t);   /* lo normal es de cada programa */
+	tir.valid = 0;
 	stats_base_instr = stats_logged_instr = cpu_executed;
 	stats_final = 0;
 	stall_last_instr = cpu_executed;
@@ -846,6 +956,7 @@ int hle_init(PspModule *mod, const char *host_dir, const char *exec_name){
 	mpeg_init();
 	utility_init();
 	power_init();
+	misc_init();
 	ge_init();
 	kernel_init(mod, exec_name);
 	return 0;
@@ -881,6 +992,7 @@ int hle_run_frame(void){
 	prof_vblanks++;
 	if(opt_on[OPT_PROF_TIRONES]) tirones_tick();
 	else tir.valid = 0;
+	if(opt_on[OPT_PROF_ES]) io_censo_tick();
 	profile_tick();
 	frame = cpu_cycles / CYCLES_PER_FRAME;
 	if(exited || !frame) return exited;

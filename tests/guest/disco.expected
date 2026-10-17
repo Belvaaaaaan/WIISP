@@ -1,0 +1,15 @@
+disco: getstat 0, tamano 716923
+disco: abrir bien
+disco: leer 100 en 0: 100, malos 0, 104 us
+disco: leer 5000 en 100: 5000, malos 0, 104 us
+disco: leer 307200 en 5100: 307200, malos 0, 3076 us
+disco: leer 65536 en 123457: 65536, malos 0, 659 us
+disco: leer 5000 en 715923: 1000, malos 0, 104 us
+disco: leer 10 en 716923: 0, malos 0, 104 us
+disco: asincrona 0
+disco: poll 0
+disco: resultado 204800, malos 0
+disco: sce_lbn bien
+disco: leer 716923 en 0: 716923, malos 0, 7173 us
+disco: umd0 bien
+disco: sectores 3, malos 0, 104 us

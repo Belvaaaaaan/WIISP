@@ -446,6 +446,13 @@ void ge_raster_tex_flush(void){
 	if(ge_hw) ge_hw->tex_flush();
 }
 
+/* Otro programa: la instantánea de la autotextura ya no vale (aunque
+   coincidan dirección y tamaño, los bytes son del anterior) */
+void ge_raster_reset(void){
+	tex_flush_gen++;
+	cs.valid = 0;
+}
+
 /* ¿Se cruza la textura (start, stride, w, h en bytes) con lo que se escribe? */
 static int overlaps_write(u32 start, u32 stride, u32 w, u32 h, u32 base, u32 stride_bytes, u32 width_bytes, u32 height){
 	u32 size = stride * (h - 1) + w, row = start, y;

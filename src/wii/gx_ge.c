@@ -326,10 +326,32 @@ static void wait_gpu(void){
 	prof_switch(old);
 }
 
+/* gx_paralelo: la presentación no espera a la GPU. Deja un testigo
+   (GX_SetDrawSync, otro registro que el de GX_DrawDone) detrás de la copia
+   al XFB; cuando la GPU lo pasa, la imagen está en el XFB y lo que se
+   liberó o se cargó en el anillo de TLUT antes de pedirlo ya no lo usa. */
+static u16 present_tok;
+static int present_pend, defer_at_tok, tlut_at_tok;
+static unsigned par_presents, par_waits, par_lost;
+static u64 par_wait_ticks;
+
 static void wait_gpu_body(void){
 	GX_DrawDone();
 	flush_deferred();
 	tlut_used = 0;    /* la GPU ya leyó todas las TLUT encoladas */
+	present_pend = 0;   /* y pasó cualquier testigo */
+	defer_at_tok = tlut_at_tok = 0;
+}
+
+/* La GPU pasó el testigo de la última presentación */
+static void present_done(void){
+	int i, n = defer_at_tok < ndefer ? defer_at_tok : ndefer;
+	for(i = 0; i < n; i++) free(defer_list[i]);
+	memmove(defer_list, defer_list + n, (size_t)(ndefer - n) * sizeof(defer_list[0]));
+	ndefer -= n;
+	tlut_used = tlut_used > tlut_at_tok ? tlut_used - tlut_at_tok : 0;
+	present_pend = 0;
+	defer_at_tok = tlut_at_tok = 0;
 }
 
 /* Libera memoria que la GPU aún puede estar leyendo */
@@ -1572,7 +1594,18 @@ static int decode_texture(TexEntry *e, const GeRasterState *r){
 		gxfmt = decode_into(r, i, data + off, lw, lh, round4(lw), e->levels == 1);
 		off += level_bytes(lw, lh);
 	}
-	if(gxfmt == GX_TF_RGB565) bytes /= 2;
+	if(gxfmt == GX_TF_RGB565){
+		/* 2 bytes por texel: solo se usó la primera mitad. Se pasa a un
+		   búfer de su tamaño: la memoria y la cuenta del presupuesto
+		   (tex_total) coinciden */
+		u8 *half = memalign(32, bytes / 2);
+		if(half){
+			memcpy(half, data, bytes / 2);
+			free(data);   /* la GPU todavía no lo ha visto */
+			data = half;
+			bytes /= 2;
+		}   /* sin memoria se queda el grande, y se cuenta entero */
+	}
 	DCFlushRange(data, bytes);
 	e->data = data;
 	e->bytes = bytes;
@@ -2965,9 +2998,35 @@ static Surface display_tmp;
 
 static int present_body(void *xfb, GXRModeObj *rm, int widescreen);
 
+int gx_ge_present_pendiente(void){ return present_pend; }
+
+int gx_ge_present_wait(void){
+	if(!present_pend) return 0;
+	if(GX_GetDrawSync() != present_tok){
+		int old = prof_switch(PROF_ESPERA_GX);
+		u64 t0 = gettime(), t;
+		while(GX_GetDrawSync() != present_tok){
+			t = gettime() - t0;
+			if(ticks_to_millisecs(t) >= 200){
+				/* El testigo no llega (no debería): como sin gx_paralelo */
+				par_lost++;
+				wait_gpu_body();
+				break;
+			}
+		}
+		par_wait_ticks += gettime() - t0;
+		par_waits++;
+		prof_switch(old);
+	}
+	if(present_pend) present_done();
+	return 1;
+}
+
 int gx_ge_present(void *xfb, GXRModeObj *rm, int widescreen){
 	u64 t0 = gettime();
-	int r = present_body(xfb, rm, widescreen);
+	int r;
+	gx_ge_present_wait();   /* la anterior ya tiene que estar (video.c la espera antes) */
+	r = present_body(xfb, rm, widescreen);
 	tri_listo = 0;
 	prof_present += gettime() - t0;
 	return r;
@@ -2979,6 +3038,22 @@ void gx_ge_profile(unsigned long long *setup, unsigned long long *state, unsigne
 	counts[0] = prof_vram_presents; counts[1] = prof_downloads; counts[2] = prof_uploads; counts[3] = prof_decodes;
 	prof_setup = prof_state = prof_present = 0;
 	prof_vram_presents = prof_downloads = prof_uploads = prof_decodes = 0;
+}
+
+/* Memoria del renderizador: texturas, búferes vivos y lo que espera a la GPU para liberarse */
+void gx_ge_memory(unsigned *tex_bytes, unsigned *tex_n, unsigned *surf_n, unsigned *surf_bytes, unsigned *deferred){
+	int i;
+	*tex_bytes = tex_total;
+	*tex_n = 0;
+	for(i = 0; i < TC_MAX; i++) *tex_n += texc[i].data != NULL;
+	*surf_n = *surf_bytes = 0;
+	for(i = 0; i < MAX_SURF; i++){
+		if(!surf[i].used) continue;
+		(*surf_n)++;
+		if(surf[i].tex) *surf_bytes += (unsigned)(surf[i].w * surf[i].h * 4);
+		if(surf[i].ci) *surf_bytes += (unsigned)(ci_width(&surf[i]) * (surf[i].h + 4));
+	}
+	*deferred = (unsigned)ndefer;
 }
 
 void gx_ge_set_lazy_textures(int on){ lazy_textures = on; }
@@ -3175,8 +3250,16 @@ void gx_ge_rtt_report(char *buf, size_t size){
 				        tk_ms(t->dec_ticks));
 		}
 	}
+	if(par_presents && len < size){
+		len += (size_t)snprintf(buf + len, size - len, "gx_paralelo: %u imagenes sin esperar a la GPU; en %u la "
+		                        "siguiente tuvo que esperarla (%u ms)%s\n", par_presents, par_waits, tk_ms(par_wait_ticks),
+		                        par_lost ? "; ALGUN TESTIGO NO LLEGO (se espero con GX_DrawDone)" : "");
+		if(len >= size) len = size - 1;
+	}
 	if(len && len < size && buf[len - 1] == '\n') buf[--len] = 0;
 	/* Empieza otro periodo */
+	par_presents = par_waits = 0;
+	par_wait_ticks = 0;
 	rtt_n = 0;
 	rtt_npal = 0;
 	memset(rtt_dl, 0, sizeof(rtt_dl)); memset(rtt_dl_ticks, 0, sizeof(rtt_dl_ticks));
@@ -3289,7 +3372,16 @@ static int present_body(void *xfb, GXRModeObj *rm, int widescreen){
 	GX_SetDispCopyDst(rm->fbWidth, rm->xfbHeight);
 	GX_CopyDisp(xfb, GX_FALSE);
 	copy_filter_none();
-	wait_gpu();
+	if(opt_on[OPT_GX_PARALELO]){
+		/* Sin esperar: la imagen estará en el XFB cuando la GPU pase el
+		   testigo (gx_ge_present_wait, en la presentación siguiente) */
+		present_tok++;
+		GX_SetDrawSync(present_tok);
+		present_pend = 1;
+		defer_at_tok = ndefer;
+		tlut_at_tok = tlut_used;
+		par_presents++;
+	} else wait_gpu();
 	return 1;
 }
 

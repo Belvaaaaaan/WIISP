@@ -3101,6 +3101,7 @@ void kernel_init(const PspModule *mod, const char *exec_path){
 	for(i = 0; i < MAX_FPLS; i++) free(fpls[i].taken);
 	memset(fpls, 0, sizeof(fpls));
 	memset(lwmutexes, 0, sizeof(lwmutexes));
+	lwmutex_gen = 0;   /* los UID, como en un arranque nuevo */
 	memset(mutexes, 0, sizeof(mutexes));
 	memset(semas, 0, sizeof(semas));
 	memset(mbxs, 0, sizeof(mbxs));
@@ -3108,6 +3109,7 @@ void kernel_init(const PspModule *mod, const char *exec_path){
 	memset(evfs, 0, sizeof(evfs));
 	memset(blocks, 0, sizeof(blocks));
 	memset(events, 0, sizeof(events));
+	event_order = 0;
 	memset(subintrs, 0, sizeof(subintrs));
 	memset(callbacks, 0, sizeof(callbacks));
 	exit_callback = 0;

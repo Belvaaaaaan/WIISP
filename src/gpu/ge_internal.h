@@ -320,8 +320,11 @@ const GeRasterState *ge_raster_state(void);
    las decodifica el GE (morph y skinning incluidos, con ge.bone y los pesos
    de morph de ge.cmd) */
 void ge_test_decode_vertex(u32 vt, const u8 *p, float *pos, float *nrm);
-/* Pruebas: lo que una llamada de dibujo deja a la siguiente, a cero */
-void ge_vertex_test_reset(void);
+/* Lo que una llamada de dibujo deja a la siguiente, a cero, como al
+   arrancar (ge_init: al cargar otro programa; también en las pruebas) */
+void ge_vertex_reset(void);
+/* La instantánea de la autotextura y el censo, como al arrancar (ge_init) */
+void ge_raster_reset(void);
 /* Pruebas: aplica un comando del GE como si viniera en una lista */
 void ge_test_execute(u32 op);
 /* Pruebas: cambia los grupos del censo de estado de un comando y devuelve los de antes */

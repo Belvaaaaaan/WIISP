@@ -36,18 +36,30 @@ static void put(int f, u32 idx, u32 h){
 	slot[f][idx] = h;
 	state_h += mix(f, idx, h);
 }
-static void event(u32 code, u32 a){ trace_h = fnv(fnv(trace_h, code), a); }
+/* Con GX_TRAZA=1 en el entorno, a stderr cada evento y, en cada dibujo, la
+   huella de cada grupo de funciones: comparando dos versiones se ve en qué
+   dibujo y en qué función empiezan a ser distintas */
+static int traza = -1;
+static int con_traza(void){ if(traza < 0) traza = getenv("GX_TRAZA") != NULL; return traza; }
+static void event(u32 code, u32 a){
+	trace_h = fnv(fnv(trace_h, code), a);
+	if(con_traza()) fprintf(stderr, "evento %u %08X\n", code, a);
+}
 
-/* Punteros por orden de aparición */
+/* Punteros por orden de aparición: el primero que se ve es el 1, el
+   segundo el 2... (la tabla se busca por la dirección, pero el número no
+   depende de ella: así la huella no cambia si cambia dónde cae cada cosa en
+   el montón) */
 #define NPTR 65536
 static const void *ptrs[NPTR];
+static u32 ptr_num[NPTR], ptr_next;
 static u32 ptr_id(const void *p){
 	u32 h, i;
 	if(!p) return 0;
 	h = (u32)(((unsigned long)p >> 4) * 2654435761u) & (NPTR - 1);
 	for(i = 0; i < NPTR; i++, h = (h + 1) & (NPTR - 1)){
-		if(ptrs[h] == p) return h + 1;
-		if(!ptrs[h]){ ptrs[h] = p; return h + 1; }
+		if(ptrs[h] == p) return ptr_num[h];
+		if(!ptrs[h]){ ptrs[h] = p; ptr_num[h] = ++ptr_next; return ptr_num[h]; }
 	}
 	return 0xFFFFFFFFu;
 }
@@ -87,6 +99,10 @@ void GX_SetTexCopyDst(u16 w, u16 h, u32 fmt, u8 mip){ P(F_TEXDST, 0, w, h, fmt, 
 void GX_CopyTex(void *dest, u8 clear){ event(1, fnv(ptr_id(dest), clear)); }
 void GX_CopyDisp(void *dest, u8 clear){ event(2, fnv(ptr_id(dest), clear)); }
 void GX_DrawDone(void){ event(3, 0); }
+/* Testigos (gx_paralelo): la GPU de mentira acaba en el acto */
+static u16 draw_sync;
+void GX_SetDrawSync(u16 tok){ draw_sync = tok; event(7, tok); }
+u16 GX_GetDrawSync(void){ return draw_sync; }
 void GX_PixModeSync(void){ event(4, 0); }
 void GX_InvalidateTexAll(void){ event(5, 0); }
 void GX_LoadProjectionMtx(const float *m, u8 type){ put(F_PROJ, 0, fnv(mtx_hash(m, 16), type)); }
@@ -139,6 +155,16 @@ void GX_Begin(u8 prim, u8 fmt, u16 n){
 	wgPipe->U8 = prim | (fmt & 7);
 	wgPipe->U16 = n;
 	trace_h = fnv(fnv(trace_h, state_h), prim | (fmt << 8) | ((u32)n << 16));
+	if(con_traza()){
+		int f, i;
+		fprintf(stderr, "dibujo %u: prim %u fmt %u n %u;", begins, prim, fmt, n);
+		for(f = 0; f < F_N; f++){
+			u32 h = 0;
+			for(i = 0; i < 64; i++) h += mix(f, (u32)i, slot[f][i]);
+			fprintf(stderr, " %d:%08X", f, h);
+		}
+		fprintf(stderr, "\n");
+	}
 	begins++;
 }
 

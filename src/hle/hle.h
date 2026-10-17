@@ -19,7 +19,7 @@
 
 /* Versión de WIISP (la misma que dist/apps/wiisp/meta.xml): sale en el
    menú y al principio de wiisp.log */
-#define WIISP_VERSION "0.5.15"
+#define WIISP_VERSION "0.5.16"
 
 typedef void (*HleFunc)(void);
 
@@ -358,6 +358,20 @@ void kernel_free(u32 addr);
 /* boot_from_disc: el directorio actual empieza en disc0:/PSP_GAME/USRDIR */
 void io_init(const char *host_dir, int boot_from_disc);
 void io_shutdown(void);
+
+/* Censo de las lecturas del disco (prof_es): solo mide, no cambia nada de
+   la emulación. "solapable" es lo que leer en otro hilo podría esconder
+   como mucho: de cada lectura, lo que tardó el anfitrión o, si es menos, el
+   tiempo real que la emulación tardó en llegar al final de su espera
+   emulada (sceIoRead) o hasta que el juego recogió el resultado
+   (sceIoReadAsync). Los tiempos van en ticks de prof_clock. */
+typedef struct {
+	u64 lecturas, bytes, t_host, seguidas, por_tam[3];   /* hasta 64 KB, hasta 1 MB, más */
+	u64 peor_t, solapable, medidas, asincronas;
+	u32 peor_bytes;
+} IoCenso;
+void io_censo(IoCenso *out);
+void io_censo_tick(void);   /* una vez por cuadro: las esperas que ya terminaron */
 /* Un archivo entero por su ruta de la PSP, o el resto de un descriptor
    abierto desde su posición actual (malloc; NULL si falla) */
 u8  *io_load_path(const char *path, u32 *len);
@@ -379,7 +393,8 @@ void hle_write_datetime(u32 addr, u64 unix_us);
 
 /* Display y mandos (display.c) */
 void display_init(void);
-void power_init(void);   /* net.c: ranuras de callbacks de energía */
+void power_init(void);   /* net.c: ranuras de callbacks de energía y reloj */
+void misc_init(void);    /* misc.c: el DMA en curso */
 void display_fill_ctrl(u32 addr);
 /* Tras una lectura del mando del juego (olvida lo retenido, [MANDO]) */
 void display_ctrl_read_done(void);

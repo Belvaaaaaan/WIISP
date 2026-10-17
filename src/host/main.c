@@ -27,6 +27,8 @@
  *                       vacía y se llena con DIR_base si existe
  *     --opt NOMBRE=0|1  interruptor de optimización (core/opt.h); repetible
  *     --capturas-guion N con guion, una captura cada N cuadros (400; 0 = no)
+ *     --veces N         cargar y ejecutar N veces seguidas (prueba de recarga:
+ *                       la imagen final y la memoria en uso deben repetirse)
  *
  * En Windows, con la consola en primer plano, W A S D mueven el stick
  * analógico de la PSP y ENTER es START.
@@ -38,6 +40,9 @@
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
+#if defined(__GLIBC__)
+#include <malloc.h>
+#endif
 #include <signal.h>
 #include "frontend/app.h"
 #include "hle/hle.h"
@@ -274,13 +279,69 @@ static void mode_text(char *buf, size_t size){
 	         app_turbo() ? " TURBO" : "");
 }
 
+/* Memoria del montón en uso, para --veces (0 si no se sabe). Exacta con
+   -fsanitize=address. Con glibc es aproximada: se suman los bloques
+   grandes que van aparte (mmap), porque según lo que se liberó antes el
+   mismo bloque cae en un sitio o en el otro, y lo que glibc guarda para
+   reutilizar (tcache) cuenta como en uso: puede subir algo de una vez a
+   otra sin que haya fugas. */
+#if defined(__SANITIZE_ADDRESS__)
+size_t __sanitizer_get_current_allocated_bytes(void);
+static unsigned long heap_in_use(void){ return (unsigned long)__sanitizer_get_current_allocated_bytes(); }
+#elif defined(__GLIBC__) && (__GLIBC__ > 2 || (__GLIBC__ == 2 && __GLIBC_MINOR__ >= 33))
+static unsigned long heap_in_use(void){ struct mallinfo2 mi = mallinfo2(); return (unsigned long)(mi.uordblks + mi.hblkhd); }
+#else
+static unsigned long heap_in_use(void){ return 0; }
+#endif
+
+/* Una ejecución: hasta limit frames, o hasta que el programa salga */
+static void run_once(int limit, int every, int *exited){
+	clock_t start = clock(), last_report = start;
+	unsigned run_frames;
+	unsigned long long instr, last_hash = 0;
+	double secs;
+	int i;
+	sampler_start();
+	for(i = 0; i < limit && !*exited && !stop_requested; i++){
+#ifdef _WIN32
+		keyboard_input();
+#endif
+		*exited = app_run_frame();
+		if(every > 0 && (i + 1) % every == 0){
+			unsigned long long h = framebuffer_hash();
+			if(h && h != last_hash){
+				char name[64];
+				snprintf(name, sizeof(name), "captura_%06d.bmp", i + 1);
+				if(!save_screenshot(name)) fprintf(stderr, "[WIISP] %s\n", name);
+				last_hash = h;
+			}
+		}
+		/* Cada 10 s reales, por dónde va */
+		if(clock() - last_report >= 10 * CLOCKS_PER_SEC){
+			unsigned long long done;
+			app_get_stats(&run_frames, &done);
+			last_report = clock();
+			fprintf(stderr, "[WIISP] %.1f s de juego (frame %d), %.1f MIPS\n", i / 60.0, i,
+			        done / ((double)(last_report - start) / CLOCKS_PER_SEC) / 1e6);
+		}
+	}
+	if(stop_requested) hle_dump_state("detenido con Ctrl+C");
+	else if(!*exited) hle_dump_state("limite de frames alcanzado");   /* al --log */
+	secs = (double)(clock() - start) / CLOCKS_PER_SEC;
+	app_get_stats(&run_frames, &instr);
+	fprintf(stderr, "[WIISP] %s tras %d frames (%.1f MIPS en este PC)\n",
+	        *exited ? app_exit_reason() : stop_requested ? "detenido con Ctrl+C" : "limite de frames alcanzado", i,
+	        secs > 0 ? instr / secs / 1e6 : 0.0);
+	sampler_stop();
+}
+
 #if !defined(_WIN32)
 /* Pruebas (tools/banco): otro renderizador en lugar del de software */
 void host_renderer_hook(void) __attribute__((weak));
 #endif
 
 int main(int argc, char **argv){
-	int max_imports = 16, run = 0, frames = 1800, i, exited = 0, every = 0;
+	int max_imports = 16, run = 0, frames = 1800, i, exited = 0, every = 0, veces = 1, vez;
 	const char *path = NULL, *imports = NULL, *screenshot = NULL;
 	const char *guion = NULL, *salida = NULL, *grabar = NULL, *partidas = NULL;
 	const char *opts[64];
@@ -291,6 +352,7 @@ int main(int argc, char **argv){
 		else if(!strcmp(argv[i], "--run")) run = 1;
 		else if(!strcmp(argv[i], "--quiet")) app_set_verbose(0);
 		else if(!strcmp(argv[i], "--frames") && i + 1 < argc) frames = atoi(argv[++i]);
+		else if(!strcmp(argv[i], "--veces") && i + 1 < argc) veces = atoi(argv[++i]);
 		else if(!strcmp(argv[i], "--imports") && i + 1 < argc) imports = argv[++i];
 		else if(!strcmp(argv[i], "--screenshot") && i + 1 < argc) screenshot = argv[++i];
 		else if(!strcmp(argv[i], "--capturas") && i + 1 < argc) every = atoi(argv[++i]);
@@ -316,7 +378,7 @@ int main(int argc, char **argv){
 		fprintf(stderr, "uso: %s [--all] [--imports FILE] [--run] [--frames N] [--quiet]\n"
 		                "          [--screenshot FILE] [--capturas N] [--log FILE] [--osk TEXTO]\n"
 		                "          [--guion FILE] [--salida PREFIJO] [--grabar FILE] [--partidas DIR]\n"
-		                "          [--opt NOMBRE=0|1]... [--capturas-guion N]\n"
+		                "          [--opt NOMBRE=0|1]... [--capturas-guion N] [--veces N]\n"
 		                "          EBOOT.PBP|archivo.elf|archivo.prx|imagen.iso|imagen.cso\n", argv[0]);
 		return 2;
 	}
@@ -331,76 +393,50 @@ int main(int argc, char **argv){
 	if(host_renderer_hook) host_renderer_hook();
 #endif
 	if(!run) return 0;
-	if(partidas){
-		char base[600];
-		snprintf(base, sizeof(base), "%s_base", partidas);
-		if(app_preparar_partidas(partidas, base)){
-			fprintf(stderr, "[WIISP] no se pudieron preparar las partidas en %s (debe terminar en .partidas)\n", partidas);
-			return 1;
-		}
-	}
-	if(guion){
-		char err[160];
-		if(app_guion_reproducir(guion, salida ? salida : guion, err, sizeof(err))){
-			fprintf(stderr, "[WIISP] guion %s: %s\n", guion, err);
-			return 1;
-		}
-		if(app_guion_fin() && (unsigned)frames <= app_guion_fin()) frames = (int)app_guion_fin() + 1;
-	} else if(grabar && app_guion_grabar(grabar)){
-		fprintf(stderr, "[WIISP] no se puede escribir %s\n", grabar);
-		return 1;
-	}
-
 	app_set_output(output);
 	prof_set_clock(prof_ticks, prof_ticks_hz());
 	hle_set_profile_hook(profile_hook);
-	if(app_start()) return 1;
-	sampler_start();
-	{
-		clock_t start = clock();
-		unsigned run_frames;
-		unsigned long long instr;
-		double secs;
-		unsigned long long last_hash = 0;
-		clock_t last_report = start;
-		signal(SIGINT, on_sigint);
-		for(i = 0; i < frames && !exited && !stop_requested; i++){
-#ifdef _WIN32
-			keyboard_input();
-#endif
-			exited = app_run_frame();
-			if(every > 0 && (i + 1) % every == 0){
-				unsigned long long h = framebuffer_hash();
-				if(h && h != last_hash){
-					char name[64];
-					snprintf(name, sizeof(name), "captura_%06d.bmp", i + 1);
-					if(!save_screenshot(name)) fprintf(stderr, "[WIISP] %s\n", name);
-					last_hash = h;
-				}
-			}
-			/* Cada 10 s reales, por dónde va */
-			if(clock() - last_report >= 10 * CLOCKS_PER_SEC){
-				unsigned long long done;
-				app_get_stats(&run_frames, &done);
-				last_report = clock();
-				fprintf(stderr, "[WIISP] %.1f s de juego (frame %d), %.1f MIPS\n", i / 60.0, i,
-				        done / ((double)(last_report - start) / CLOCKS_PER_SEC) / 1e6);
+	signal(SIGINT, on_sigint);
+	for(vez = 1; vez <= veces && !stop_requested; vez++){
+		int limit = frames;
+		exited = 0;
+		/* Otra vez: se carga de nuevo, como al volver al menú del Wii o en
+		   el autotest (sin, con, verif). Lo de la vez anterior ya se
+		   descargó con app_shutdown. */
+		if(vez > 1 && app_load(path, max_imports, NULL)) return 1;
+		if(partidas){
+			char base[600];
+			snprintf(base, sizeof(base), "%s_base", partidas);
+			if(app_preparar_partidas(partidas, base)){
+				fprintf(stderr, "[WIISP] no se pudieron preparar las partidas en %s (debe terminar en .partidas)\n", partidas);
+				return 1;
 			}
 		}
-		if(stop_requested) hle_dump_state("detenido con Ctrl+C");
-		else if(!exited) hle_dump_state("limite de frames alcanzado");   /* al --log */
-		secs = (double)(clock() - start) / CLOCKS_PER_SEC;
-		app_get_stats(&run_frames, &instr);
-		fprintf(stderr, "[WIISP] %s tras %d frames (%.1f MIPS en este PC)\n",
-		        exited ? app_exit_reason() : stop_requested ? "detenido con Ctrl+C" : "limite de frames alcanzado", i,
-		        secs > 0 ? instr / secs / 1e6 : 0.0);
-	}
-	sampler_stop();
-	app_guion_parar();
+		if(guion){
+			char err[160];
+			if(app_guion_reproducir(guion, salida ? salida : guion, err, sizeof(err))){
+				fprintf(stderr, "[WIISP] guion %s: %s\n", guion, err);
+				return 1;
+			}
+			if(app_guion_fin() && (unsigned)limit <= app_guion_fin()) limit = (int)app_guion_fin() + 1;
+		} else if(grabar && vez == 1 && app_guion_grabar(grabar)){
+			fprintf(stderr, "[WIISP] no se puede escribir %s\n", grabar);
+			return 1;
+		}
+		if(app_start()) return 1;
+		run_once(limit, every, &exited);
+		app_guion_parar();
 #ifdef _WIN32
-	keyboard_flush();
+		keyboard_flush();
 #endif
-	if(screenshot) save_screenshot(screenshot);
-	app_shutdown();
+		if(screenshot && vez == veces) save_screenshot(screenshot);
+		if(veces > 1){
+			unsigned long long h = framebuffer_hash();
+			app_shutdown();
+			fprintf(stderr, "[WIISP] vez %d: imagen final %016llX, memoria en uso tras descargar: %lu bytes\n", vez, h,
+			        heap_in_use());
+		}
+	}
+	if(veces <= 1) app_shutdown();
 	return 0;
 }

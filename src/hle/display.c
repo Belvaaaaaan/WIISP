@@ -29,6 +29,10 @@ void display_init(void){
 	display_width = 480;
 	display_height = 272;
 	ctrl_cycle = ctrl_mode = 0;
+	/* Sin nada pulsado, como al arrancar: lo que quedó pulsado al final
+	   del programa anterior (o de su guion) no pasa al siguiente */
+	input_buttons = 0;
+	input_lx = input_ly = 128;
 	input_latched = 0;
 	ctrl_unread = 0;
 	ctrl_consumed = 0;

@@ -144,7 +144,7 @@ void test_censo(void){
 	opt_on[OPT_PROF_ESTADO] = 1;
 	opt_on[OPT_GE_ESTADO_SUCIO] = 0;   /* el censo mide lo que se calcula cada vez */
 	opt_on[OPT_GE_VERIF] = 0;
-	ge_vertex_test_reset();
+	ge_vertex_reset();
 	run(400, &ev, &et, &er, &lim, &dist);
 	printf("  %u comparaciones limpias, %u distintas; errores V %u, T %u, R %u\n", (unsigned)lim, (unsigned)dist,
 	       (unsigned)ev, (unsigned)et, (unsigned)er);
@@ -184,7 +184,7 @@ void test_censo(void){
 	opt_on[OPT_GE_ESTADO_SUCIO] = 1;
 	opt_on[OPT_GE_VERIF] = 1;
 	memset(ge_estado_verif, 0, sizeof(ge_estado_verif));
-	ge_vertex_test_reset();
+	ge_vertex_reset();
 	run(400, &ev, &et, &er, &lim, &dist);
 	{
 		u32 c;
@@ -215,5 +215,5 @@ void test_censo(void){
 	memcpy(opt_on, saved_opt, sizeof(saved_opt));
 	ge_fast_math = saved_fast;
 	ge_hw = saved_hw;
-	ge_vertex_test_reset();
+	ge_vertex_reset();
 }

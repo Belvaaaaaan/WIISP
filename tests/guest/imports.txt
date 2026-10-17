@@ -50,3 +50,16 @@ sceUtility sceUtilityOskInitStart
 sceUtility sceUtilityOskShutdownStart
 sceUtility sceUtilityOskUpdate
 sceUtility sceUtilityOskGetStatus
+sceDmac sceDmacMemcpy
+sceDmac sceDmacTryMemcpy
+scePower scePowerSetClockFrequency
+scePower scePowerGetCpuClockFrequencyInt
+scePower scePowerGetBusClockFrequencyInt
+IoFileMgrForUser sceIoOpen
+IoFileMgrForUser sceIoClose
+IoFileMgrForUser sceIoRead
+IoFileMgrForUser sceIoLseek
+IoFileMgrForUser sceIoGetstat
+IoFileMgrForUser sceIoReadAsync
+IoFileMgrForUser sceIoWaitAsync
+IoFileMgrForUser sceIoPollAsync

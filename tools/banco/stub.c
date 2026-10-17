@@ -17,6 +17,10 @@ NOP(GX_SetTevColorIn) NOP(GX_SetTevColorOp) NOP(GX_SetTevKAlphaSel) NOP(GX_SetTe
 NOP(GX_SetTevOrder) NOP(GX_SetTexCoordGen) NOP(GX_SetTexCopyDst) NOP(GX_SetTexCopySrc) NOP(GX_SetViewport) NOP(GX_SetVtxAttrFmt)
 NOP(GX_SetVtxDesc) NOP(GX_SetZCompLoc) NOP(GX_SetZMode) NOP(GX_SetZTexture) NOP(PPCDCacheFlushAsync) NOP(PPCDCacheInvalidate)
 NOP(ps_guMtxIdentity) NOP(ps_guMtxScale)
+/* Testigos (gx_paralelo): la GPU de mentira acaba en el acto */
+static unsigned short draw_sync;
+void GX_SetDrawSync(unsigned short tok){ draw_sync = tok; }
+unsigned short GX_GetDrawSync(void){ return draw_sync; }
 /* GX_Begin como el de libogc, sin estado sucio */
 void GX_Begin(unsigned char prim, unsigned char fmt, unsigned short n){ wgPipe->U8 = prim | (fmt & 7); wgPipe->U16 = n; }
 

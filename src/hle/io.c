@@ -44,6 +44,7 @@
 #include "core/memory.h"
 #include "loader/disc.h"
 #include "core/prof.h"
+#include "core/opt.h"
 
 #define MAX_FILES 64
 #define SCE_KERNEL_ERROR_BADF 0x80020323u
@@ -112,6 +113,18 @@ static u32 umd_recheck(u32 stat, int *done);
 #define MAX_MS_CALLBACKS 32
 static u32 ms_callbacks[2][MAX_MS_CALLBACKS];   /* [0] mscmhc0:, [1] fatms0: */
 
+/* Censo de las lecturas del disco (prof_es, ver más abajo) */
+#define CENSO_ESPERAS 8
+static IoCenso censo;
+static struct { u64 hasta, fin_real, t_host; int fd; } esperas[CENSO_ESPERAS];
+static int n_esperas;
+static u64 censo_fin;        /* dónde acabó la lectura anterior, para "seguidas" */
+static u64 ult_t, ult_fin;   /* la última lectura medida */
+
+/* Comandos de sceIoIoctl sin implementar ya avisados en el registro (una
+   vez por programa) */
+static u32 ioctl_logged[16];
+
 void io_init(const char *dir, int boot_from_disc){
 	io_shutdown();
 	snprintf(host_dir, sizeof(host_dir), "%s", dir && dir[0] ? dir : ".");
@@ -120,6 +133,9 @@ void io_init(const char *dir, int boot_from_disc){
 	umd_callback = 0;
 	kernel_set_wait_recheck(KWAIT_UMD, umd_recheck);
 	memset(ms_callbacks, 0, sizeof(ms_callbacks));
+	memset(ioctl_logged, 0, sizeof(ioctl_logged));
+	n_esperas = 0;   /* el reloj emulado vuelve a 0 (el censo sigue sumando) */
+	ult_t = 0;
 }
 
 void io_shutdown(void){
@@ -314,6 +330,8 @@ static int alloc_fd(void){
 /* --- Archivos ------------------------------------------------------------------ */
 
 /* Lee hasta el final desde la posición actual (para cargar módulos) */
+static u32 censo_disc_read(u64 offset, u32 size, void *out);
+
 static u8 *load_rest(IoFile *o, u32 *len){
 	u8 *buf;
 	u64 n;
@@ -327,7 +345,7 @@ static u8 *load_rest(IoFile *o, u32 *len){
 	} else if(o->kind == F_DISC){
 		n = o->pos < o->size ? o->size - o->pos : 0;
 		if(n > 64u * 1024 * 1024 || !(buf = malloc(n ? (size_t)n : 1))) return NULL;
-		if(disc_read((u64)o->lba * DISC_SECTOR + o->pos, (u32)n, buf) != n){ free(buf); return NULL; }
+		if(censo_disc_read((u64)o->lba * DISC_SECTOR + o->pos, (u32)n, buf) != n){ free(buf); return NULL; }
 		o->pos += n;
 	} else return NULL;
 	*len = (u32)n;
@@ -454,6 +472,69 @@ static void sceIoClose(void){
 	hle_delay_us(100);
 }
 
+/* --- Censo de las lecturas del disco (prof_es) --------------------------- */
+/* Solo mide: ni cambia los datos ni los tiempos emulados. De cada lectura
+   se apunta lo que tardó el anfitrión y cuándo acabó; al llegar la
+   emulación al final de la espera emulada (o al recoger el resultado de
+   una asíncrona) se sabe cuánto tiempo real hubo para leer en otro hilo. */
+
+static u32 censo_disc_read(u64 offset, u32 size, void *out){
+	u64 t0;
+	u32 n;
+	if(!opt_on[OPT_PROF_ES] || !prof_clock) return disc_read(offset, size, out);
+	t0 = prof_clock();
+	n = disc_read(offset, size, out);
+	ult_fin = prof_clock();
+	ult_t = ult_fin - t0;
+	if(!ult_t) ult_t = 1;
+	censo.lecturas++;
+	censo.bytes += n;
+	censo.t_host += ult_t;
+	censo.seguidas += offset == censo_fin;
+	censo_fin = offset + n;
+	censo.por_tam[n <= 65536 ? 0 : n <= 1048576 ? 1 : 2]++;
+	if(ult_t > censo.peor_t){ censo.peor_t = ult_t; censo.peor_bytes = n; }
+	return n;
+}
+
+/* La lectura recién hecha espera hasta el ciclo hasta (sceIoRead) o a que
+   se recoja el resultado de fd (asíncrona, hasta = 0) */
+static void censo_espera(u64 hasta, int fd){
+	if(ult_t && n_esperas < CENSO_ESPERAS){
+		esperas[n_esperas].hasta = hasta;
+		esperas[n_esperas].fd = fd;
+		esperas[n_esperas].fin_real = ult_fin;
+		esperas[n_esperas].t_host = ult_t;
+		n_esperas++;
+	}
+	ult_t = 0;
+}
+
+static void censo_cierra(int i){
+	u64 w = prof_clock ? prof_clock() - esperas[i].fin_real : 0;
+	censo.solapable += w < esperas[i].t_host ? w : esperas[i].t_host;
+	censo.medidas++;
+	esperas[i] = esperas[--n_esperas];
+}
+
+void io_censo_tick(void){
+	int i = 0;
+	while(i < n_esperas){
+		if(esperas[i].fd < 0 && (s64)(cpu_cycles - esperas[i].hasta) >= 0) censo_cierra(i);
+		else i++;
+	}
+}
+
+static void censo_recoge(u32 fd){
+	int i = 0;
+	while(i < n_esperas){
+		if(esperas[i].fd == (int)fd) censo_cierra(i);
+		else i++;
+	}
+}
+
+void io_censo(IoCenso *out){ *out = censo; }
+
 static s64 read_fd(u32 fd, u32 buf, u32 size){
 	IoFile *o = get_file(fd);
 	u8 *p;
@@ -465,7 +546,7 @@ static s64 read_fd(u32 fd, u32 buf, u32 size){
 		if(n > o->size - o->pos) n = (u32)(o->size - o->pos);
 		p = mem_ptr(buf, n * DISC_SECTOR);
 		if(!p) return (s32)SCE_KERNEL_ERROR_ILLEGAL_ADDR;
-		n = disc_read((o->lba + o->pos) * (u64)DISC_SECTOR, n * DISC_SECTOR, p) / DISC_SECTOR;
+		n = censo_disc_read((o->lba + o->pos) * (u64)DISC_SECTOR, n * DISC_SECTOR, p) / DISC_SECTOR;
 		mem_note_write(buf, n * DISC_SECTOR);
 		o->pos += n;
 		return n;
@@ -476,7 +557,7 @@ static s64 read_fd(u32 fd, u32 buf, u32 size){
 		if(n > o->size - o->pos) n = (u32)(o->size - o->pos);
 		p = mem_ptr(buf, n);
 		if(!p && n) return (s32)SCE_KERNEL_ERROR_ILLEGAL_ADDR;
-		n = disc_read((u64)o->lba * DISC_SECTOR + o->pos, n, p);
+		n = censo_disc_read((u64)o->lba * DISC_SECTOR + o->pos, n, p);
 		mem_note_write(buf, n);
 		o->pos += n;
 		return n;
@@ -493,9 +574,15 @@ static s64 read_fd(u32 fd, u32 buf, u32 size){
 }
 
 static void sceIoRead(void){
-	s64 r = read_fd(ARG(0), ARG(1), ARG(2));
+	s64 r;
+	ult_t = 0;
+	r = read_fd(ARG(0), ARG(1), ARG(2));
 	RETURN((u32)r);
-	if(r >= 0 && ARG(0) != 0) hle_delay_us(rw_delay_us(ARG(2)));
+	if(r >= 0 && ARG(0) != 0){
+		censo_espera(cpu_cycles + (u64)rw_delay_us(ARG(2)) * CYCLES_PER_US, -1);
+		hle_delay_us(rw_delay_us(ARG(2)));
+	}
+	ult_t = 0;
 }
 
 static s64 write_fd(u32 fd, u32 buf, u32 size){
@@ -773,10 +860,9 @@ static void sceIoIoctl(void){
 		return;
 	}
 	default: {
-		static u32 logged[16];
 		int i;
-		for(i = 0; i < 16 && logged[i] && logged[i] != cmd; i++);
-		if(i < 16 && !logged[i]){ logged[i] = cmd; hle_log("[IO] sceIoIoctl: comando %08X sin implementar\n", cmd); }
+		for(i = 0; i < 16 && ioctl_logged[i] && ioctl_logged[i] != cmd; i++);
+		if(i < 16 && !ioctl_logged[i]){ ioctl_logged[i] = cmd; hle_log("[IO] sceIoIoctl: comando %08X sin implementar\n", cmd); }
 		break;
 	}
 	}
@@ -979,7 +1065,10 @@ static void sceIoCloseAsync(void){
 static void sceIoReadAsync(void){
 	u32 fd = ARG(0);
 	if(!async_target(fd)) return;
+	ult_t = 0;
 	set_async(fd, read_fd(fd, ARG(1), ARG(2)));
+	if(ult_t) censo.asincronas++;
+	censo_espera(0, (int)fd);
 	RETURN(0);
 }
 
@@ -1010,6 +1099,7 @@ static void collect_async(u32 fd, u32 res){
 	s64 r;
 	if(!o || o->kind == F_NONE){ RETURN(SCE_KERNEL_ERROR_BADF); return; }
 	if(!o->async_pending){ RETURN(SCE_KERNEL_ERROR_NOASYNC); return; }
+	censo_recoge(fd);
 	r = o->async_result;
 	o->async_pending = 0;
 	if(r == CLOSE_PENDING || o->free_on_collect){

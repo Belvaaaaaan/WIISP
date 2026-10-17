@@ -24,6 +24,12 @@ nueva sin perder nada. Léelo junto con `README.md`, `ARQUITECTURA.md` y
   se comporta la PSP, se mira cómo lo hace PPSSPP y se porta.
 - Antes de subir algo: `make -f Makefile.pc test`, pspautotests en x86 (y en
   PowerPC si se toca algo sensible al orden de bytes) y compilar para el Wii.
+- Cada compilación que se entrega lleva su autotest. El .zip tiene dos
+  carpetas: `apps/wiisp/` (`boot.dol` y `meta.xml`) y `wiisp/` con
+  `autotest.txt` (con ese nombre, sin número de versión: WIISP lee primero
+  `sd:/wiisp/autotest.txt`). Corridas: normalmente sin y con (con capturas);
+  verif solo cuando hay un camino rápido nuevo, sin capturas; todas con
+  `opt prof_pmc 1`.
 
 ## Preparar el entorno (sesión nueva)
 
@@ -1191,6 +1197,105 @@ la huella cambia y `ge_verificar` lo detecta (y se corrige).
 Autotest: sin (`ge_estado_sucio` 0) y con (1), con capturas, `prof_pmc` y
 `prof_tirones`; verif (1 y `ge_verificar`) sin capturas.
 
+### Resultado de la 0.5.15 en el Wii (DBZ, sin / con / verif)
+
+Capturas iguales 12 de 12 entre sin y con; `ge_verificar`: 0 diferencias
+en ~757.000 emisiones de GX y ~7,2 millones de triángulos; peleas +6,5 %.
+Los tirones del registro venían de tres sitios: el fsync de wiisp.log
+(200-320 ms), las lecturas del disco (330-365 ms) y la espera a la GPU al
+presentar ("esperar GX", 12 % en los menús). En las peleas: GE 39 %, leer
+vértices 18 % (484 ciclos por vértice, IPC 0,66), índices CI8 ~2,9 ms cada
+uno, y el registro 12,6 %.
+
+### v0.5.16: medidas arregladas, recarga, registro en otro hilo, CPU y GPU en paralelo
+
+Medidas:
+- `prof_tirones` por imagen y relativo (`core/tirones.c`): por cada imagen
+  del juego, cuánto tiempo real tardó por segundo de juego, comparado con
+  la mediana de las últimas (lo normal); un tirón es más del doble y más de
+  20 ms perdidos. Una pantalla de carga no es un tirón (pasa tiempo de
+  juego). `tests/test_tirones.c`.
+- La línea de verificación del estado sucio dice lo que se habría saltado.
+- Texturas 565: se pasan a un búfer de su tamaño (la memoria y la cuenta
+  del presupuesto coinciden).
+- Línea de memoria en `[TIEMPOS]` (montón, MEM1/MEM2 libres, texturas,
+  búferes, lo que espera a la GPU para liberarse).
+- `prof_es` (apagado, solo mide): las lecturas del disco, su tamaño,
+  tiempo real, MB/s, si son seguidas, y lo que leer en otro hilo podría
+  esconder como mucho (lo que tarda la emulación en llegar al final de la
+  espera emulada, o en recoger una asíncrona). **El hilo de E/S queda para
+  después, según lo que mida**: para que guiones y capturas se repitan, el
+  tiempo emulado no puede depender del USB, así que un hilo solo esconde
+  la espera emulada (tamaño/100 us: 1,7 MB son 17 ms emulados contra ~200
+  ms de leerlos del USB); si nadie más trabaja en esa espera, no se gana
+  nada. Con lo que mida se elige: el hilo, leer por adelantado o la caché
+  de libfat.
+
+Recarga (cargar otro programa sin salir: autotest sin/con/verif, volver
+al menú). `--veces N` en el CLI y `tests/guest` carga cada programa dos
+veces seguidas. Encontrado y corregido (lo que quedaba del programa
+anterior):
+- `misc.c`: el DMA en curso (`dmac_deadline`; el reloj vuelve a 0, así que
+  `sceDmacTryMemcpy` daba "ocupado" para siempre). `misc_init`.
+- `net.c`: el reloj de la CPU y del bus (`power_init`: 222/111).
+- `kernel.c`: la generación de los UID de LwMutex y el orden de eventos.
+- `ge.c`: la última uv y normal, la primitiva a medias y la inmediata
+  (`ge_vertex_reset`, antes solo en las pruebas): la segunda carga podía
+  dibujar con otro color. La instantánea de la autotextura
+  (`ge_raster_reset`).
+- `display.c`: los botones y el stick que quedaban pulsados al final del
+  guion pasaban al cuadro 1 del siguiente.
+- `io.c`: los avisos de ioctl, una vez por programa.
+Comprobado (`tests/recarga.py`): las 572 pspautotests con ASan, tres veces seguidas: la salida
+es la de una vez repetida, la misma imagen y la misma memoria tras
+descargar (byte a byte), sin errores ni fugas. `tests/guest/recarga.c`
+falla sin los arreglos (DMA ocupado, reloj 333, otro color).
+
+`registro_hilo` (encendido; `core/registro.c`): wiisp.log lo escribe otro
+hilo (LWP de prioridad 100 en el Wii, pthread en el PC; en Windows sigue
+en el acto). La emulación solo copia el texto a una cola de 64 KB; el
+escritor hace fwrite, fflush y fsync, y mientras espera a la tarjeta
+(IOS) la emulación sigue. Lo que decide cuándo sincronizar no cambia; los
+fallos (`[CPU]`, atascos, el final) esperan a la tarjeta como antes; el
+informe de `[TIEMPOS]` y las estadísticas de cada minuto ya no esperan.
+Línea nueva: `[TIEMPOS] registro en otro hilo` (KB, lotes, fsync y su
+tiempo, esperas de la emulación). Comprobado: `tests/test_registro.c`
+(colas de 1 byte a 64 KB, trozos más grandes que la cola, fsync por medio,
+cambios de archivo; las mutaciones se ven), ThreadSanitizer sin avisos del
+registro, y wiisp.log idéntico con y sin el hilo (también al recortarse).
+
+`gx_paralelo` (encendido; 3.5): presentar no espera a la GPU. Detrás de
+la copia al XFB va un testigo (`GX_SetDrawSync`, otro registro que el de
+`GX_DrawDone`); la imagen se muestra, con su texto, al principio de la
+presentación siguiente, cuando la GPU lo pasa (normalmente ya). Al pasar
+se libera lo diferido antes de él (las texturas de framebuffer se rehacen
+en cada imagen) y el anillo de TLUT. Tres XFB: se compone en el que lleva
+más tiempo sin verse. La imagen sale un vblank después; las capturas no
+cambian (salen de la memoria de la PSP). Si un testigo no llega en 200 ms
+se espera como antes y el informe lo dice. Revisado: nada da por hecho que
+la GPU esté parada al empezar el cuadro (las escrituras de la CPU en
+memoria de la GPU van a búferes nuevos, detrás de un `wait_gpu` o en un
+anillo).
+
+Pruebas nuevas: `tests/guest/disco.c` se ejecuta desde una ISO y una CSO
+que hace `tests/guest/mkiso.py` (lecturas, saltos, asíncrona, `sce_lbn`,
+`umd0:`; bytes y tiempos emulados). El stub de libogc del banco numera los
+punteros por orden de aparición de verdad (antes por la dirección: la
+huella cambiaba si cambiaba el montón) y con `GX_TRAZA=1` escribe la
+huella de cada grupo en cada dibujo.
+
+Verificación: huellas de test_vdec sin cambios (x86 4D4A1D8B, PowerPC
+0657B177, devkitPPC B3A2BCD3), 8750 comprobaciones; 275/275 pspautotests;
+`tests/guest` 22/22; A/B de `registro_hilo` y `prof_es`: iguales (salvo
+`malloc` y savedata en paralelo); el renderizador de GX contra la 0.5.15
+bajo qemu: la misma huella de GX en los 260 programas (`gpu/exact/pixel`
+lee memoria que la GPU de mentira no escribe: con el mismo relleno de
+malloc sale igual).
+
+Autotest: sin (`registro_hilo` 0 y `gx_paralelo` 0) y con (1 y 1), con
+capturas, `prof_pmc`, `prof_tirones` y `prof_es`; sin verif (no hay camino
+rápido nuevo del GE).
+
 ### Para el siguiente chat (empezar aquí)
 
 Metodología acordada (detalle en `docs/HOJA_DE_RUTA.md`): primero medir
@@ -1204,19 +1309,19 @@ Metodología acordada (detalle en `docs/HOJA_DE_RUTA.md`): primero medir
   (0.5.11.1), 1.2 `ge_vdec_esp` y `ge_tri_rapido` (0.5.12-0.5.13),
   `gx_envio_rapido`, `ge_ensamblar_rapido` y 1.2b `ge_vdec_psq` (0.5.14) y
   el censo `prof_estado` (0.5.14.1), `ge_estado_sucio` y `prof_tirones`
-  (0.5.15).
+  (0.5.15), la recarga, `registro_hilo`, `gx_paralelo` y `prof_es`
+  (0.5.16).
 - Herramientas para medir sin el Wii (banco de qemu con el código de
   devkitPPC, perfil por función, psq_l emulado, A/B): `tools/banco/LEEME.md`.
-- **En curso: 0.5.15** (`ge_estado_sucio` y `prof_tirones`, arriba): falta
-  el resultado del Wii (sin/con/verif). Juntar llamadas (`ge_charolas`,
-  1.4) va aparte, después y medido. Con los tirones se decide qué atacar en
-  la selección de personajes (probablemente la fase 2 del intérprete). Después: las esperas al leer vértices
-  (`round_to_screen`, la división por w y tres conversiones a entero por la
-  memoria; leer va a IPC 0,67). Otros candidatos medidos: leer los
-  comandos con un puntero (~56 de las ~80-100 instrucciones por comando),
-  saltarse `setup_targets`/`lookup_texture` cuando no cambien (~900), un
-  solo `GX_Begin` por llamada, y lo de antes: el 4444 de 64x64 de DBZ, los
-  índices CI8 con dcbt, el limitador de cuadros.
+- **En curso: 0.5.16** (arriba): falta el resultado del Wii (sin/con).
+  Siguiente: las peleas (leer vértices: `round_to_screen`, la división por
+  w y tres conversiones a entero por la memoria, IPC 0,66; los índices CI8
+  con dcbt) y, con lo que mida `prof_es`, las lecturas del disco. Juntar
+  llamadas (`ge_charolas`, 1.4) sigue aparte. Otros candidatos medidos:
+  leer los comandos con un puntero (~56 de las ~80-100 instrucciones por
+  comando), saltarse `setup_targets`/`lookup_texture` cuando no cambien
+  (~900), un solo `GX_Begin` por llamada, el 4444 de 64x64 de DBZ, el
+  limitador de cuadros.
 
 Pendiente de antes: la primera tanda del GE (skinning rápido, matrices al
 cambiar, color constante; ver el carrito) entra en los pasos 6-11 con su

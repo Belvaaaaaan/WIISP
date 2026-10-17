@@ -171,6 +171,9 @@ static void return_zero(void){ RETURN(0); }
 
 static u64 dmac_deadline;
 
+/* Al cargar otro programa el reloj vuelve a 0: no queda ningún DMA en curso */
+void misc_init(void){ dmac_deadline = 0; }
+
 static void dmac_copy(int try_only){
 	u32 dst = ARG(0), src = ARG(1), size = ARG(2);
 	u8 *d; const u8 *s;

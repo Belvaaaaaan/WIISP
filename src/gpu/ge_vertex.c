@@ -2184,7 +2184,7 @@ static struct {
 } cs;
 
 /* Pruebas: lo que una llamada deja a la siguiente, como al arrancar */
-void ge_vertex_test_reset(void){
+void ge_vertex_reset(void){
 	last_uv[0] = last_uv[1] = 0.0f;
 	last_normal[0] = last_normal[1] = last_normal[2] = 0.0f;
 	data_index_ = 0;

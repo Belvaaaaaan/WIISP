@@ -247,7 +247,7 @@ static size_t cap_draws;   /* lo capturado antes de los vértices inmediatos */
 /* opt: los interruptores de los vértices; ens: ge_ensamblar_rapido */
 static void run_case(const Case *c, int opt, int ens, GeStats *st){
 	int k;
-	ge_vertex_test_reset();
+	ge_vertex_reset();
 	memcpy(ge.cmd, c->cmd, sizeof(ge.cmd));
 	memcpy(ge.world, c->world, sizeof(ge.world));
 	memcpy(ge.view, c->view, sizeof(ge.view));
@@ -459,5 +459,5 @@ void test_vdec(void){
 	opt_on[OPT_GE_TRI_RAPIDO] = (u8)saved_tri;
 	opt_on[OPT_GE_ENSAMBLAR] = (u8)saved_ens;
 	opt_on[OPT_GE_VDEC_PSQ] = (u8)saved_psq;
-	ge_vertex_test_reset();
+	ge_vertex_reset();
 }
