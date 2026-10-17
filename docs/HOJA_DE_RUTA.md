@@ -189,6 +189,13 @@ pspautotests A/B). En el banco de qemu, de 28,7 a 17,4 instrucciones del
 Broadway por instrucción de la PSP (addiu de 24 a 10, lw de 29 a 16).
 Detalle en docs/CONTINUAR.md.
 
+En el Wii (0.5.17) apenas ganó: 20-27 % menos instrucciones pero los mismos
+ciclos (fallos de caché ×4-6, `mtctr` serializado, paso entre bloques de
+~24 ciclos). v0.5.17.1: medidas de la CPU en el Wii (`prof_pmc_l2`,
+`prof_pmc_ctr`, `prof_pmc_carga`, la CPU por dentro) y la memoria del
+predecodificado (`predec_compacto`, `predec_sin_unir`, `predec_mem1`);
+banco de caché con cachegrind (`tools/banco/medir_cache.sh`).
+
 Primera tanda acordada (todas "más barato", verificables en el PC):
 0.1 `prof_espera`, **skinning rápido** (`ge_skin_rapido`), **matrices al
 cambiar** (`ge_mtx_cache`), **color constante** (`ge_color_const`), 2.1

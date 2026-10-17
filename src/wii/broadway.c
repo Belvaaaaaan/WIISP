@@ -100,10 +100,24 @@ static void pmc_read(u32 *out){
 	out[PMC_SALTOS_MAL] = MFSPR(958);
 }
 
-void broadway_pmc_init(void){
+//arreglo
+/* Lo que cuentan PMC3 y PMC4 en cada modo (prof_pmc_l2, prof_pmc_ctr,
+   prof_pmc_carga; tabla de eventos del 750): 0 = fallos de L1D (5) y saltos
+   mal predichos (8); 1 = fallos de datos en L2 (7) y expulsiones de L2 (5);
+   2 = ciclos con la unidad de saltos parada esperando LR o CTR (17) y
+   saltos mal; 3 = ciclos de fallos de carga en L1D (15) y saltos mal.
+   PMC1 y PMC2 siguen con ciclos e instrucciones. */
+static void pmc_modo(int modo){
+	static const u8 ev3[4] = { 5, 7, 17, 15 }, ev4[4] = { 8, 5, 8, 8 };
+	if((unsigned)modo > 3) modo = 0;
 	MTSPR(952, 0x80000000u);   /* FC: parados mientras se configuran */
 	MTSPR(953, 0); MTSPR(954, 0); MTSPR(957, 0); MTSPR(958, 0);
-	MTSPR(956, (5u << 27) | (8u << 22));
+	MTSPR(956, ((u32)ev3[modo] << 27) | ((u32)ev4[modo] << 22));
 	MTSPR(952, (1u << 6) | 2u);
+}
+
+void broadway_pmc_init(void){
+	pmc_modo(0);   //arreglo
 	prof_pmc_read = pmc_read;
+	prof_pmc_modo_fn = pmc_modo;   //arreglo
 }

@@ -348,19 +348,32 @@ static void one_program(int prog, int faults, Snap *init, Snap *ra, Snap *rb, Sn
 	run_chunks(ra, chunks, 0);
 	put(init);
 	run_chunks(rb, chunks, 1);
-	put(init);
-	run_chunks(rc, chunks, 2);
 	*total += ra->executed - init->executed;
 	CHECK(same(ra, rb, prog));
-	CHECK(same(ra, rc, prog));
+	//arreglo
+	/* El predecodificado con los dos repartos de la memoria y las dos
+	   copias del bucle; la mitad, con arenas diminutas (se vacían a
+	   menudo, también a mitad de un programa; en una de cada cuatro se
+	   llena antes la de lo frío) */
+	if(prog % 4 == 0) cpu_predec_tam_pruebas(4096, 2048);
+	else if(prog % 4 == 1) cpu_predec_tam_pruebas(16384, 1024);   /* se llena antes lo frío */
+	else cpu_predec_tam_pruebas(0, 0);
+	for(k = 0; k < 4; k++){
+		opt_on[OPT_PREDEC_COMPACTO] = (u8)(k & 1);
+		opt_on[OPT_PREDEC_SIN_UNIR] = (u8)(k >> 1);
+		put(init);
+		run_chunks(rc, chunks, 2);
+		CHECK(same(ra, rc, prog));
+	}
 }
 
 void test_interp(void){
 	static Snap init, ra, rb, rc;
 	const u8 saved_opt = opt_on[OPT_CPU_SIN_EXTRA], saved_predec = opt_on[OPT_CPU_PREDEC];
+	const u8 saved_comp = opt_on[OPT_PREDEC_COMPACTO], saved_su = opt_on[OPT_PREDEC_SIN_UNIR];   //arreglo
 	const int saved_intr = hle_get_intr_enabled(), saved_live = vfpu_live;
 	u64 total = 0;
-	int p, err_fd;
+	int p, err_fd, k;   //arreglo
 	printf("interprete y predecodificado contra el de referencia\n");
 
 	for(p = 0; p < 3000; p++) one_program(p, 0, &init, &ra, &rb, &rc, &total);
@@ -390,7 +403,10 @@ void test_interp(void){
 		       (unsigned long long)ps.busquedas, (unsigned long long)ps.pasos, (unsigned long long)ps.escrituras_en_codigo);
 		CHECK(ps.busquedas > 100000);
 		CHECK(ps.bloques_tirados > 1000);
+		CHECK(ps.vaciados > 1000);   //arreglo
+		printf("  %llu vaciados (arenas diminutas)\n", (unsigned long long)ps.vaciados);   //arreglo
 	}
+	cpu_predec_tam_pruebas(0, 0);   //arreglo
 
 	/* cpu_verificar: código cambiado sin avisar (lo que pasaría si faltara
 	   un aviso de escritura): el bloque viejo se ve al entrar y se rehace */
@@ -460,6 +476,27 @@ void test_interp(void){
 		cpu_run(40);
 		CHECK_EQ(cpu.r[5], 1010u);
 	}
+	//arreglo
+	/* Cambiar de copia del bucle o de reparto de la memoria sin tocar el
+	   código: los bloques hechos con la otra no pueden seguir */
+	{
+		const u32 P = 0x08A00900u;
+		static const u8 su[6] = { 0, 1, 1, 0, 0, 1 }, co[6] = { 1, 1, 0, 0, 1, 0 };
+		cpu_predec_flush();
+		mem_write32(P, itype(0x09, 6, 6, 1));                      /* addiu r6, r6, 1 */
+		mem_write32(P + 4, (2u << 26) | (P >> 2));                 /* j P */
+		mem_write32(P + 8, 0);
+		memset(&cpu, 0, sizeof(cpu));
+		cpu.pc = P;
+		cpu.npc = P + 4;
+		for(k = 0; k < 6; k++){
+			opt_on[OPT_PREDEC_SIN_UNIR] = su[k];
+			opt_on[OPT_PREDEC_COMPACTO] = co[k];
+			cpu_run(30);                                           /* 10 vueltas */
+			CHECK_EQ(cpu.r[6], 10u * (k + 1));
+			CHECK(cpu_predec_tarjetas_ok());
+		}
+	}
 	/* bltzal ra: la condición usa el ra de antes de enlazar */
 	{
 		const u32 P = 0x08A00800u;
@@ -478,6 +515,8 @@ void test_interp(void){
 
 	opt_on[OPT_CPU_SIN_EXTRA] = saved_opt;
 	opt_on[OPT_CPU_PREDEC] = saved_predec;
+	opt_on[OPT_PREDEC_COMPACTO] = saved_comp;   //arreglo
+	opt_on[OPT_PREDEC_SIN_UNIR] = saved_su;   //arreglo
 	hle_set_intr_enabled(saved_intr);
 	vfpu_live = saved_live;
 	cpu_stop_requested = 0;

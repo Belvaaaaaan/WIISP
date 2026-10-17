@@ -1389,6 +1389,96 @@ Huellas de test_vdec sin cambios; pspautotests 275/275 y A/B con
 Autotest: sin (`cpu_predec` 0) y con (1), con capturas, `prof_pmc` y
 `prof_tirones`; verif (1 y `cpu_verificar`) sin capturas.
 
+### Resultado de la 0.5.17 en el Wii (DBZ, sin / con / verif)
+
+Capturas sin y con idénticas (12/12); verif: ningún bloque viejo. Pero la
+velocidad apenas cambia (`cpu_predec` 0 → 1, misma versión):
+
+| Escena | % de la PSP | instr. Broadway / instr. PSP | ciclos / instr. PSP | fallos L1D / 1000 instr |
+|---|---|---|---|---|
+| Menús | 139,6 → 142,7 | 30,1 → 22,0 | 28,2 → 26,1 | 1,0 → 6,2 |
+| Pelea | 73,5 → 72,5 | 33,2 → 25,4 | 33,6 → 33,7 | 1,6 → 9,5 |
+| Escena pesada | 33,4 → 32,1 | 39,7 → 32,0 | 40,2 → 43,8 | 1,5 → 5,9 |
+
+Un 20-27 % menos de instrucciones, mismos ciclos. qemu no lo vio porque no
+simula la caché. Una investigación aparte (manuales del 750CL/750CX, libogc,
+GCC) concluyó: los fallos de L1D que aciertan en L2 (~5 ciclos) solo
+explican 1-1,7 ciclos por instrucción; el resto tienen que ser fallos que
+llegan a la memoria (crece con el peso del GE, que echa la arena de L2) y
+dos cosas del 750: `mtctr` es serializado (espera a que acabe todo lo
+anterior; cada tarjeta paga ~7-9 ciclos aunque todo esté en caché) y el
+paso entre bloques cuesta ~24 ciclos. Además GCC unió los finales de varias
+tarjetas (crossjumping): `sw` salta a una cola común con el `mtctr` al
+final. Quedan 12-17 de los 33,7 ciclos de la pelea sin explicar (VFPU,
+FPU, HLE, memoria lenta, búsquedas): hay que medirlos.
+
+### v0.5.17.1: medir la CPU en el Wii y la memoria del predecodificado
+
+Medidas nuevas (solo miden):
+- `prof_pmc_l2`, `prof_pmc_ctr`, `prof_pmc_carga` (apagados): lo que
+  cuentan PMC3 y PMC4 (`broadway.c`, tabla de eventos del 750): fallos de
+  datos en L2 (7) y expulsiones de L2 (5); ciclos con la unidad de saltos
+  esperando LR o CTR (17); ciclos de fallos de carga en L1D (15). PMC1 y
+  PMC2 siguen con ciclos e instrucciones. Las líneas `[TIEMPOS] PMC` dicen
+  qué cuentan y, en "PMC de la CPU", cuánto por instrucción de la PSP.
+- `[TIEMPOS] CPU por dentro`: muestreo de la cubeta CPU por fases
+  (`prof_cpu_phase`: tarjetas, VFPU, FPU, memoria lenta, buscar y
+  traducir, intérprete de siempre) con cuántas hubo y los ns de cada una; y
+  dónde está cada cosa (bloques, lo frío, tabla, mapa, RAM de la PSP:
+  0x80... es MEM1, 0x90... MEM2).
+
+Cambios, cada uno con su interruptor (marcados `//arreglo` en el código):
+- `predec_compacto` (1): el bloque en dos partes. Lo que se lee al
+  ejecutar (pc, end, target, succ[2], n, alive, branch: 24 bytes en el Wii
+  y las tarjetas) alineado a 32, así la cabecera y la primera tarjeta
+  llenan una línea; lo frío (listas de la tabla y de zonas, zonas e
+  instrucciones) en su propia arena de 1,5 MB (la de los bloques, 3 MB;
+  antes 4 MB para todo); la tarjeta de cierre dice
+  dónde (`c[n].a.w`). Las tarjetas de FPU y VFPU llevan la instrucción en
+  `a.w` (no leen lo frío). Con 0, lo frío va detrás de las tarjetas,
+  alineado a 8: los mismos bytes que en la 0.5.17.
+- `predec_sin_unir` (1): el bucle (`cpu/predec_bucle.h`) se compila dos
+  veces, la segunda con `-fno-crossjumping` (atributo `optimize`): cada
+  tarjeta acaba en su propio `mtctr`/`bctr`. `-fno-gcse` también se probó:
+  cada tarjeta recalculaba direcciones, 21,2 en vez de 17,5 instrucciones
+  en el banco; descartado. Cambiar de copia vacía los bloques.
+- `predec_mem1` (1): el Wii reserva 3 MB al principio de MEM1 al arrancar
+  (`reserva_mem1`, como la RAM de la PSP en MEM2; el montón sigue detrás);
+  con el interruptor los bloques van ahí, si no con `malloc`.
+
+Banco (`tools/banco/medir_cache.sh`, nuevo): cachegrind sobre el CLI del PC
+con programas de N funciones (`cpu_grande.py`), caché del Broadway con el
+doble de bytes (punteros y tarjetas miden el doble en el PC). Fallos por
+instrucción de la PSP, 256 / 1024 funciones: intérprete 0,0006 / 0,023 de
+L1D y 0 de L2; predecodificado 0.5.17 0,160 / 0,192 de L1D y 0,0023 / 0,122
+de L2; con `predec_compacto` 0,128 / 0,164 de L1D y 0,0002 / 0,096 de L2
+(−15-20 % en L1D, −21 % en L2). Lo que más falla: la cabecera del bloque
+siguiente al enlazar, las tarjetas y las búsquedas en la tabla (los `jr` de
+vuelta casi nunca aciertan el enlace guardado). De fondo: una instrucción
+ocupa ~16 bytes en vez de 4. qemu (`medir_cpu.sh`): 17,5 instrucciones con
+cualquier combinación (17,4 en la 0.5.17).
+
+Verificación: test_interp compara el predecodificado con las cuatro
+combinaciones de `predec_compacto` y `predec_sin_unir`, la mitad de los
+programas con arenas diminutas (34921 vaciados; en una de cada cuatro se
+llena antes la de lo frío) y un caso dirigido que cambia de copia y de
+reparto sin tocar el código (`cpu_predec_tarjetas_ok`: todas las tarjetas
+son de la copia que corre). Mutaciones nuevas detectadas: el desplazamiento
+de lo frío, la lista de zona cambiada, cambiar de copia o de reparto sin
+vaciar, vaciar sin la arena fría, la FPU con otra palabra, no mirar si cabe
+lo frío. Huellas de test_vdec sin cambios (x86, PowerPC, devkitPPC);
+pspautotests 275/275 y A/B con `predec_compacto,predec_sin_unir` y con
+`cpu_predec` (solo savedata en paralelo, idéntico de una en una);
+tests/guest 22/22; recarga con ASan en las 572 sin problemas (en una
+corrida anterior `gpu/clipping/guardband` acabó con unos cientos de bytes
+distintos entre vueltas; no se repitió en 7 intentos ni en la corrida
+entera siguiente); `cpu_verificar` en las 572: ningún bloque viejo.
+
+Autotest (8 corridas, todas con `prof_pmc` y `prof_tirones`): viejo (los
+tres a 0), compacto, sinunir, mem1 (uno más cada vez), con capturas; l2viejo
+y l2 (`prof_pmc_l2`, los tres a 0 y a 1), ctr (`prof_pmc_ctr`) y verif, sin
+capturas.
+
 ### Para el siguiente chat (empezar aquí)
 
 Metodología acordada (detalle en `docs/HOJA_DE_RUTA.md`): primero medir
@@ -1403,12 +1493,17 @@ Metodología acordada (detalle en `docs/HOJA_DE_RUTA.md`): primero medir
   `gx_envio_rapido`, `ge_ensamblar_rapido` y 1.2b `ge_vdec_psq` (0.5.14) y
   el censo `prof_estado` (0.5.14.1), `ge_estado_sucio` y `prof_tirones`
   (0.5.15), la recarga, `registro_hilo`, `gx_paralelo` y `prof_es`
-  (0.5.16), 2.2 `cpu_predec` (0.5.17).
+  (0.5.16), 2.2 `cpu_predec` (0.5.17), la memoria del predecodificado y
+  las medidas de la CPU (0.5.17.1).
 - Herramientas para medir sin el Wii (banco de qemu con el código de
   devkitPPC, perfil por función, psq_l emulado, A/B): `tools/banco/LEEME.md`.
-- **En curso: 0.5.17** (`cpu_predec`, arriba): falta el resultado del Wii
-  (sin/con/verif). Después, 2.3 (fusiones, el paso entre bloques, tarjetas
-  de FPU y VFPU). Siguiente también: las peleas (leer vértices: `round_to_screen`, la división por
+- **En curso: 0.5.17.1** (arriba): falta el resultado del Wii (8 corridas).
+  Con él: qué parte de los ciclos de la CPU son fallos de L2, espera del
+  CTR, VFPU, FPU o memoria lenta, y si compactar, no unir los finales y
+  MEM1 ayudan. Después, según lo medido: encadenar los bloques desde la
+  tarjeta de cierre (sin mirar pc ni alive; desenlazar al tirar), `dcbt`
+  del bloque siguiente, cabecera más pequeña, bloques más largos; 2.3
+  (fusiones, tarjetas de VFPU). Siguiente también: las peleas (leer vértices: `round_to_screen`, la división por
   w y tres conversiones a entero por la memoria, IPC 0,66; los índices CI8
   con dcbt) y, con lo que mida `prof_es`, las lecturas del disco. Juntar
   llamadas (`ge_charolas`, 1.4) sigue aparte. Otros candidatos medidos:

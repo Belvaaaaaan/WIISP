@@ -32,6 +32,13 @@ enum {
 	                         más de lo normal y en qué se fue el tiempo */
 	OPT_PROF_ES,          /* censo de las lecturas del disco: tamaños, tiempo
 	                         real y cuánto podría esconder leer en otro hilo */
+	//arreglo
+	OPT_PROF_PMC_L2,      /* prof_pmc cuenta fallos de datos en L2 y
+	                         expulsiones de L2 (en vez de L1D y saltos) */
+	OPT_PROF_PMC_CTR,     /* prof_pmc cuenta los ciclos con el salto parado
+	                         esperando LR o CTR (en vez de L1D) */
+	OPT_PROF_PMC_CARGA,   /* prof_pmc cuenta los ciclos de fallos de carga en
+	                         L1D (en vez de L1D) */
 	/* Primera tanda del GE (resultado idéntico) */
 	OPT_GE_SKIN_RAPIDO,   /* skinning mezclando las matrices por peso */
 	OPT_GE_MTX_CACHE,     /* matrices combinadas solo cuando cambian */
@@ -69,6 +76,12 @@ enum {
 	OPT_CPU_PREDEC,       /* 2.2 predecodificación (cpu/predec.h) */
 	OPT_CPU_VERIFICAR,    /* cada bloque predecodificado comprueba al entrar
 	                         que sus instrucciones siguen en la RAM */
+	//arreglo
+	OPT_PREDEC_COMPACTO,  /* bloques en dos partes: lo que se lee al ejecutar,
+	                         alineado a 32, y lo demás en otra arena */
+	OPT_PREDEC_SIN_UNIR,  /* el bucle compilado sin unir los finales de las
+	                         tarjetas (-fno-crossjumping) */
+	OPT_PREDEC_MEM1,      /* los bloques en MEM1 (reservada al arrancar) */
 	OPT_CPU_FUSION,       /* 2.3 especializar y fusionar */
 	OPT_HLE_RAPIDO,       /* 2.4a camino mínimo de CpuSuspendIntr y Memcpy */
 	OPT_HLE_REEMPLAZO,    /* 2.4b reemplazo de funciones por hash */

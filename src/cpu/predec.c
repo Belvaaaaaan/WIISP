@@ -24,6 +24,7 @@
 #include "cpu/vfpu.h"
 #include "core/memory.h"
 #include "core/opt.h"
+#include "core/prof.h"   //arreglo
 #include "hle/hle.h"
 
 #define likely(x)   __builtin_expect(!!(x), 1)
@@ -31,7 +32,8 @@
 
 #define BLOQUE_MAX  64
 #define TABLA_BITS  14
-#define ARENA_BYTES (4u << 20)
+#define ARENA_BYTES (3u << 20)   /* la de los bloques */   //arreglo
+#define FRIO_BYTES  (3u << 19)   /* la de lo que casi nunca se lee (predec_compacto) */   //arreglo
 
 u8 cpu_code_map[(64u << 20) >> PREDEC_ZONA_BITS];
 
@@ -44,18 +46,30 @@ typedef struct {
 	} a;
 } Card;
 
+//arreglo
+/* Lo que se mira al ejecutar y al pasar de un bloque a otro: 24 bytes en el
+   Wii, así que con el bloque alineado a 32 la cabecera y la primera tarjeta
+   llenan una línea de la caché */
 typedef struct Block {
 	u32 pc;        /* la primera instrucción */
 	u32 end;       /* la que sigue a la última */
 	u32 target;    /* destino fijo del salto (j, jal, b*) */
+	struct Block *succ[2];
 	u16 n;         /* instrucciones (0: las ejecuta el intérprete de siempre) */
 	u8 alive;
 	u8 branch;     /* acaba en un salto y su delay slot */
-	u32 z0, z1;    /* zonas de 1 KB que ocupa */
-	struct Block *hnext, *znext[2], *succ[2];
-	u32 *raw;      /* las instrucciones (para la VFPU, los fallos y cpu_verificar) */
-	Card c[];      /* n tarjetas y la de cierre */
+	Card c[];      /* n tarjetas y la de cierre (su a.w dice dónde está lo frío) */
 } Block;
+
+//arreglo
+/* Lo que casi nunca se lee: las listas, las zonas y las instrucciones (para
+   la memoria lenta, los fallos y cpu_verificar). Con predec_compacto va en
+   su propia arena; sin él, justo detrás de las tarjetas (como antes) */
+typedef struct {
+	Block *hnext, *znext[2];
+	u32 z0, z1;    /* zonas de 1 KB que ocupa */
+	u32 raw[];
+} Frio;
 
 enum {
 	OP_NOP, OP_SLL, OP_SRL, OP_ROTR, OP_SRA, OP_SLLV, OP_SRLV, OP_ROTRV, OP_SRAV, OP_MOVZ, OP_MOVN,
@@ -84,19 +98,28 @@ static Block *tabla[1u << TABLA_BITS];
 static Block **zona_head;        /* lista de bloques de cada zona de 1 KB */
 static u32 zonas;
 static PredecStats st;
+//arreglo
+static u8 *arena_propia, *frio_arena, *frio_base;   /* frio_base: donde cuenta c[n].a.w */
+static u32 frio_used, arena_tam = ARENA_BYTES, frio_tam = FRIO_BYTES, frio_hecha;
+static u8 compacto, conf = 0xFF;
+static u8 *reserva;              /* la de MEM1 (predec_mem1), si el anfitrión la dio */
+static u32 reserva_tam;
+static int copia = -1;           /* qué copia del bucle llenó h_tab */
+
+#define FRIO(b) ((Frio *)(frio_base + (b)->c[(b)->n].a.w))   //arreglo
 
 static inline u32 slot(u32 pc){ return (pc >> 2) & ((1u << TABLA_BITS) - 1); }
 
 static inline Block *lookup(u32 pc){
 	Block *b = tabla[slot(pc)];
-	while(b && b->pc != pc) b = b->hnext;
+	while(b && b->pc != pc) b = FRIO(b)->hnext;   //arreglo
 	return b;
 }
 
 static void unhash(Block *b){
 	Block **pp = &tabla[slot(b->pc)];
-	while(*pp && *pp != b) pp = &(*pp)->hnext;
-	if(*pp) *pp = b->hnext;
+	while(*pp && *pp != b) pp = &FRIO(*pp)->hnext;   //arreglo
+	if(*pp) *pp = FRIO(b)->hnext;   //arreglo
 }
 
 static void kill_block(Block *b){
@@ -112,7 +135,8 @@ static void kill_zone(u32 z){
 	zona_head[z] = NULL;
 	cpu_code_map[z] = 0;
 	while(b){
-		Block *nx = b->znext[b->z0 == z ? 0 : 1];
+		Frio *f = FRIO(b);   //arreglo
+		Block *nx = f->znext[f->z0 == z ? 0 : 1];   //arreglo
 		if(b->alive) kill_block(b);
 		b = nx;
 	}
@@ -130,26 +154,78 @@ void cpu_predec_flush(void){
 	if(zona_head) memset(zona_head, 0, zonas * sizeof(*zona_head));
 	memset(cpu_code_map, 0, sizeof(cpu_code_map));
 	arena_used = 0;
+	frio_used = 0;   //arreglo
 }
 
 void cpu_predec_stats(PredecStats *out){
 	*out = st;
 	out->arena_usada = arena_used;
-	out->arena_total = arena ? ARENA_BYTES : 0;
+	out->arena_total = arena ? arena_tam : 0;   //arreglo
+	//arreglo
+	out->frio_usada = compacto ? frio_used : 0;
+	out->frio_total = compacto && frio_arena ? frio_tam : 0;
+	out->dir_arena = (uintptr_t)arena;
+	out->dir_frio = compacto ? (uintptr_t)frio_arena : 0;
+	out->dir_tabla = (uintptr_t)tabla;
+	out->dir_mapa = (uintptr_t)cpu_code_map;
+	out->compacto = compacto;
 }
 
-static int predec_init(void){
-	zonas = psp_mem.ram_size >> PREDEC_ZONA_BITS;
-	if(zonas > sizeof(cpu_code_map)) return 0;
-	arena = malloc(ARENA_BYTES);
-	zona_head = calloc(zonas, sizeof(*zona_head));
-	if(!arena || !zona_head){
-		free(arena); free(zona_head);
-		arena = NULL; zona_head = NULL;
-		return 0;
+//arreglo
+void cpu_predec_reserva(void *p, u32 bytes){
+	reserva = (u8 *)p;
+	reserva_tam = bytes;
+	conf = 0xFF;
+}
+
+//arreglo
+void cpu_predec_tam_pruebas(u32 bloques, u32 frio){
+	arena_tam = bloques ? bloques : ARENA_BYTES;
+	frio_tam = frio ? frio : FRIO_BYTES;
+	conf = 0xFF;
+}
+
+//arreglo
+/* Para las pruebas (ver predec.h) */
+int cpu_predec_tarjetas_ok(void){
+	u32 i, k, j;
+	Block *b;
+	for(i = 0; i < (1u << TABLA_BITS); i++)
+		for(b = tabla[i]; b; b = FRIO(b)->hnext)
+			for(k = 0; k <= b->n; k++){
+				for(j = 0; j < OP_N && b->c[k].h != h_tab[j]; j++) ;
+				if(j == OP_N) return 0;
+			}
+	return 1;
+}
+
+//arreglo
+/* Las arenas según predec_compacto y predec_mem1; si cambian, todo fuera */
+static int predec_config(void){
+	u8 want = (u8)(opt_on[OPT_PREDEC_COMPACTO] | (opt_on[OPT_PREDEC_MEM1] && reserva ? 2 : 0));
+	if(likely(want == conf)) return arena != NULL;
+	conf = want;
+	if(!zona_head){
+		zonas = psp_mem.ram_size >> PREDEC_ZONA_BITS;
+		if(zonas > sizeof(cpu_code_map)) return 0;
+		zona_head = calloc(zonas, sizeof(*zona_head));
 	}
+	free(arena_propia);
+	arena_propia = NULL;
+	if((want & 2) && reserva_tam >= arena_tam) arena = reserva;
+	else {
+		arena_propia = malloc(arena_tam + 31);
+		arena = arena_propia ? (u8 *)(((uintptr_t)arena_propia + 31) & ~(uintptr_t)31) : NULL;
+	}
+	compacto = want & 1;
+	if(compacto && (!frio_arena || frio_hecha != frio_tam)){
+		free(frio_arena);
+		frio_arena = malloc(frio_tam);
+		frio_hecha = frio_arena ? frio_tam : 0;
+	}
+	frio_base = compacto ? frio_arena : arena;
 	cpu_predec_flush();
-	st.vaciados = 0;
+	if(!arena || !zona_head || (compacto && !frio_arena)){ arena = NULL; conf = 0xFF; return 0; }
 	return 1;
 }
 
@@ -270,7 +346,7 @@ static int decode(u32 w, u32 ipc, Card *cd, u32 *target){
 		case 0x08: card_r(cd, OP_BC1, 0, 0, 0, rt & 3); return K_SALTO;
 		case 0x10:
 			if(fn <= 0x07 || (fn >= 0x0C && fn <= 0x0F) || fn == 0x24 || fn >= 0x30){
-				card_w(cd, OP_FPU, 0);
+				card_w(cd, OP_FPU, w);   //arreglo
 				return K_NORMAL;
 			}
 			return K_PARA;
@@ -282,7 +358,7 @@ static int decode(u32 w, u32 ipc, Card *cd, u32 *target){
 		}
 	case 0x12:
 		if(rs == 8){ card_b(cd, OP_BV, (w >> 18) & 7, 0, 0, rt & 3); return K_SALTO; }
-		card_w(cd, OP_VFPU, 0);
+		card_w(cd, OP_VFPU, w);   //arreglo
 		return K_NORMAL;
 	case 0x1C:
 		if(fn == 0x24){ if(!rt) return nop(cd); card_r(cd, OP_MFIC, 0, 0, rt, 0); return K_NORMAL; }
@@ -338,20 +414,39 @@ static int decode(u32 w, u32 ipc, Card *cd, u32 *target){
 	case 0x39: card_i(cd, OP_SWC1, rs, rt, imm); return K_NORMAL;
 	case 0x18: case 0x19: case 0x1B: case 0x32: case 0x34: case 0x35: case 0x36:
 	case 0x37: case 0x3A: case 0x3C: case 0x3D: case 0x3E: case 0x3F:
-		card_w(cd, OP_VFPU, 0);
+		card_w(cd, OP_VFPU, w);   //arreglo
 		return K_NORMAL;
 	default: return K_PARA;
 	}
 }
 
-static Block *alloc_block(u32 n){
-	u32 bytes = (u32)(sizeof(Block) + (n + 1) * sizeof(Card) + n * 4 + 7) & ~7u;
+//arreglo
+/* Con predec_compacto, el bloque alineado a 32 en su arena y lo frío en la
+   otra; sin él, lo frío justo detrás de las tarjetas y todo alineado a 8 */
+static Block *alloc_block(u32 n, Frio **fp){
+	u32 hot = (u32)(sizeof(Block) + (n + 1) * sizeof(Card));
+	u32 cold = (u32)(sizeof(Frio) + n * 4 + 7) & ~7u;
 	Block *b;
-	if(arena_used + bytes > ARENA_BYTES) cpu_predec_flush();
-	b = (Block *)(arena + arena_used);
-	arena_used += bytes;
+	Frio *f;
+	if(compacto){
+		hot = (hot + 31) & ~31u;
+		if(arena_used + hot > arena_tam || frio_used + cold > frio_tam) cpu_predec_flush();
+		b = (Block *)(arena + arena_used);
+		f = (Frio *)(frio_arena + frio_used);
+		b->c[n].a.w = frio_used;
+		arena_used += hot;
+		frio_used += cold;
+	} else {
+		hot = (hot + 7) & ~7u;
+		if(arena_used + hot + cold > arena_tam) cpu_predec_flush();
+		b = (Block *)(arena + arena_used);
+		f = (Frio *)(arena + arena_used + hot);
+		b->c[n].a.w = arena_used + hot;
+		arena_used += hot + cold;
+	}
 	memset(b, 0, sizeof(*b));
-	b->raw = (u32 *)(b->c + n + 1);
+	memset(f, 0, sizeof(*f));
+	*fp = f;
 	return b;
 }
 
@@ -364,6 +459,7 @@ static Block *build(u32 pc, u32 lim4){
 	u32 n = 0, target = 0, o0 = (pc & PSP_ADDR_MASK) - PSP_RAM_BASE, t;
 	int branch = 0, kind;
 	Block *b;
+	Frio *f;   //arreglo
 
 	while(n < BLOQUE_MAX){
 		u32 o = o0 + n * 4, w;
@@ -390,7 +486,7 @@ static Block *build(u32 pc, u32 lim4){
 		n++;
 	}
 
-	b = alloc_block(n);
+	b = alloc_block(n, &f);   //arreglo
 	b->pc = pc;
 	b->n = (u16)n;
 	b->end = pc + n * 4;
@@ -398,20 +494,21 @@ static Block *build(u32 pc, u32 lim4){
 	b->branch = (u8)branch;
 	b->alive = 1;
 	memcpy(b->c, tmp, n * sizeof(Card));
-	memcpy(b->raw, raw, n * 4);
+	memcpy(f->raw, raw, n * 4);   //arreglo
 	/* La de cierre (un bloque que acaba en syscall no llega a ella) */
 	b->c[n].h = h_tab[branch ? OP_BEND : OP_END];
-	b->z0 = o0 >> PREDEC_ZONA_BITS;
-	b->z1 = (o0 + (n ? n * 4 - 1 : 0)) >> PREDEC_ZONA_BITS;
-	b->hnext = tabla[slot(pc)];
+	//arreglo
+	f->z0 = o0 >> PREDEC_ZONA_BITS;
+	f->z1 = (o0 + (n ? n * 4 - 1 : 0)) >> PREDEC_ZONA_BITS;
+	f->hnext = tabla[slot(pc)];
 	tabla[slot(pc)] = b;
-	b->znext[0] = zona_head[b->z0];
-	zona_head[b->z0] = b;
-	cpu_code_map[b->z0] = 1;
-	if(b->z1 != b->z0){
-		b->znext[1] = zona_head[b->z1];
-		zona_head[b->z1] = b;
-		cpu_code_map[b->z1] = 1;
+	f->znext[0] = zona_head[f->z0];
+	zona_head[f->z0] = b;
+	cpu_code_map[f->z0] = 1;
+	if(f->z1 != f->z0){
+		f->znext[1] = zona_head[f->z1];
+		zona_head[f->z1] = b;
+		cpu_code_map[f->z1] = 1;
 	}
 	st.bloques_hechos++;
 	return b;
@@ -420,12 +517,13 @@ static Block *build(u32 pc, u32 lim4){
 /* cpu_verificar: ¿siguen en la RAM las instrucciones del bloque? */
 static int verif_ok(const Block *b){
 	const u8 *p = psp_mem.ram + ((b->pc & PSP_ADDR_MASK) - PSP_RAM_BASE);
+	const u32 *raw = FRIO(b)->raw;   //arreglo
 	u32 i;
 	for(i = 0; i < b->n; i++){
-		if(rd_le32(p + i * 4) != b->raw[i]){
+		if(rd_le32(p + i * 4) != raw[i]){   //arreglo
 			if(st.verif_viejos < 16)
 				hle_log_quiet("[PREDEC] bloque viejo en %08X: tenia %08X y en la RAM hay %08X (falta un aviso de escritura)\n",
-				              b->pc + i * 4, b->raw[i], rd_le32(p + i * 4));
+				              b->pc + i * 4, raw[i], rd_le32(p + i * 4));   //arreglo
 			st.verif_viejos++;
 			return 0;
 		}
@@ -435,435 +533,47 @@ static int verif_ok(const Block *b){
 
 /* --- Ejecutar ------------------------------------------------------------- */
 
+//arreglo
+/* La memoria lenta, contada y marcada para el muestreo */
+static u32 lenta_load(u32 addr, u32 size, u32 instr){
+	u32 v;
+	st.lentas++;
+	prof_cpu_phase = CPF_LENTA;
+	v = cpu_slow_load(addr, size, instr);
+	prof_cpu_phase = CPF_TARJETAS;
+	return v;
+}
+static void lenta_store(u32 addr, u32 size, u32 v, u32 instr){
+	st.lentas++;
+	prof_cpu_phase = CPF_LENTA;
+	cpu_slow_store(addr, size, v, instr);
+	prof_cpu_phase = CPF_TARJETAS;
+}
+
+//arreglo
+/* El bucle dos veces: el de siempre y uno sin unir los finales de las
+   tarjetas (-fno-crossjumping): así cada tarjeta acaba en su propio mtctr
+   y bctr (predec_sin_unir). Sin GCSE (-fno-gcse, lo que recomienda GCC
+   con computed goto) cada tarjeta volvía a calcular direcciones: un 21 %
+   más de instrucciones en el banco de qemu. */
+#define PREDEC_BUCLE run_unido
+#define PREDEC_COPIA 0
+#define PREDEC_ATRIB
+#include "cpu/predec_bucle.h"
+#undef PREDEC_BUCLE
+#undef PREDEC_COPIA
+#undef PREDEC_ATRIB
+#define PREDEC_BUCLE run_sin_unir
+#define PREDEC_COPIA 1
+#define PREDEC_ATRIB __attribute__((optimize("no-crossjumping")))
+#include "cpu/predec_bucle.h"
+#undef PREDEC_BUCLE
+#undef PREDEC_COPIA
+#undef PREDEC_ATRIB
+
+//arreglo
 u32 cpu_run_predec(u32 max_cycles){
-	const u64 start = cpu_cycles;
-	const u64 end = start + max_cycles;
-	u8 *const ram = psp_mem.ram;
-	const u32 lim4 = psp_mem.ram_size - 3, lim2 = psp_mem.ram_size - 1, lim1 = psp_mem.ram_size;
-	u8 *const r8 = (u8 *)cpu.r;
-	u8 *const f8 = (u8 *)cpu.fpr;
-	const int verif = opt_on[OPT_CPU_VERIFICAR];
-	u32 pc, npc, left, seg, bt = 0;
-	const Card *c = NULL;
-	Block *cblk = NULL, *nb;
-
-	if(unlikely(!h_tab[OP_NOP])){
-		static const void *const labels[OP_N] = {
-			&&L_NOP, &&L_SLL, &&L_SRL, &&L_ROTR, &&L_SRA, &&L_SLLV, &&L_SRLV, &&L_ROTRV, &&L_SRAV, &&L_MOVZ, &&L_MOVN,
-			&&L_MFHI, &&L_MTHI, &&L_MFLO, &&L_MTLO, &&L_CLZ, &&L_CLO, &&L_MULT, &&L_MULTU, &&L_DIV, &&L_DIVU,
-			&&L_MADD, &&L_MADDU, &&L_MSUB, &&L_MSUBU, &&L_ADDU, &&L_SUBU, &&L_AND, &&L_OR, &&L_XOR, &&L_NOR,
-			&&L_SLT, &&L_SLTU, &&L_MAX, &&L_MIN,
-			&&L_ADDIU, &&L_SLTI, &&L_SLTIU, &&L_ANDI, &&L_ORI, &&L_XORI, &&L_LUI,
-			&&L_EXT, &&L_INS, &&L_WSBH, &&L_WSBW, &&L_SEB, &&L_SEH, &&L_BITREV,
-			&&L_LB, &&L_LH, &&L_LW, &&L_LBU, &&L_LHU, &&L_LWL, &&L_LWR, &&L_LL,
-			&&L_SB, &&L_SH, &&L_SW, &&L_SWL, &&L_SWR, &&L_SC, &&L_LWC1, &&L_SWC1, &&L_CACHEWB,
-			&&L_MFC1, &&L_MTC1, &&L_CFC1, &&L_CTC1, &&L_FPU, &&L_CVTSW, &&L_MFIC, &&L_MTIC, &&L_VFPU, &&L_SYSCALL,
-			&&L_BEQ, &&L_BNE, &&L_BLEZ, &&L_BGTZ, &&L_BLTZ, &&L_BGEZ, &&L_BLTZAL, &&L_BGEZAL,
-			&&L_BEQL, &&L_BNEL, &&L_BLEZL, &&L_BGTZL, &&L_BLTZL, &&L_BGEZL, &&L_BLTZALL, &&L_BGEZALL,
-			&&L_J, &&L_JAL, &&L_JR, &&L_JALR, &&L_BC1, &&L_BV,
-			&&L_END, &&L_BEND
-		};
-		memcpy(h_tab, labels, sizeof(h_tab));
-	}
 	if(cpu_stop_requested || !max_cycles) return 0;
-	if(unlikely(!arena) && !predec_init()) return cpu_run_interp(max_cycles);
-	pc = cpu.pc;
-	npc = cpu.npc;
-	left = seg = max_cycles;
-
-/* Registros: los operandos de las tarjetas son desplazamientos en bytes */
-#define G(o)   (*(u32 *)(r8 + (o)))
-#define FR(o)  (*(u32 *)(f8 + (o)))
-#define D      (c->a.r.d)
-#define S      (c->a.r.s)
-#define T      (c->a.r.t)
-#define SAF    (c->a.r.sa)
-#define IS     (c->a.i.s)
-#define IT     (c->a.i.t)
-#define SIMM   ((u32)(s32)c->a.i.imm)
-#define ZIMM   ((u32)(u16)c->a.i.imm)
-/* Lo del bloque que solo hace falta al salir o llamar fuera */
-#define CB     (cblk->c)
-#define BN     ((u32)cblk->n)
-#define IDX()  ((u32)(c - CB))
-#define RAW()  (cblk->raw[IDX()])
-#define IPC()  (cblk->pc + 4u * IDX())
-/* La siguiente tarjeta: su código se carga antes del cuerpo de esta */
-#define OP(name, ...) L_##name: { const void *n_ = c[1].h; __VA_ARGS__; c++; goto *n_; }
-
-/* El estado global, como lo deja cpu_run antes de llamar fuera durante la
-   instrucción de esta tarjeta (en el delay slot, pc y npc ya son el destino) */
-#define SYNC_AT() do { \
-		u32 i_ = IDX(), cur_ = left + BN - i_; \
-		if(cblk->branch && i_ == BN - 1){ cpu.pc = bt; cpu.npc = bt + 4; } \
-		else { cpu.pc = cblk->pc + 4 * i_ + 4; cpu.npc = cpu.pc + 4; } \
-		cpu_cycles = end - cur_; \
-		cpu_executed += seg - cur_; \
-		seg = cur_; \
-	} while(0)
-
-#define RAM_OFF(a) (((a) & PSP_ADDR_MASK) - PSP_RAM_BASE)
-#define LDX(dst, a, size, lim, rd, tail) do { \
-		u32 a_ = (a), o_ = RAM_OFF(a_); \
-		if(likely(o_ < (lim))){ dst = rd; tail; } \
-		else { \
-			SYNC_AT(); dst = cpu_slow_load(a_, size, RAW()); tail; \
-			if(unlikely(cpu_stop_requested)) goto x_after; \
-		} \
-	} while(0)
-#define LD32(dst, a, tail) LDX(dst, a, 4, lim4, rd_le32(ram + o_), tail)
-#define LD16(dst, a, tail) LDX(dst, a, 2, lim2, rd_le16(ram + o_), tail)
-#define LD8(dst, a, tail)  LDX(dst, a, 1, lim1, ram[o_], tail)
-/* Una escritura en una zona con bloques los tira; si tira este, se sale
-   al acabar la instrucción */
-#define STX(a, v, size, lim, wr, tail) do { \
-		u32 a_ = (a), o_ = RAM_OFF(a_); \
-		if(likely(o_ < (lim))){ \
-			wr; \
-			if(unlikely(cpu_code_map[o_ >> PREDEC_ZONA_BITS])){ \
-				cpu_predec_store(o_, size); tail; \
-				if(!cblk->alive) goto x_after; \
-			} else { tail; } \
-		} else { \
-			SYNC_AT(); cpu_slow_store(a_, size, v, RAW()); tail; \
-			if(unlikely(cpu_stop_requested)) goto x_after; \
-		} \
-	} while(0)
-#define ST32(a, v, tail) STX(a, v, 4, lim4, wr_le32(ram + o_, v), tail)
-#define ST16(a, v, tail) STX(a, v, 2, lim2, wr_le16(ram + o_, (u16)(v)), tail)
-#define ST8(a, v, tail)  STX(a, v, 1, lim1, ram[o_] = (u8)(v), tail)
-
-/* Saltos: bt es a dónde va después del delay slot */
-#define BRANCH(name, cond) OP(name, { bt = (cond) ? cblk->target : cblk->end; })
-#define BRANCH_LIKELY(name, cond) L_##name: { \
-		if(cond){ const void *n_ = c[1].h; bt = cblk->target; c++; goto *n_; } \
-		goto x_likely_nt; \
-	}
-
-/* Buscar (o traducir) el bloque de pc */
-dispatch:
-	if(unlikely(!left)) goto done;
-	if(npc != pc + 4 || (pc & 3) || RAM_OFF(pc) >= lim4) goto step;
-	nb = lookup(pc);
-	if(!nb) nb = build(pc, lim4);
-	st.busquedas++;
-	if(unlikely(!nb->n || left < nb->n)) goto step;
-	if(unlikely(verif) && !verif_ok(nb)){
-		kill_block(nb);
-		nb = build(pc, lim4);
-		if(!nb->n || left < nb->n) goto step;
-	}
-enter:
-	cblk = nb;
-	c = nb->c;
-	left -= nb->n;
-	goto *c->h;
-
-/* El final del bloque: al siguiente por el enlace guardado (los bloques
-   enlazados nunca tienen n = 0, así que left >= n también dice left > 0).
-   Con cpu_verificar, siempre por la búsqueda, que es donde se comprueba. */
-link_end:
-	nb = cblk->succ[0];
-	if(likely(nb && nb->alive && left >= nb->n && !verif)) goto enter;
-	npc = pc + 4;
-	if(!left) goto done;
-	nb = lookup(pc);
-	if(nb && nb->n) cblk->succ[0] = nb;
-	goto dispatch;
-link:
-	{
-		const int k = pc != cblk->end;
-		nb = cblk->succ[k];
-		if(likely(nb && nb->pc == pc && nb->alive && left >= nb->n && !verif)) goto enter;
-		npc = pc + 4;
-		if(!left) goto done;
-		nb = lookup(pc);
-		if(nb && nb->n) cblk->succ[k] = nb;
-	}
-	goto dispatch;
-
-/* Una instrucción con el intérprete de siempre */
-step:
-	cpu.pc = pc;
-	cpu.npc = npc;
-	cpu_cycles = end - left;
-	cpu_executed += seg - left;
-	seg = left;
-	st.pasos++;
-	cpu_run_interp(1);
-	pc = cpu.pc;
-	npc = cpu.npc;
-	if(cpu_stop_requested || cpu_cycles >= end) goto ret;
-	left = seg = (u32)(end - cpu_cycles);
-	goto dispatch;
-
-/* Se sale del bloque tras la instrucción de la tarjeta c (pidió parar o
-   se reescribió el bloque) */
-x_after: {
-		u32 i_ = IDX();
-		if(cblk->branch && i_ == BN - 1){ pc = bt; npc = bt + 4; }
-		else if(cblk->branch && i_ == BN - 2){ pc = cblk->pc + 4 * i_ + 4; npc = bt; }
-		else { pc = cblk->pc + 4 * i_ + 4; npc = pc + 4; }
-		left += BN - (i_ + 1);
-	}
-block_exit:
-	if(cpu_stop_requested){
-		cpu.pc = pc;
-		cpu.npc = npc;
-		cpu_cycles = end - left;
-		cpu_executed += seg - left;
-		goto ret;
-	}
-	goto dispatch;
-
-/* Branch likely no tomado: el delay slot no se ejecuta ni cuenta */
-x_likely_nt:
-	pc = cblk->end;
-	left++;
-	goto link_end;
-
-after_call:
-	/* Vuelta del HLE, como en cpu_run */
-	pc = cpu.pc;
-	npc = cpu.npc;
-	cpu.r[0] = 0;
-	cpu_cycles++;
-	cpu_executed++;
-	if(cpu_stop_requested || cpu_cycles >= end) goto ret;
-	left = seg = (u32)(end - cpu_cycles);
-	goto dispatch;
-
-done:
-	cpu.pc = pc;
-	cpu.npc = npc;
-	cpu_cycles = end;
-	cpu_executed += seg;
-ret:
-	return (u32)(cpu_cycles - start);
-
-	/* --- Las tarjetas ------------------------------------------------- */
-
-	OP(NOP, (void)0)
-	OP(SLL, G(D) = G(T) << SAF)
-	OP(SRL, G(D) = G(T) >> SAF)
-	OP(ROTR, { u32 v = G(T); G(D) = (v >> SAF) | (v << (32 - SAF)); })
-	OP(SRA, G(D) = (u32)((s32)G(T) >> SAF))
-	OP(SLLV, G(D) = G(T) << (G(S) & 31))
-	OP(SRLV, G(D) = G(T) >> (G(S) & 31))
-	OP(ROTRV, { u32 v = G(T), sh = G(S) & 31; G(D) = sh ? (v >> sh) | (v << (32 - sh)) : v; })
-	OP(SRAV, G(D) = (u32)((s32)G(T) >> (G(S) & 31)))
-	OP(MOVZ, if(G(T) == 0) G(D) = G(S))
-	OP(MOVN, if(G(T) != 0) G(D) = G(S))
-	OP(MFHI, G(D) = cpu.hi)
-	OP(MTHI, cpu.hi = G(S))
-	OP(MFLO, G(D) = cpu.lo)
-	OP(MTLO, cpu.lo = G(S))
-	OP(CLZ, { u32 v = G(S); G(D) = v ? (u32)__builtin_clz(v) : 32; })
-	OP(CLO, { u32 v = ~G(S); G(D) = v ? (u32)__builtin_clz(v) : 32; })
-	OP(MULT, { s64 m = (s64)(s32)G(S) * (s32)G(T); cpu.lo = (u32)m; cpu.hi = (u32)((u64)m >> 32); })
-	OP(MULTU, { u64 m = (u64)G(S) * G(T); cpu.lo = (u32)m; cpu.hi = (u32)(m >> 32); })
-	OP(DIV, {
-		s32 a = (s32)G(S), b = (s32)G(T);
-		if(a == (s32)0x80000000 && b == -1){ cpu.lo = 0x80000000u; cpu.hi = 0; }
-		else if(b != 0){ cpu.lo = (u32)(a / b); cpu.hi = (u32)(a % b); }
-		else { cpu.lo = a < 0 ? 1 : 0xFFFFFFFFu; cpu.hi = (u32)a; }
-	})
-	OP(DIVU, {
-		u32 a = G(S), b = G(T);
-		if(b != 0){ cpu.lo = a / b; cpu.hi = a % b; }
-		else { cpu.lo = a <= 0xFFFF ? 0xFFFF : 0xFFFFFFFFu; cpu.hi = a; }
-	})
-	OP(MADD, { u64 acc = ((u64)cpu.hi << 32) | cpu.lo; acc += (u64)((s64)(s32)G(S) * (s32)G(T)); cpu.lo = (u32)acc; cpu.hi = (u32)(acc >> 32); })
-	OP(MADDU, { u64 acc = ((u64)cpu.hi << 32) | cpu.lo; acc += (u64)G(S) * G(T); cpu.lo = (u32)acc; cpu.hi = (u32)(acc >> 32); })
-	OP(MSUB, { u64 acc = ((u64)cpu.hi << 32) | cpu.lo; acc -= (u64)((s64)(s32)G(S) * (s32)G(T)); cpu.lo = (u32)acc; cpu.hi = (u32)(acc >> 32); })
-	OP(MSUBU, { u64 acc = ((u64)cpu.hi << 32) | cpu.lo; acc -= (u64)G(S) * G(T); cpu.lo = (u32)acc; cpu.hi = (u32)(acc >> 32); })
-	OP(ADDU, G(D) = G(S) + G(T))
-	OP(SUBU, G(D) = G(S) - G(T))
-	OP(AND, G(D) = G(S) & G(T))
-	OP(OR, G(D) = G(S) | G(T))
-	OP(XOR, G(D) = G(S) ^ G(T))
-	OP(NOR, G(D) = ~(G(S) | G(T)))
-	OP(SLT, G(D) = (s32)G(S) < (s32)G(T))
-	OP(SLTU, G(D) = G(S) < G(T))
-	OP(MAX, { u32 a = G(S), b = G(T); G(D) = (s32)a > (s32)b ? a : b; })
-	OP(MIN, { u32 a = G(S), b = G(T); G(D) = (s32)a < (s32)b ? a : b; })
-
-	OP(ADDIU, G(IT) = G(IS) + SIMM)
-	OP(SLTI, G(IT) = (s32)G(IS) < (s32)SIMM)
-	OP(SLTIU, G(IT) = G(IS) < SIMM)
-	OP(ANDI, G(IT) = G(IS) & ZIMM)
-	OP(ORI, G(IT) = G(IS) | ZIMM)
-	OP(XORI, G(IT) = G(IS) ^ ZIMM)
-	OP(LUI, G(IT) = ZIMM << 16)
-
-	OP(EXT, {
-		u32 size = SAF, mask = size >= 32 ? 0xFFFFFFFFu : (1u << size) - 1;
-		G(T) = (G(S) >> D) & mask;
-	})
-	OP(INS, {
-		u32 size = SAF, pos = D;
-		u32 mask = (size >= 32 ? 0xFFFFFFFFu : (1u << size) - 1) << pos;
-		G(T) = (G(T) & ~mask) | ((G(S) << pos) & mask);
-	})
-	OP(WSBH, { u32 v = G(T); G(D) = ((v & 0x00FF00FFu) << 8) | ((v >> 8) & 0x00FF00FFu); })
-	OP(WSBW, G(D) = __builtin_bswap32(G(T)))
-	OP(SEB, G(D) = (u32)(s32)(s8)G(T))
-	OP(SEH, G(D) = (u32)(s32)(s16)G(T))
-	OP(BITREV, { u32 v = G(T), b = 0, i; for(i = 0; i < 32; i++, v >>= 1) b = (b << 1) | (v & 1); G(D) = b; })
-
-	OP(LB, { u32 v; LD8(v, G(IS) + SIMM, G(IT) = (u32)(s32)(s8)v); })
-	OP(LH, { u32 v; LD16(v, G(IS) + SIMM, G(IT) = (u32)(s32)(s16)v); })
-	OP(LW, { u32 v; LD32(v, G(IS) + SIMM, G(IT) = v); })
-	OP(LBU, { u32 v; LD8(v, G(IS) + SIMM, G(IT) = v); })
-	OP(LHU, { u32 v; LD16(v, G(IS) + SIMM, G(IT) = v); })
-	OP(LWL, {
-		u32 addr = G(IS) + SIMM, sh = (addr & 3) * 8, mem, rt = G(IT);
-		LD32(mem, addr & ~3u, G(IT) = (rt & (0x00FFFFFFu >> sh)) | (mem << (24 - sh)));
-	})
-	OP(LWR, {
-		u32 addr = G(IS) + SIMM, sh = (addr & 3) * 8, mem, rt = G(IT);
-		LD32(mem, addr & ~3u, G(IT) = (rt & ~(0xFFFFFFFFu >> sh)) | (mem >> sh));
-	})
-	OP(LL, { u32 v; LD32(v, G(IS) + SIMM, { G(IT) = v; cpu.llbit = 1; }); })
-	OP(SB, ST8(G(IS) + SIMM, G(IT), (void)0))
-	OP(SH, ST16(G(IS) + SIMM, G(IT), (void)0))
-	OP(SW, ST32(G(IS) + SIMM, G(IT), (void)0))
-	/* swl/swr: leer y escribir; si la lectura pide parar, la escritura se
-	   hace igual (como en cpu_run) y se sale después */
-#define SWLR(name, merge) L_##name: { \
-		const void *n_ = c[1].h; \
-		u32 addr = G(IS) + SIMM, sh = (addr & 3) * 8, mem, rt = G(IT), a_ = addr & ~3u, o_ = RAM_OFF(a_); \
-		int chk = 0; \
-		if(likely(o_ < lim4)) mem = rd_le32(ram + o_); \
-		else { SYNC_AT(); mem = cpu_slow_load(a_, 4, RAW()); chk = cpu_stop_requested; } \
-		mem = merge; \
-		if(likely(o_ < lim4)){ \
-			wr_le32(ram + o_, mem); \
-			if(unlikely(cpu_code_map[o_ >> PREDEC_ZONA_BITS])){ cpu_predec_store(o_, 4); chk |= !cblk->alive; } \
-		} else { SYNC_AT(); cpu_slow_store(a_, 4, mem, RAW()); chk |= cpu_stop_requested; } \
-		if(unlikely(chk)) goto x_after; \
-		c++; \
-		goto *n_; \
-	}
-	SWLR(SWL, (mem & ~(0xFFFFFFFFu >> (24 - sh))) | (rt >> (24 - sh)))
-	SWLR(SWR, (mem & ~(0xFFFFFFFFu << sh)) | (rt << sh))
-#undef SWLR
-	OP(SC, {
-		const u32 base = G(IS);
-		if(cpu.llbit) ST32(base + SIMM, G(IT), G(IT) = (u32)cpu.llbit);
-		else G(IT) = (u32)cpu.llbit;
-	})
-	OP(LWC1, { u32 v; LD32(v, G(IS) + SIMM, FR(IT) = v); })
-	OP(SWC1, ST32(G(IS) + SIMM, FR(IT), (void)0))
-	OP(CACHEWB, {
-		mem_note_write((G(IS) + SIMM) & ~63u, 64);
-		if(unlikely(!cblk->alive)) goto x_after;
-	})
-
-	OP(MFC1, G(T) = FR(S))
-	OP(MTC1, FR(D) = G(T))
-	OP(CFC1, G(T) = cpu.fcr31)
-	OP(CTC1, { cpu.fcr31 = G(T) & FCR31_WRITABLE; cpu.fcc_hazard_pc = 0; })
-	OP(FPU, cpu_cop1_s(RAW(), IPC()))
-	OP(CVTSW, { float f = (float)(s32)FR(S); memcpy(f8 + D, &f, 4); })
-	OP(MFIC, G(T) = (u32)hle_get_intr_enabled())
-	OP(MTIC, {
-		SYNC_AT();
-		hle_set_intr_enabled(G(T) & 1);
-		if(unlikely(cpu_stop_requested)) goto x_after;
-	})
-	OP(VFPU, {
-		SYNC_AT();
-		vfpu_exec(RAW(), IPC());
-		if(unlikely(cpu_stop_requested || !cblk->alive)) goto x_after;
-	})
-	L_SYSCALL:
-		cpu.llbit = 0;
-		SYNC_AT();
-		hle_syscall(c->a.w);
-		goto after_call;
-
-	BRANCH(BEQ, G(S) == G(T))
-	BRANCH(BNE, G(S) != G(T))
-	BRANCH(BLEZ, (s32)G(S) <= 0)
-	BRANCH(BGTZ, (s32)G(S) > 0)
-	BRANCH(BLTZ, (s32)G(S) < 0)
-	BRANCH(BGEZ, (s32)G(S) >= 0)
-	OP(BLTZAL, { s32 v = (s32)G(S); G(31 * 4) = cblk->end; bt = v < 0 ? cblk->target : cblk->end; })
-	OP(BGEZAL, { s32 v = (s32)G(S); G(31 * 4) = cblk->end; bt = v >= 0 ? cblk->target : cblk->end; })
-	BRANCH_LIKELY(BEQL, G(S) == G(T))
-	BRANCH_LIKELY(BNEL, G(S) != G(T))
-	BRANCH_LIKELY(BLEZL, (s32)G(S) <= 0)
-	BRANCH_LIKELY(BGTZL, (s32)G(S) > 0)
-	BRANCH_LIKELY(BLTZL, (s32)G(S) < 0)
-	BRANCH_LIKELY(BGEZL, (s32)G(S) >= 0)
-	L_BLTZALL: { s32 v = (s32)G(S); G(31 * 4) = cblk->end; if(v < 0){ const void *n_ = c[1].h; bt = cblk->target; c++; goto *n_; } goto x_likely_nt; }
-	L_BGEZALL: { s32 v = (s32)G(S); G(31 * 4) = cblk->end; if(v >= 0){ const void *n_ = c[1].h; bt = cblk->target; c++; goto *n_; } goto x_likely_nt; }
-	OP(J, bt = cblk->target)
-	OP(JAL, { G(31 * 4) = cblk->end; bt = cblk->target; })
-	OP(JR, bt = G(S))
-	OP(JALR, { u32 v = G(S); G(D) = cblk->end; bt = v; })
-	L_BC1: {
-		int cond = (cpu.fcr31 & FCR31_COND) != 0, taken;
-		if(cblk->end - 8 == cpu.fcc_hazard_pc) cond = cpu.fcc_old;
-		cpu.fcc_hazard_pc = 0;
-		taken = (SAF & 1) ? cond : !cond;
-		if(SAF & 2){
-			if(taken){ const void *n_ = c[1].h; bt = cblk->target; c++; goto *n_; }
-			goto x_likely_nt;
-		}
-		{ const void *n_ = c[1].h; bt = taken ? cblk->target : cblk->end; c++; goto *n_; }
-	}
-	L_BV: {
-		int val, taken, chk = 0;
-		if(unlikely(!vfpu_live)){ SYNC_AT(); hle_vfpu_load(); chk = cpu_stop_requested; }
-		vfpu_stat_bv++;
-		val = (vfpu.ctrl[VFPU_CTRL_CC] >> D) & 1;
-		taken = val == (int)(SAF & 1);
-		if(SAF & 2){
-			if(!taken){
-				if(unlikely(chk)){ pc = cblk->end; npc = pc + 4; left++; goto block_exit; }
-				goto x_likely_nt;
-			}
-			bt = cblk->target;
-		} else bt = taken ? cblk->target : cblk->end;
-		if(unlikely(chk)) goto x_after;
-		{ const void *n_ = c[1].h; c++; goto *n_; }
-	}
-
-	L_END:
-		pc = cblk->end;
-		goto link_end;
-	L_BEND:
-		pc = bt;
-		goto link;
-
-#undef G
-#undef FR
-#undef D
-#undef S
-#undef T
-#undef SAF
-#undef IS
-#undef IT
-#undef SIMM
-#undef ZIMM
-#undef CB
-#undef BN
-#undef IDX
-#undef RAW
-#undef IPC
-#undef OP
-#undef SYNC_AT
-#undef RAM_OFF
-#undef LDX
-#undef LD32
-#undef LD16
-#undef LD8
-#undef STX
-#undef ST32
-#undef ST16
-#undef ST8
-#undef BRANCH
-#undef BRANCH_LIKELY
+	if(unlikely(!predec_config())) return cpu_run_interp(max_cycles);
+	return opt_on[OPT_PREDEC_SIN_UNIR] ? run_sin_unir(max_cycles) : run_unido(max_cycles);
 }

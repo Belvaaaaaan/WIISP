@@ -24,6 +24,12 @@
  * zonas tocadas. Con cpu_verificar, cada bloque comprueba al entrar que sus
  * instrucciones siguen en la RAM (si no, lo apunta en el registro).
  *
+ * Memoria (0.5.17.1): con predec_compacto cada bloque guarda aparte lo que
+ * se lee al ejecutar (cabecera de 24 bytes y tarjetas, alineado a 32) y lo
+ * que casi nunca (listas, zonas e instrucciones); con predec_mem1 los
+ * bloques van en MEM1; con predec_sin_unir el bucle se compila sin unir los
+ * finales de las tarjetas. //arreglo
+ *
  * SPDX-License-Identifier: GPL-2.0-or-later
 **/
 #ifndef WIISP_PREDEC_H
@@ -65,8 +71,22 @@ void cpu_predec_flush(void);
 typedef struct {
 	u64 bloques_hechos, bloques_tirados, vaciados, busquedas, pasos;
 	u64 escrituras_en_codigo, verif_viejos;
+	u64 fpu, vfpu, lentas;   /* tarjetas de FPU y VFPU y accesos a la memoria lenta */   //arreglo
 	u32 arena_usada, arena_total;
+	u32 frio_usada, frio_total;   /* la arena de lo frío (predec_compacto) */   //arreglo
+	uintptr_t dir_arena, dir_frio, dir_tabla, dir_mapa;   /* dónde están (MEM1 o MEM2) */   //arreglo
+	u8 compacto;   //arreglo
 } PredecStats;
 void cpu_predec_stats(PredecStats *out);
+
+//arreglo
+/* Memoria del anfitrión para los bloques (el Wii la reserva en MEM1 al
+   arrancar); con predec_mem1 se usa en vez de malloc */
+void cpu_predec_reserva(void *p, u32 bytes);
+/* Para las pruebas: arenas de otro tamaño (0 = el normal) */
+void cpu_predec_tam_pruebas(u32 bloques, u32 frio);
+/* Para las pruebas: ¿son todas las tarjetas de los bloques de la tabla de
+   la copia del bucle que corre ahora (predec_sin_unir)? */
+int cpu_predec_tarjetas_ok(void);
 
 #endif

@@ -448,6 +448,7 @@ static struct {
 	IoCenso es;
 	PredecStats pd;
 	u32 samples[PROF_N], ge_samples[GEF_N];
+	u32 cpu_samples[CPF_N];   //arreglo
 	u64 pmc[PROF_PMC_SLOTS][PMC_N];
 	GeStats ge;
 } prof_base;
@@ -510,6 +511,7 @@ static void profile_snapshot(void){
 	cpu_predec_stats(&prof_base.pd);
 	memcpy(prof_base.samples, (const void *)prof_samples, sizeof(prof_base.samples));
 	memcpy(prof_base.ge_samples, (const void *)prof_ge_samples, sizeof(prof_base.ge_samples));
+	memcpy(prof_base.cpu_samples, (const void *)prof_cpu_samples, sizeof(prof_base.cpu_samples));   //arreglo
 	if(prof_pmc_on) prof_pmc_account();
 	memcpy(prof_base.pmc, prof_pmc_acc, sizeof(prof_base.pmc));
 	ge_get_stats(&prof_base.ge);
@@ -612,6 +614,12 @@ static void profile_pmc_lines(const GeStats *g, const GeStats *b, u64 instr){
 		"audio", "registro"
 	};
 	static const char *const fn[GEF_N] = { "comandos", "leer", "transformar", "ensamblar", "enviar", "estado", "curvas" };
+	//arreglo
+	/* Lo que cuentan el tercero y el cuarto según prof_pmc_modo; los de
+	   ciclos salen como parte de los ciclos, los demás por 1000 instr */
+	static const char *const e3[4] = { "L1D", "fallos L2D", "ciclos esperando CTR", "ciclos de fallos de carga" };
+	static const char *const e4[4] = { "saltos", "expulsiones L2", "saltos", "saltos" };
+	const int m = (unsigned)prof_pmc_modo < 4 ? prof_pmc_modo : 0, e3_ciclos = m >= 2;
 	u64 d[PROF_PMC_SLOTS][PMC_N], total = 0, ge_c = 0;
 	char line[1024];
 	size_t len;
@@ -638,27 +646,36 @@ static void profile_pmc_lines(const GeStats *g, const GeStats *b, u64 instr){
 		if(c * 200 < total) continue;   /* menos del 0,5 % */
 		len += (size_t)snprintf(line + len, sizeof(line) - len, " %s %.1f%% (IPC %.2f", bn[i], 100.0 * (double)c / (double)total,
 		                        c ? (double)n / (double)c : 0.0);
-		if(i != PROF_GE && n)
-			len += (size_t)snprintf(line + len, sizeof(line) - len, ", L1D %.1f, saltos %.1f",
-			                        1000.0 * (double)d[i][PMC_FALLOS_L1D] / (double)n, 1000.0 * (double)d[i][PMC_SALTOS_MAL] / (double)n);
+		if(i != PROF_GE && n){   //arreglo
+			if(e3_ciclos)
+				len += (size_t)snprintf(line + len, sizeof(line) - len, ", %s %.1f%%", e3[m],
+				                        c ? 100.0 * (double)d[i][PMC_FALLOS_L1D] / (double)c : 0.0);
+			else
+				len += (size_t)snprintf(line + len, sizeof(line) - len, ", %s %.2f", e3[m],
+				                        1000.0 * (double)d[i][PMC_FALLOS_L1D] / (double)n);
+			len += (size_t)snprintf(line + len, sizeof(line) - len, ", %s %.2f", e4[m],
+			                        1000.0 * (double)d[i][PMC_SALTOS_MAL] / (double)n);
+		}
 		len += (size_t)snprintf(line + len, sizeof(line) - len, ")");
 	}
 	hle_log("%s\n", line);
-	if(instr)
-		hle_log("[TIEMPOS] PMC de la CPU: %.1f ciclos y %.1f instrucciones del Broadway por instruccion de la PSP\n",
-		        (double)d[PROF_CPU][PMC_CICLOS] / (double)instr, (double)d[PROF_CPU][PMC_INSTR] / (double)instr);
+	if(instr)   //arreglo
+		hle_log("[TIEMPOS] PMC de la CPU: %.1f ciclos y %.1f instrucciones del Broadway por instruccion de la PSP; "
+		        "%s %.4f y %s %.4f por instruccion de la PSP\n",
+		        (double)d[PROF_CPU][PMC_CICLOS] / (double)instr, (double)d[PROF_CPU][PMC_INSTR] / (double)instr,
+		        e3[m], (double)d[PROF_CPU][PMC_FALLOS_L1D] / (double)instr, e4[m], (double)d[PROF_CPU][PMC_SALTOS_MAL] / (double)instr);
 	if(ge_c){
 		/* Cada fase por su unidad: llamada de dibujo, vértice, triángulo recibido, primitiva dibujada */
 		static const int unit[GEF_N] = { 0, 1, 1, 2, 3, 0, 0 };
 		static const char *const un[4] = { "llamada", "vertice", "triangulo", "primitiva" };
 		u32 per[4];
 		per[0] = draws; per[1] = verts; per[2] = tris; per[3] = prims;
-		len = (size_t)snprintf(line, sizeof(line), "[TIEMPOS] PMC del GE (ciclos por unidad, IPC, fallos L1D y saltos mal por 1000 instr):");
+		len = (size_t)snprintf(line, sizeof(line), "[TIEMPOS] PMC del GE (ciclos por unidad, IPC, %s y %s por 1000 instr):", e3[m], e4[m]);   //arreglo
 		for(i = 0; i < GEF_N && len + 128 < sizeof(line); i++){
 			u64 c = d[PROF_N + i][PMC_CICLOS], n = d[PROF_N + i][PMC_INSTR];
 			u32 u = per[unit[i]];
 			if(!c) continue;
-			len += (size_t)snprintf(line + len, sizeof(line) - len, " %s %.0f por %s (IPC %.2f, L1D %.1f, saltos %.1f)",
+			len += (size_t)snprintf(line + len, sizeof(line) - len, " %s %.0f por %s (IPC %.2f, %.1f, %.1f)",   //arreglo
 			                        fn[i], u ? (double)c / (double)u : 0.0, un[unit[i]], n ? (double)n / (double)c : 0.0,
 			                        n ? 1000.0 * (double)d[PROF_N + i][PMC_FALLOS_L1D] / (double)n : 0.0,
 			                        n ? 1000.0 * (double)d[PROF_N + i][PMC_SALTOS_MAL] / (double)n : 0.0);
@@ -737,6 +754,34 @@ void hle_profile_report(const char *why){
 		        p.arena_usada / 1024, p.arena_total / 1024, (unsigned long long)(p.vaciados - b->vaciados),
 		        opt_on[OPT_CPU_VERIFICAR] ? (p.verif_viejos ? "; cpu_verificar: HAY BLOQUES VIEJOS ([PREDEC] en el registro)"
 		                                                    : "; cpu_verificar: ningun bloque viejo") : "");
+		//arreglo
+		/* La CPU por dentro (muestreo) y dónde está cada cosa (0x80... es
+		   MEM1 y 0x90... MEM2 en el Wii) */
+		{
+			static const char *const nom[CPF_N] = { "tarjetas", "VFPU", "FPU", "memoria lenta", "buscar y traducir", "interprete de siempre" };
+			const u64 cuenta[CPF_N] = { 0, p.vfpu - b->vfpu, p.fpu - b->fpu, p.lentas - b->lentas,
+			                            p.busquedas - b->busquedas, p.pasos - b->pasos };
+			double cpu_s = (double)(prof_acc[PROF_CPU] - prof_base.acc[PROF_CPU]) / (double)prof_hz;
+			u32 ms = 0, k;
+			char l2[640];
+			size_t n2;
+			for(k = 0; k < CPF_N; k++) ms += prof_cpu_samples[k] - prof_base.cpu_samples[k];
+			n2 = (size_t)snprintf(l2, sizeof(l2), "[TIEMPOS] CPU por dentro (muestreo, %u muestras):", (unsigned)ms);
+			for(k = 0; k < CPF_N && ms; k++){
+				u32 sm = prof_cpu_samples[k] - prof_base.cpu_samples[k];
+				double f = (double)sm / (double)ms;
+				n2 += (size_t)snprintf(l2 + n2, sizeof(l2) - n2, " %s %.1f%%", nom[k], 100.0 * f);
+				if(k && cuenta[k])
+					n2 += (size_t)snprintf(l2 + n2, sizeof(l2) - n2, " (%llu, %.0f ns cada una)", (unsigned long long)cuenta[k],
+					                       1e9 * cpu_s * f / (double)cuenta[k]);
+			}
+			snprintf(l2 + n2, sizeof(l2) - n2, "; memoria: bloques en %08X%s (%u de %u KB), frio en %08X (%u de %u KB), "
+			         "tabla en %08X, mapa en %08X, RAM de la PSP en %08X", (unsigned)p.dir_arena,
+			         p.compacto ? " compactos" : "", p.arena_usada / 1024, p.arena_total / 1024, (unsigned)p.dir_frio,
+			         p.frio_usada / 1024, p.frio_total / 1024, (unsigned)p.dir_tabla, (unsigned)p.dir_mapa,
+			         (unsigned)(uintptr_t)psp_mem.ram);
+			hle_log("%s\n", l2);
+		}
 	}
 	if(opt_on[OPT_PROF_ES]){
 		IoCenso c;
@@ -815,6 +860,8 @@ void hle_profile_report(const char *why){
 static void profile_tick(void){
 	if(!prof_clock || !prof_hz) return;
 	if(opt_on[OPT_PROF_PMC] != prof_pmc_on) prof_pmc_enable(opt_on[OPT_PROF_PMC]);
+	//arreglo
+	prof_pmc_set_modo(opt_on[OPT_PROF_PMC_L2] ? 1 : opt_on[OPT_PROF_PMC_CTR] ? 2 : opt_on[OPT_PROF_PMC_CARGA] ? 3 : 0);
 	if(!prof_base.valid){ profile_snapshot(); return; }
 	if(prof_clock() - prof_base.clock >= (u64)HLE_PROFILE_SECONDS * prof_hz) hle_profile_report(NULL);
 }

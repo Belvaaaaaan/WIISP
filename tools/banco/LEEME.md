@@ -53,4 +53,12 @@ al repositorio), `gcc-powerpc-linux-gnu` y `qemu-user`. Las salidas van a
   la PSP del intérprete (copias, llamadas y ramas, como el código normal de
   un juego), restando una corrida de 20 vueltas a una de 40.
   `medir_cpu.sh --opt cpu_predec=0` es el intérprete de antes: 28,7;
-  con `cpu_predec` (0.5.17): 17,4.
+  con `cpu_predec` (0.5.17): 17,4; 0.5.17.1: 17,5.
+- `cpu_grande.py` + `medir_cache.sh`: fallos de caché por instrucción de la
+  PSP con cachegrind (valgrind) sobre el CLI del PC, en programas de N
+  funciones con bucles, cargas, escrituras, ramas y llamadas en orden
+  desigual (`medir_cache.sh "256 1024" --opt cpu_predec=0`). La caché
+  simulada es la del Broadway con el doble de bytes (en el PC punteros y
+  tarjetas miden el doble). Con `ANOTAR=1`, las líneas que más fallan en la
+  L1 de datos. qemu cuenta instrucciones pero no la caché: esto es lo que
+  el Wii vio y qemu no (0.5.17).

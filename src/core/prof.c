@@ -13,6 +13,8 @@ u64 prof_last;
 volatile int prof_cur;
 volatile int prof_ge_phase;
 volatile u32 prof_samples[PROF_N], prof_ge_samples[GEF_N];
+volatile int prof_cpu_phase;   //arreglo
+volatile u32 prof_cpu_samples[CPF_N];   //arreglo
 
 void prof_set_clock(u64 (*clock)(void), u64 hz){
 	int i;
@@ -50,10 +52,23 @@ void prof_pmc_enable(int on){
 	prof_pmc_on = on;
 }
 
+//arreglo
+int prof_pmc_modo;
+void (*prof_pmc_modo_fn)(int modo);
+
+void prof_pmc_set_modo(int modo){
+	if(!prof_pmc_modo_fn || !prof_pmc_read || modo == prof_pmc_modo) return;
+	if(prof_pmc_on) prof_pmc_account();
+	prof_pmc_modo_fn(modo);
+	prof_pmc_read(pmc_last);
+	prof_pmc_modo = modo;
+}
+
 void prof_sample(void){
 	int b = prof_cur, f;
 	if((unsigned)b >= PROF_N) return;
 	prof_samples[b]++;
+	if(b == PROF_CPU && (unsigned)prof_cpu_phase < CPF_N) prof_cpu_samples[prof_cpu_phase]++;   //arreglo
 	if(b != PROF_GE) return;
 	f = prof_ge_phase;
 	if((unsigned)f < GEF_N) prof_ge_samples[f]++;

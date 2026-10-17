@@ -63,6 +63,14 @@ extern void (*prof_pmc_read)(u32 *out);   /* del anfitrión: PMC_N valores */
 extern u64 prof_pmc_acc[PROF_PMC_SLOTS][PMC_N];
 void prof_pmc_account(void);              /* lo contado, a la cubeta o fase actual */
 void prof_pmc_enable(int on);             /* sin prof_pmc_read no hace nada */
+//arreglo
+/* Qué cuentan el tercero y el cuarto (0 = fallos de L1D y saltos mal
+   predichos; 1 = fallos de datos en L2 y expulsiones de L2; 2 = ciclos
+   esperando LR o CTR y saltos; 3 = ciclos de fallos de carga y saltos).
+   Sin prof_pmc_modo_fn (el anfitrión no sabe cambiarlo) se queda en 0. */
+extern int prof_pmc_modo;
+extern void (*prof_pmc_modo_fn)(int modo);
+void prof_pmc_set_modo(int modo);
 
 /* Pasa a contar en la cubeta b; devuelve la anterior para volver a ella */
 static inline int prof_switch(int b){
@@ -116,6 +124,24 @@ static inline void prof_ge_leave(int old){
 	if(prof_pmc_on) prof_pmc_account();
 	prof_ge_phase = old;
 }
+
+//arreglo
+/* --- La CPU por dentro (muestreo, 0.5.17.1) --------------------------------
+   Lo mismo para la cubeta CPU: el intérprete predecodificado marca cuándo
+   está en la VFPU, en la FPU, en la memoria lenta, buscando o traduciendo
+   bloques o ejecutando una instrucción con el intérprete de siempre (una
+   escritura, sin leer contadores) */
+enum {
+	CPF_TARJETAS,   /* las tarjetas y el paso entre bloques */
+	CPF_VFPU,       /* vfpu_exec */
+	CPF_FPU,        /* cpu_cop1_s */
+	CPF_LENTA,      /* cpu_slow_load y cpu_slow_store */
+	CPF_BUSCAR,     /* buscar, traducir y comprobar bloques */
+	CPF_PASO,       /* una instrucción con el intérprete de siempre */
+	CPF_N
+};
+extern volatile int prof_cpu_phase;
+extern volatile u32 prof_cpu_samples[CPF_N];
 
 /* Desde el temporizador (interrupción o hilo aparte) */
 void prof_sample(void);

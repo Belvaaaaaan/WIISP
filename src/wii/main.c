@@ -71,6 +71,7 @@
 #include "frontend/wiimote.h"
 #include "hle/hle.h"
 #include "core/prof.h"
+#include "cpu/predec.h"   //arreglo
 #ifdef WIISP_PROF
 extern unsigned long long ge_prof[8];
 #endif
@@ -91,6 +92,19 @@ void *plat_alloc_big(size_t size){
 	SYS_SetArena2Lo(lo + size);
 	heap2_ini = (u32)(lo + size);   /* lo que el montón tome de MEM2 irá detrás */
 	return lo;
+}
+
+//arreglo
+/* 3 MB de MEM1 para los bloques del intérprete predecodificado
+   (predec_mem1): se recortan del principio de la arena de MEM1 antes de
+   que malloc la use, como la RAM de la PSP en MEM2. Sin el interruptor no
+   se usan (el montón tiene 3 MB menos de MEM1 y sigue en MEM2). */
+static void reserva_mem1(void){
+	const u32 size = 3u << 20;
+	u8 *lo = (u8 *)(((u32)SYS_GetArena1Lo() + 31) & ~31u), *hi = (u8 *)SYS_GetArena1Hi();
+	if(lo + size > hi) return;
+	SYS_SetArena1Lo(lo + size);
+	cpu_predec_reserva(lo, size);
 }
 
 /* Rutas normales de las partidas y del registro (las pruebas las cambian) */
@@ -649,6 +663,7 @@ int main(int argc, char **argv){
 	char path[512], config[300], appdir[300] = "";
 	const char *slash;
 
+	reserva_mem1();   //arreglo
 	heap1_ini = (u32)SYS_GetArena1Lo();
 	video_init();
 	input_init();
