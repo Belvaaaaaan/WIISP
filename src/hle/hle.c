@@ -453,6 +453,10 @@ static struct {
 	GeStats ge;
 } prof_base;
 static u32 prof_vblanks;   /* hle_run_frame lleva la cuenta */
+static u32 ventana_n = 600;   //Arreglo
+static u64 ventana_fin;   //Arreglo
+
+void hle_set_ventana_juego(u32 vblanks){ if(vblanks) ventana_n = vblanks; }   //Arreglo
 
 void hle_set_profile_hook(void (*fn)(char *buf, size_t size)){ profile_hook = fn; }
 
@@ -515,6 +519,7 @@ static void profile_snapshot(void){
 	if(prof_pmc_on) prof_pmc_account();
 	memcpy(prof_base.pmc, prof_pmc_acc, sizeof(prof_base.pmc));
 	ge_get_stats(&prof_base.ge);
+	ventana_fin = (cpu_cycles / CYCLES_PER_FRAME / ventana_n + 1) * ventana_n;   //Arreglo
 }
 
 static double pct(u32 part, u32 whole){ return whole ? 100.0 * (double)part / (double)whole : 0.0; }
@@ -690,7 +695,53 @@ static void profile_pmc_lines(const GeStats *g, const GeStats *b, u64 instr){
 /* Velocidad, a dónde va el tiempo real, el GE por dentro y qué dibujó, y lo
    que añada el renderizador. Sin acentos: también sale en la consola del
    Wii. */
-void hle_profile_report(const char *why){
+static void profile_report(const char *why, int forzar);   //Arreglo
+
+void hle_profile_report(const char *why){ profile_report(why, 0); }   //Arreglo
+
+//Arreglo
+static void profile_bloques_lines(const PredecStats *p, const PredecStats *b, u64 instr){
+	static const char *const tn[7] = { "1", "2", "3-4", "5-8", "9-16", "17-32", "33-64" };
+	u64 n = p->bq_bloques - b->bq_bloques, e[2][2], caidas = 0, ops[PREDEC_CAIDA_OPS];
+	char line[1024], nm[24];
+	size_t len;
+	u32 i, k, j, orden[10], no = 0;
+	for(i = 0; i < 2; i++) for(k = 0; k < 2; k++) e[i][k] = p->bq_enlace[i][k] - b->bq_enlace[i][k];
+	len = (size_t)snprintf(line, sizeof(line), "[TIEMPOS] Bloques (prof_bloques): %llu ejecutados, %.2f instrucciones por bloque; por tamano:",
+	                       (unsigned long long)n, n ? (double)(p->bq_instr - b->bq_instr) / (double)n : 0.0);
+	for(i = 0; i < 7; i++)
+		len += (size_t)snprintf(line + len, sizeof(line) - len, " %s %.1f%%", tn[i],
+		                        n ? 100.0 * (double)(p->bq_tam[i] - b->bq_tam[i]) / (double)n : 0.0);
+	snprintf(line + len, sizeof(line) - len, "; al siguiente por el enlace %.1f%% (%llu sin el), al destino del salto %.1f%% (%llu sin el, "
+	         "%llu acaban en jr o jalr)",
+	         e[0][0] + e[0][1] ? 100.0 * (double)e[0][0] / (double)(e[0][0] + e[0][1]) : 0.0, (unsigned long long)e[0][1],
+	         e[1][0] + e[1][1] ? 100.0 * (double)e[1][0] / (double)(e[1][0] + e[1][1]) : 0.0, (unsigned long long)e[1][1],
+	         (unsigned long long)(p->bq_jr_sin_enlace - b->bq_jr_sin_enlace));
+	hle_log("%s\n", line);
+	for(i = 0; i < 4; i++) caidas += p->bq_caidas[i] - b->bq_caidas[i];
+	for(i = 0; i < PREDEC_CAIDA_OPS; i++){
+		ops[i] = p->bq_caida_op[i] - b->bq_caida_op[i];
+		if(!ops[i]) continue;
+		if(no < 10) no++;
+		else if(ops[orden[9]] >= ops[i]) continue;
+		for(j = no - 1; j > 0 && ops[orden[j - 1]] < ops[i]; j--) orden[j] = orden[j - 1];
+		orden[j] = i;
+	}
+	len = (size_t)snprintf(line, sizeof(line), "[TIEMPOS] Interprete de siempre (prof_bloques): %llu instrucciones (%.3f%%): "
+	                       "delay slot suelto %llu, sin tarjeta %llu, no cabe en el reloj %llu, fuera de la RAM %llu; las que mas:",
+	                       (unsigned long long)caidas, instr ? 100.0 * (double)caidas / (double)instr : 0.0,
+	                       (unsigned long long)(p->bq_caidas[CAIDA_DELAY] - b->bq_caidas[CAIDA_DELAY]),
+	                       (unsigned long long)(p->bq_caidas[CAIDA_SIN_TARJETA] - b->bq_caidas[CAIDA_SIN_TARJETA]),
+	                       (unsigned long long)(p->bq_caidas[CAIDA_NO_CABE] - b->bq_caidas[CAIDA_NO_CABE]),
+	                       (unsigned long long)(p->bq_caidas[CAIDA_FUERA] - b->bq_caidas[CAIDA_FUERA]));
+	for(i = 0; i < no && len + 48 < sizeof(line); i++){
+		cpu_predec_caida_nombre(orden[i], nm, sizeof(nm));
+		len += (size_t)snprintf(line + len, sizeof(line) - len, " %s %llu", nm, (unsigned long long)ops[orden[i]]);
+	}
+	hle_log("%s\n", line);
+}
+
+static void profile_report(const char *why, int forzar){   //Arreglo
 	static const char *const names[PROF_N] = {
 		"otros", "CPU", "syscalls", "GE", "rasterizar", "texturas", "framebuffers", "presentar", "esperar GX", "E/S",
 		"audio", "registro"
@@ -705,7 +756,7 @@ void hle_profile_report(const char *why){
 	if(!prof_clock || !prof_hz || !prof_base.valid) return;
 	prof_flush();
 	total = prof_last - prof_base.clock;
-	if(!total || (why && total < prof_hz / 2)) return;   /* justo tras otro informe */
+	if(!total || (why && !forzar && total < prof_hz / 2)) return;   /* justo tras otro informe */   //Arreglo
 	for(i = 0; i < PROF_N; i++) d[i] = prof_acc[i] - prof_base.acc[i];
 	secs = (double)total / (double)prof_hz;
 	game = (double)(cpu_cycles - prof_base.cycles) / (double)PSP_CPU_HZ;
@@ -766,7 +817,9 @@ void hle_profile_report(const char *why){
 			char l2[640];
 			size_t n2;
 			for(k = 0; k < CPF_N; k++) ms += prof_cpu_samples[k] - prof_base.cpu_samples[k];
-			n2 = (size_t)snprintf(l2, sizeof(l2), "[TIEMPOS] CPU por dentro (muestreo, %u muestras):", (unsigned)ms);
+			if(!opt_on[OPT_PROF_CPU]) ms = 0;   //Arreglo
+			n2 = opt_on[OPT_PROF_CPU] ? (size_t)snprintf(l2, sizeof(l2), "[TIEMPOS] CPU por dentro (muestreo, %u muestras):", (unsigned)ms)
+			                          : (size_t)snprintf(l2, sizeof(l2), "[TIEMPOS] CPU por dentro (sin prof_cpu)");   //Arreglo
 			for(k = 0; k < CPF_N && ms; k++){
 				u32 sm = prof_cpu_samples[k] - prof_base.cpu_samples[k];
 				double f = (double)sm / (double)ms;
@@ -782,6 +835,7 @@ void hle_profile_report(const char *why){
 			         (unsigned)(uintptr_t)psp_mem.ram);
 			hle_log("%s\n", l2);
 		}
+		if(opt_on[OPT_PROF_BLOQUES]) profile_bloques_lines(&p, b, instr);   //Arreglo
 	}
 	if(opt_on[OPT_PROF_ES]){
 		IoCenso c;
@@ -863,6 +917,15 @@ static void profile_tick(void){
 	//arreglo
 	prof_pmc_set_modo(opt_on[OPT_PROF_PMC_L2] ? 1 : opt_on[OPT_PROF_PMC_CTR] ? 2 : opt_on[OPT_PROF_PMC_CARGA] ? 3 : 0);
 	if(!prof_base.valid){ profile_snapshot(); return; }
+	if(opt_on[OPT_PROF_VENTANA_JUEGO]){   //Arreglo
+		if(cpu_cycles / CYCLES_PER_FRAME >= ventana_fin){   //Arreglo
+			char why[64];   //Arreglo
+			snprintf(why, sizeof(why), "ventana de juego: vblanks %u a %u",
+			         (unsigned)(prof_base.cycles / CYCLES_PER_FRAME), (unsigned)(cpu_cycles / CYCLES_PER_FRAME));   //Arreglo
+			profile_report(why, 1);   //Arreglo
+		}   //Arreglo
+		return;   //Arreglo
+	}   //Arreglo
 	if(prof_clock() - prof_base.clock >= (u64)HLE_PROFILE_SECONDS * prof_hz) hle_profile_report(NULL);
 }
 static int stats_final, stalled, stall_dumps;

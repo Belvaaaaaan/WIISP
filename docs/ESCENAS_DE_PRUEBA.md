@@ -111,6 +111,10 @@ sd:/ISO/SFA3.iso
   juego con otras opciones sin pisar las salidas. `sufijo` solo lo quita.
 - `gx` / `soft` eligen el renderizador; `frames N` es el límite para los
   programas sin guion.
+- `ventana N` (0.5.17.2): con `opt prof_ventana_juego 1`, el informe
+  `[TIEMPOS]` sale cada N vblanks de juego (600 por defecto, ~10 s) en vez
+  de cada 30 s reales; así todas las corridas cortan en los mismos puntos
+  del juego.
 
 **Al terminar, borra o renombra `autotest.txt`**: mientras exista, WIISP
 corre las pruebas en cada arranque y apaga el Wii sin llegar al menú.

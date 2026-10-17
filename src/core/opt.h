@@ -39,6 +39,9 @@ enum {
 	                         esperando LR o CTR (en vez de L1D) */
 	OPT_PROF_PMC_CARGA,   /* prof_pmc cuenta los ciclos de fallos de carga en
 	                         L1D (en vez de L1D) */
+	OPT_PROF_CPU,   //Arreglo
+	OPT_PROF_BLOQUES,   //Arreglo
+	OPT_PROF_VENTANA_JUEGO,   //Arreglo
 	/* Primera tanda del GE (resultado idéntico) */
 	OPT_GE_SKIN_RAPIDO,   /* skinning mezclando las matrices por peso */
 	OPT_GE_MTX_CACHE,     /* matrices combinadas solo cuando cambian */

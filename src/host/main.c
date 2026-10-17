@@ -368,6 +368,7 @@ int main(int argc, char **argv){
 		else if(!strcmp(argv[i], "--grabar") && i + 1 < argc) grabar = argv[++i];
 		else if(!strcmp(argv[i], "--partidas") && i + 1 < argc) partidas = argv[++i];
 		else if(!strcmp(argv[i], "--capturas-guion") && i + 1 < argc) app_guion_capturas_cada((unsigned)atoi(argv[++i]));
+		else if(!strcmp(argv[i], "--ventana") && i + 1 < argc) hle_set_ventana_juego((u32)atoi(argv[++i]));   //Arreglo
 		else if(!strcmp(argv[i], "--opt") && i + 1 < argc){
 			if(n_opts < (int)(sizeof(opts) / sizeof(opts[0]))) opts[n_opts++] = argv[i + 1];
 			i++;
@@ -378,7 +379,7 @@ int main(int argc, char **argv){
 		fprintf(stderr, "uso: %s [--all] [--imports FILE] [--run] [--frames N] [--quiet]\n"
 		                "          [--screenshot FILE] [--capturas N] [--log FILE] [--osk TEXTO]\n"
 		                "          [--guion FILE] [--salida PREFIJO] [--grabar FILE] [--partidas DIR]\n"
-		                "          [--opt NOMBRE=0|1]... [--capturas-guion N] [--veces N]\n"
+		                "          [--opt NOMBRE=0|1]... [--capturas-guion N] [--veces N] [--ventana N]\n"   //Arreglo
 		                "          EBOOT.PBP|archivo.elf|archivo.prx|imagen.iso|imagen.cso\n", argv[0]);
 		return 2;
 	}

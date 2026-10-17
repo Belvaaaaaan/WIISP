@@ -358,9 +358,11 @@ static void one_program(int prog, int faults, Snap *init, Snap *ra, Snap *rb, Sn
 	if(prog % 4 == 0) cpu_predec_tam_pruebas(4096, 2048);
 	else if(prog % 4 == 1) cpu_predec_tam_pruebas(16384, 1024);   /* se llena antes lo frío */
 	else cpu_predec_tam_pruebas(0, 0);
-	for(k = 0; k < 4; k++){
+	for(k = 0; k < 8; k++){   //Arreglo
 		opt_on[OPT_PREDEC_COMPACTO] = (u8)(k & 1);
-		opt_on[OPT_PREDEC_SIN_UNIR] = (u8)(k >> 1);
+		opt_on[OPT_PREDEC_SIN_UNIR] = (u8)((k >> 1) & 1);   //Arreglo
+		opt_on[OPT_PROF_CPU] = (u8)((k >> 2) & (prog & 1));   //Arreglo
+		opt_on[OPT_PROF_BLOQUES] = (u8)((k >> 2) & ((prog >> 1) | ~prog) & 1);   //Arreglo
 		put(init);
 		run_chunks(rc, chunks, 2);
 		CHECK(same(ra, rc, prog));
@@ -371,6 +373,7 @@ void test_interp(void){
 	static Snap init, ra, rb, rc;
 	const u8 saved_opt = opt_on[OPT_CPU_SIN_EXTRA], saved_predec = opt_on[OPT_CPU_PREDEC];
 	const u8 saved_comp = opt_on[OPT_PREDEC_COMPACTO], saved_su = opt_on[OPT_PREDEC_SIN_UNIR];   //arreglo
+	const u8 saved_pc = opt_on[OPT_PROF_CPU], saved_pb = opt_on[OPT_PROF_BLOQUES];   //Arreglo
 	const int saved_intr = hle_get_intr_enabled(), saved_live = vfpu_live;
 	u64 total = 0;
 	int p, err_fd, k;   //arreglo
@@ -481,7 +484,8 @@ void test_interp(void){
 	   código: los bloques hechos con la otra no pueden seguir */
 	{
 		const u32 P = 0x08A00900u;
-		static const u8 su[6] = { 0, 1, 1, 0, 0, 1 }, co[6] = { 1, 1, 0, 0, 1, 0 };
+		static const u8 su[10] = { 0, 1, 1, 0, 0, 1, 1, 0, 0, 1 }, co[10] = { 1, 1, 0, 0, 1, 0, 0, 1, 1, 1 };   //Arreglo
+		static const u8 me[10] = { 0, 0, 0, 0, 0, 0, 1, 1, 0, 1 };   //Arreglo
 		cpu_predec_flush();
 		mem_write32(P, itype(0x09, 6, 6, 1));                      /* addiu r6, r6, 1 */
 		mem_write32(P + 4, (2u << 26) | (P >> 2));                 /* j P */
@@ -489,13 +493,61 @@ void test_interp(void){
 		memset(&cpu, 0, sizeof(cpu));
 		cpu.pc = P;
 		cpu.npc = P + 4;
-		for(k = 0; k < 6; k++){
+		for(k = 0; k < 10; k++){   //Arreglo
 			opt_on[OPT_PREDEC_SIN_UNIR] = su[k];
 			opt_on[OPT_PREDEC_COMPACTO] = co[k];
+			opt_on[OPT_PROF_CPU] = me[k];   //Arreglo
 			cpu_run(30);                                           /* 10 vueltas */
 			CHECK_EQ(cpu.r[6], 10u * (k + 1));
 			CHECK(cpu_predec_tarjetas_ok());
 		}
+	}
+	opt_on[OPT_PROF_CPU] = 0;   //Arreglo
+	//Arreglo
+	{
+		const u32 P = 0x08A00A00u;
+		PredecStats a, b;
+		cpu_predec_flush();
+		mem_write32(P, itype(0x09, 7, 7, 1));
+		mem_write32(P + 4, itype(0x09, 8, 8, 1));
+		mem_write32(P + 8, (2u << 26) | (P >> 2));
+		mem_write32(P + 12, 0);
+		mem_write32(P + 16, (2u << 26) | (P >> 2));
+		mem_write32(P + 20, (2u << 26) | (P >> 2));
+		memset(&cpu, 0, sizeof(cpu));
+		cpu.pc = P;
+		cpu.npc = P + 4;
+		opt_on[OPT_PROF_BLOQUES] = 1;
+		cpu_predec_stats(&a);
+		cpu_run(42);
+		cpu_predec_stats(&b);
+		CHECK_EQ(cpu.r[7], 11u);
+		CHECK_EQ(b.bq_bloques - a.bq_bloques, 10u);
+		CHECK_EQ(b.bq_instr - a.bq_instr, 40u);
+		CHECK_EQ(b.bq_tam[2] - a.bq_tam[2], 10u);
+		CHECK_EQ(b.bq_enlace[1][0] - a.bq_enlace[1][0], 8u);
+		CHECK_EQ(b.bq_enlace[1][1] - a.bq_enlace[1][1], 2u);
+		CHECK_EQ(b.bq_caidas[CAIDA_NO_CABE] - a.bq_caidas[CAIDA_NO_CABE], 2u);
+		CHECK_EQ(b.bq_caida_op[0x09] - a.bq_caida_op[0x09], 2u);
+		cpu.pc = P + 16;
+		cpu.npc = P + 20;
+		cpu_predec_stats(&a);
+		cpu_run(1);
+		cpu_predec_stats(&b);
+		CHECK_EQ(b.bq_caidas[CAIDA_SIN_TARJETA] - a.bq_caidas[CAIDA_SIN_TARJETA], 1u);
+		CHECK_EQ(b.bq_caida_op[0x02] - a.bq_caida_op[0x02], 1u);
+		cpu_run(1);
+		cpu_predec_stats(&a);
+		CHECK_EQ(a.bq_caidas[CAIDA_DELAY] - b.bq_caidas[CAIDA_DELAY], 1u);
+		CHECK_EQ(cpu.pc, P);
+		opt_on[OPT_PROF_BLOQUES] = 0;
+		cpu.pc = P;
+		cpu.npc = P + 4;
+		cpu_predec_stats(&a);
+		cpu_run(40);
+		cpu_predec_stats(&b);
+		CHECK_EQ(b.bq_bloques, a.bq_bloques);
+		CHECK_EQ(b.bq_caidas[CAIDA_NO_CABE], a.bq_caidas[CAIDA_NO_CABE]);
 	}
 	/* bltzal ra: la condición usa el ra de antes de enlazar */
 	{
@@ -517,6 +569,8 @@ void test_interp(void){
 	opt_on[OPT_CPU_PREDEC] = saved_predec;
 	opt_on[OPT_PREDEC_COMPACTO] = saved_comp;   //arreglo
 	opt_on[OPT_PREDEC_SIN_UNIR] = saved_su;   //arreglo
+	opt_on[OPT_PROF_CPU] = saved_pc;   //Arreglo
+	opt_on[OPT_PROF_BLOQUES] = saved_pb;   //Arreglo
 	hle_set_intr_enabled(saved_intr);
 	vfpu_live = saved_live;
 	cpu_stop_requested = 0;

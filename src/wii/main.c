@@ -601,6 +601,7 @@ static int autotest(const char *appdir){
 		if(!strncmp(line, "frames ", 7)){ max_frames = atoi(line + 7); continue; }
 		if(!strncmp(line, "veces ", 6)){ times = atoi(line + 6); if(times < 1) times = 1; continue; }
 		if(!strncmp(line, "capturas ", 9)){ app_guion_capturas_cada((unsigned)atoi(line + 9)); continue; }
+		if(!strncmp(line, "ventana ", 8)){ hle_set_ventana_juego((u32)atoi(line + 8)); continue; }   //Arreglo
 		if(!strncmp(line, "sufijo", 6)){
 			/* Para correr el mismo juego con otras opciones sin pisar las salidas */
 			const char *v = line + 6;

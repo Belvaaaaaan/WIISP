@@ -68,6 +68,9 @@ static inline void cpu_predec_ptr_written(const void *p, u32 len){
 /* Todo fuera (otro programa, memoria reiniciada, sceKernelIcacheInvalidateAll) */
 void cpu_predec_flush(void);
 
+enum { CAIDA_DELAY, CAIDA_SIN_TARJETA, CAIDA_NO_CABE, CAIDA_FUERA };   //Arreglo
+#define PREDEC_CAIDA_OPS 256   //Arreglo
+
 typedef struct {
 	u64 bloques_hechos, bloques_tirados, vaciados, busquedas, pasos;
 	u64 escrituras_en_codigo, verif_viejos;
@@ -76,6 +79,8 @@ typedef struct {
 	u32 frio_usada, frio_total;   /* la arena de lo frío (predec_compacto) */   //arreglo
 	uintptr_t dir_arena, dir_frio, dir_tabla, dir_mapa;   /* dónde están (MEM1 o MEM2) */   //arreglo
 	u8 compacto;   //arreglo
+	u64 bq_bloques, bq_instr, bq_tam[7], bq_enlace[2][2], bq_jr_sin_enlace;   //Arreglo
+	u64 bq_caidas[4], bq_caida_op[PREDEC_CAIDA_OPS];   //Arreglo
 } PredecStats;
 void cpu_predec_stats(PredecStats *out);
 
@@ -88,5 +93,6 @@ void cpu_predec_tam_pruebas(u32 bloques, u32 frio);
 /* Para las pruebas: ¿son todas las tarjetas de los bloques de la tabla de
    la copia del bucle que corre ahora (predec_sin_unir)? */
 int cpu_predec_tarjetas_ok(void);
+void cpu_predec_caida_nombre(u32 k, char *buf, u32 size);   //Arreglo
 
 #endif

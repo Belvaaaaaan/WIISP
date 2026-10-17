@@ -195,6 +195,10 @@ ciclos (fallos de caché ×4-6, `mtctr` serializado, paso entre bloques de
 `prof_pmc_ctr`, `prof_pmc_carga`, la CPU por dentro) y la memoria del
 predecodificado (`predec_compacto`, `predec_sin_unir`, `predec_mem1`);
 banco de caché con cachegrind (`tools/banco/medir_cache.sh`).
+v0.5.17.2: `predec_sin_unir` apagado por defecto; las tarjetas solo se
+cuentan al medir (`prof_cpu`); `prof_bloques` (instrucciones por bloque
+ejecutado y qué cae al intérprete de siempre) y `prof_ventana_juego`
+(informes cada N vblanks de juego). Detalle en docs/CONTINUAR.md.
 
 Primera tanda acordada (todas "más barato", verificables en el PC):
 0.1 `prof_espera`, **skinning rápido** (`ge_skin_rapido`), **matrices al

@@ -18,6 +18,10 @@ nueva sin perder nada. Léelo junto con `README.md`, `ARQUITECTURA.md` y
   emuladores** ("igual que X", "estilo de Y"); se ve poco profesional. Los
   avisos de copyright del código portado (GPL) sí se quedan. Las
   referencias a otros proyectos van en los documentos, no en el código.
+- Desde la 0.5.17.2 (pedido del usuario): cada cambio en el código lleva
+  el comentario `//Arreglo` y **ningún otro comentario**. Lo que haga falta
+  explicar va en `docs/ARREGLOS.md` (versión y descripción breve) y en este
+  documento.
 - Nunca subir datos de juegos (ISO, EBOOT descifrados, volcados): son de
   Sony/Rockstar.
 - PPSSPP (GPLv2+) es la referencia de comportamiento: ante una duda de cómo
@@ -1534,6 +1538,75 @@ Plan acordado (una cosa por versión, cada una con su interruptor):
    capturas. Mapa fijo de MEM1 (2.9) midiendo antes qué ocupa MEM1. 2.5
    junto con el dynarec.
 
+### v0.5.17.2: medidas por tiempo de juego y bloques (punto 1 del plan)
+
+Cambios (todos con `//Arreglo`; lista en `docs/ARREGLOS.md`):
+- Por defecto `predec_sin_unir` 0 y `predec_mem1` 1.
+- Las tarjetas solo se cuentan al medir: el bucle se compila cuatro veces
+  (unido o sin unir, con o sin medidas, `PREDEC_MEDIR`). Las copias
+  normales no suman `st.fpu`/`st.vfpu` ni escriben `prof_cpu_phase`
+  (tampoco al buscar, en el intérprete de siempre ni en la memoria lenta).
+  La copia de medida se usa con `prof_cpu` (nuevo, apagado: el muestreo
+  "CPU por dentro") o con `prof_bloques`. Cambiar de copia vacía los
+  bloques, como antes. Sin `prof_cpu`, la línea "CPU por dentro" solo dice
+  dónde está cada cosa en la memoria.
+- `prof_bloques` (apagado, solo en la copia de medida): línea
+  `[TIEMPOS] Bloques`: bloques ejecutados, instrucciones por bloque (las
+  del bloque entero, aunque se salga a mitad), reparto por tamaño (1, 2,
+  3-4, 5-8, 9-16, 17-32, 33-64), y cuántas veces se pasa al bloque
+  siguiente o al destino del salto por el enlace guardado y cuántas sin él
+  (y de esas, cuántas acaban en `jr`/`jalr`). Línea `[TIEMPOS] Interprete
+  de siempre`: cuántas instrucciones y por qué (delay slot suelto, sin
+  tarjeta, no cabe en lo que queda del reloj, fuera de la RAM) y las 10
+  instrucciones que más caen. En un programa de prueba casi todo son los
+  stubs de las importaciones: `jr ra` con el `syscall` en el delay slot
+  (el bloque no puede acabar en un syscall dentro de un delay slot), dos
+  instrucciones del intérprete de siempre por cada llamada al HLE.
+- `prof_ventana_juego` (apagado): el informe `[TIEMPOS]` se corta cada N
+  vblanks de juego en vez de cada 30 s reales, en múltiplos exactos de N
+  (vblank N, 2N...): todas las corridas cortan en los mismos puntos del
+  juego. La primera ventana empieza en el vblank 1. La cabecera dice
+  "ventana de juego: vblanks A a B" con los segundos reales. N: línea
+  `ventana N` del autotest (600 por defecto, ~10 s de juego) o
+  `--ventana N` en el CLI.
+
+Medido (banco de qemu, `medir_cpu.sh`): 17,5 → 17,3 instrucciones del
+Broadway por instrucción de la PSP por defecto (copia unida sin medidas;
+la 0.5.17.1 daba 17,5 unida o sin unir); con `prof_cpu` 17,5; con
+`prof_bloques` 25,9 (cuenta cada bloque con contadores de 64 bits: esa
+corrida no sirve para medir velocidad). cachegrind (`medir_cache.sh`, 256 /
+1024 funciones): fallos de L1D 0,1285 / 0,1638 → 0,1284 / 0,1637, L2 sin
+cambios; con `prof_cpu`, igual que antes. El banco casi no tiene VFPU ni
+FPU, así que el ahorro en el Wii puede ser mayor que este.
+
+Verificación: test_interp compara el predecodificado con las ocho
+combinaciones de `predec_compacto`, `predec_sin_unir` y medir (con
+`prof_cpu`, `prof_bloques` o los dos); caso dirigido con los contadores de
+`prof_bloques` (bloques, instrucciones, tamaño, enlaces, caídas por no
+caber, sin tarjeta y delay slot suelto, y nada con el interruptor
+apagado); el cambio de copia también con y sin medidas, y
+`cpu_predec_tarjetas_ok` mira además que `h_tab` sea de la copia que toca.
+Mutaciones detectadas: dos copias con el mismo número, el reloj cambiado
+solo en la copia de medida, el tamaño del bloque mal, la caída mal
+clasificada y la copia de medida sin elegir con `prof_bloques`. Huellas de
+test_vdec sin cambios (x86 4D4A1D8B, PowerPC 0657B177, devkitPPC
+B3A2BCD3); `build_tests_dkp.sh` sin fallos; pspautotests 275/275; A/B con
+`prof_cpu,prof_bloques`, `predec_sin_unir` y `prof_ventana_juego`: solo
+`gpu/complex` y `malloc/malloc` (cambian entre corridas) y savedata en
+paralelo (idénticas de una en una); tests/guest 22/22; recarga con ASan
+en las 572 sin problemas (una corrida con la máquina cargada, con el
+banco y compilaciones a la vez, dio `gpu/clipping/guardband` y
+`gpu/texcolors/dxt5` con unos cientos de bytes de memoria distintos e
+`io/file/rename` con otra salida; solas, esas tres salen bien con y sin
+los cambios).
+
+Autotest (DBZ, todas con `prof_pmc`, `prof_tirones`, `prof_ventana_juego`
+y `ventana 600`): base (valores por defecto, sin capturas), cpu
+(`prof_cpu`, sin capturas: la diferencia con base es lo que cuestan los
+contadores), bloques (`prof_cpu` y `prof_bloques`, sin capturas: solo para
+los recuentos) y capturas (como base, con `capturas 400`, para comparar
+las imágenes con las de la 0.5.17.1).
+
 ### Para el siguiente chat (empezar aquí)
 
 Metodología acordada (detalle en `docs/HOJA_DE_RUTA.md`): primero medir
@@ -1549,11 +1622,15 @@ Metodología acordada (detalle en `docs/HOJA_DE_RUTA.md`): primero medir
   el censo `prof_estado` (0.5.14.1), `ge_estado_sucio` y `prof_tirones`
   (0.5.15), la recarga, `registro_hilo`, `gx_paralelo` y `prof_es`
   (0.5.16), 2.2 `cpu_predec` (0.5.17), la memoria del predecodificado y
-  las medidas de la CPU (0.5.17.1).
+  las medidas de la CPU (0.5.17.1), medidas por tiempo de juego, `prof_cpu`
+  y `prof_bloques` (0.5.17.2).
 - Herramientas para medir sin el Wii (banco de qemu con el código de
   devkitPPC, perfil por función, psq_l emulado, A/B): `tools/banco/LEEME.md`.
-- **Siguiente: 0.5.17.2** y después 0.5.18 (tarjetas VFPU), según el plan
-  acordado de arriba ("Resultado de la 0.5.17.1 en el Wii y plan"). Siguiente también: las peleas (leer vértices: `round_to_screen`, la división por
+- **Siguiente: analizar las corridas de la 0.5.17.2** (base frente a cpu:
+  lo que costaban los contadores; bloques: instrucciones por bloque y qué
+  cae al intérprete de siempre, que decide entre 2.3a y fusiones) y después
+  0.5.18 (tarjetas VFPU), según el plan acordado de arriba ("Resultado de
+  la 0.5.17.1 en el Wii y plan"). Siguiente también: las peleas (leer vértices: `round_to_screen`, la división por
   w y tres conversiones a entero por la memoria, IPC 0,66; los índices CI8
   con dcbt) y, con lo que mida `prof_es`, las lecturas del disco. Juntar
   llamadas (`ge_charolas`, 1.4) sigue aparte. Otros candidatos medidos:

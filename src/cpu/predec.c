@@ -105,6 +105,7 @@ static u8 compacto, conf = 0xFF;
 static u8 *reserva;              /* la de MEM1 (predec_mem1), si el anfitrión la dio */
 static u32 reserva_tam;
 static int copia = -1;           /* qué copia del bucle llenó h_tab */
+static u8 medir;   //Arreglo
 
 #define FRIO(b) ((Frio *)(frio_base + (b)->c[(b)->n].a.w))   //arreglo
 
@@ -190,6 +191,7 @@ void cpu_predec_tam_pruebas(u32 bloques, u32 frio){
 int cpu_predec_tarjetas_ok(void){
 	u32 i, k, j;
 	Block *b;
+	if(copia != (opt_on[OPT_PREDEC_SIN_UNIR] | (opt_on[OPT_PROF_CPU] | opt_on[OPT_PROF_BLOQUES]) << 1)) return 0;   //Arreglo
 	for(i = 0; i < (1u << TABLA_BITS); i++)
 		for(b = tabla[i]; b; b = FRIO(b)->hnext)
 			for(k = 0; k <= b->n; k++){
@@ -537,6 +539,7 @@ static int verif_ok(const Block *b){
 /* La memoria lenta, contada y marcada para el muestreo */
 static u32 lenta_load(u32 addr, u32 size, u32 instr){
 	u32 v;
+	if(!medir) return cpu_slow_load(addr, size, instr);   //Arreglo
 	st.lentas++;
 	prof_cpu_phase = CPF_LENTA;
 	v = cpu_slow_load(addr, size, instr);
@@ -544,10 +547,62 @@ static u32 lenta_load(u32 addr, u32 size, u32 instr){
 	return v;
 }
 static void lenta_store(u32 addr, u32 size, u32 v, u32 instr){
+	if(!medir){ cpu_slow_store(addr, size, v, instr); return; }   //Arreglo
 	st.lentas++;
 	prof_cpu_phase = CPF_LENTA;
 	cpu_slow_store(addr, size, v, instr);
 	prof_cpu_phase = CPF_TARJETAS;
+}
+
+//Arreglo
+static u32 caida_clave(u32 w){
+	const u32 op = w >> 26;
+	if(op == 0x00) return 64 + FN_(w);
+	if(op == 0x1F) return 128 + FN_(w);
+	if(op == 0x11) return 192 + RS_(w);
+	if(op == 0x01) return 224 + RT_(w);
+	return op;
+}
+
+//Arreglo
+static void caida(int motivo, u32 pc, u32 lim4){
+	const u32 o = (pc & PSP_ADDR_MASK) - PSP_RAM_BASE;
+	st.bq_caidas[motivo]++;
+	if(!(pc & 3) && o < lim4) st.bq_caida_op[caida_clave(rd_le32(psp_mem.ram + o))]++;
+}
+
+//Arreglo
+static inline u32 tam_bloque(u32 n){
+	return n <= 1 ? 0 : (u32)(32 - __builtin_clz(n - 1));
+}
+
+//Arreglo
+void cpu_predec_caida_nombre(u32 k, char *buf, u32 size){
+	static const char *const prim[64] = {
+		[0x02] = "j", [0x03] = "jal", [0x04] = "beq", [0x05] = "bne", [0x06] = "blez", [0x07] = "bgtz",
+		[0x08] = "addi", [0x09] = "addiu", [0x0A] = "slti", [0x0B] = "sltiu", [0x0C] = "andi", [0x0D] = "ori",
+		[0x0E] = "xori", [0x0F] = "lui", [0x10] = "cop0", [0x12] = "vfpu/bv", [0x14] = "beql", [0x15] = "bnel",
+		[0x16] = "blezl", [0x17] = "bgtzl", [0x18] = "vfpu0", [0x19] = "vfpu1", [0x1B] = "vfpu3", [0x1C] = "special2",
+		[0x20] = "lb", [0x21] = "lh", [0x22] = "lwl", [0x23] = "lw", [0x24] = "lbu", [0x25] = "lhu", [0x26] = "lwr",
+		[0x28] = "sb", [0x29] = "sh", [0x2A] = "swl", [0x2B] = "sw", [0x2E] = "swr", [0x2F] = "cache",
+		[0x30] = "ll", [0x31] = "lwc1", [0x32] = "lv.s", [0x34] = "vfpu4", [0x35] = "vfpu5", [0x36] = "lv.q",
+		[0x37] = "vfpu6", [0x38] = "sc", [0x39] = "swc1", [0x3A] = "sv.s", [0x3C] = "vfpu7", [0x3D] = "lvl/lvr",
+		[0x3E] = "sv.q", [0x3F] = "vflush"
+	};
+	static const char *const spec[64] = {
+		[0x08] = "jr", [0x09] = "jalr", [0x0C] = "syscall", [0x0D] = "break", [0x0F] = "sync"
+	};
+	static const char *const regimm[4] = { "bltz", "bgez", "bltzl", "bgezl" };
+	const char *nm = NULL;
+	if(k < 64) nm = prim[k];
+	else if(k < 128) nm = spec[k - 64];
+	else if(k >= 224 && k - 224 < 4) nm = regimm[k - 224];
+	if(nm) snprintf(buf, size, "%s", nm);
+	else if(k < 64) snprintf(buf, size, "op%02X", (unsigned)k);
+	else if(k < 128) snprintf(buf, size, "special.%02X", (unsigned)(k - 64));
+	else if(k < 192) snprintf(buf, size, "special3.%02X", (unsigned)(k - 128));
+	else if(k < 224) snprintf(buf, size, "cop1.rs%02X", (unsigned)(k - 192));
+	else snprintf(buf, size, "regimm.%02X", (unsigned)(k - 224));
 }
 
 //arreglo
@@ -558,22 +613,47 @@ static void lenta_store(u32 addr, u32 size, u32 v, u32 instr){
    más de instrucciones en el banco de qemu. */
 #define PREDEC_BUCLE run_unido
 #define PREDEC_COPIA 0
+#define PREDEC_MEDIR 0   //Arreglo
 #define PREDEC_ATRIB
 #include "cpu/predec_bucle.h"
 #undef PREDEC_BUCLE
 #undef PREDEC_COPIA
+#undef PREDEC_MEDIR   //Arreglo
 #undef PREDEC_ATRIB
 #define PREDEC_BUCLE run_sin_unir
 #define PREDEC_COPIA 1
+#define PREDEC_MEDIR 0   //Arreglo
 #define PREDEC_ATRIB __attribute__((optimize("no-crossjumping")))
 #include "cpu/predec_bucle.h"
 #undef PREDEC_BUCLE
 #undef PREDEC_COPIA
+#undef PREDEC_MEDIR   //Arreglo
+#undef PREDEC_ATRIB
+//Arreglo
+#define PREDEC_BUCLE run_unido_medir
+#define PREDEC_COPIA 2
+#define PREDEC_MEDIR 1
+#define PREDEC_ATRIB
+#include "cpu/predec_bucle.h"
+#undef PREDEC_BUCLE
+#undef PREDEC_COPIA
+#undef PREDEC_MEDIR
+#undef PREDEC_ATRIB
+#define PREDEC_BUCLE run_sin_unir_medir
+#define PREDEC_COPIA 3
+#define PREDEC_MEDIR 1
+#define PREDEC_ATRIB __attribute__((optimize("no-crossjumping")))
+#include "cpu/predec_bucle.h"
+#undef PREDEC_BUCLE
+#undef PREDEC_COPIA
+#undef PREDEC_MEDIR
 #undef PREDEC_ATRIB
 
 //arreglo
 u32 cpu_run_predec(u32 max_cycles){
 	if(cpu_stop_requested || !max_cycles) return 0;
 	if(unlikely(!predec_config())) return cpu_run_interp(max_cycles);
+	medir = opt_on[OPT_PROF_CPU] | opt_on[OPT_PROF_BLOQUES];   //Arreglo
+	if(medir) return opt_on[OPT_PREDEC_SIN_UNIR] ? run_sin_unir_medir(max_cycles) : run_unido_medir(max_cycles);   //Arreglo
 	return opt_on[OPT_PREDEC_SIN_UNIR] ? run_sin_unir(max_cycles) : run_unido(max_cycles);
 }

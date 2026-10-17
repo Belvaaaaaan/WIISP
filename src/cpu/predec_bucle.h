@@ -17,6 +17,16 @@ PREDEC_ATRIB static u32 PREDEC_BUCLE(u32 max_cycles){   //arreglo
 	u8 *const r8 = (u8 *)cpu.r;
 	u8 *const f8 = (u8 *)cpu.fpr;
 	const int verif = opt_on[OPT_CPU_VERIFICAR];
+#if PREDEC_MEDIR   //Arreglo
+	const int bq = opt_on[OPT_PROF_BLOQUES];   //Arreglo
+#define FASE(f) (prof_cpu_phase = (f))   //Arreglo
+#define CAIDA(m) do { if(bq) caida((m), pc, lim4); } while(0)   //Arreglo
+#define CONTAR(x) ((void)(x))   //Arreglo
+#else   //Arreglo
+#define FASE(f) ((void)0)   //Arreglo
+#define CAIDA(m) ((void)0)   //Arreglo
+#define CONTAR(x) ((void)0)   //Arreglo
+#endif   //Arreglo
 	u32 pc, npc, left, seg, bt = 0;
 	const Card *c = NULL;
 	Block *cblk = NULL, *nb;
@@ -116,20 +126,23 @@ PREDEC_ATRIB static u32 PREDEC_BUCLE(u32 max_cycles){   //arreglo
 
 /* Buscar (o traducir) el bloque de pc */
 dispatch:
-	prof_cpu_phase = CPF_BUSCAR;   //arreglo
+	FASE(CPF_BUSCAR);   //Arreglo
 	if(unlikely(!left)) goto done;
-	if(npc != pc + 4 || (pc & 3) || RAM_OFF(pc) >= lim4) goto step;
+	if(npc != pc + 4 || (pc & 3) || RAM_OFF(pc) >= lim4){ CAIDA(npc != pc + 4 ? CAIDA_DELAY : CAIDA_FUERA); goto step; }   //Arreglo
 	nb = lookup(pc);
 	if(!nb) nb = build(pc, lim4);
 	st.busquedas++;
-	if(unlikely(!nb->n || left < nb->n)) goto step;
+	if(unlikely(!nb->n || left < nb->n)){ CAIDA(nb->n ? CAIDA_NO_CABE : CAIDA_SIN_TARJETA); goto step; }   //Arreglo
 	if(unlikely(verif) && !verif_ok(nb)){
 		kill_block(nb);
 		nb = build(pc, lim4);
-		if(!nb->n || left < nb->n) goto step;
+		if(!nb->n || left < nb->n){ CAIDA(nb->n ? CAIDA_NO_CABE : CAIDA_SIN_TARJETA); goto step; }   //Arreglo
 	}
-	prof_cpu_phase = CPF_TARJETAS;   //arreglo
+	FASE(CPF_TARJETAS);   //Arreglo
 enter:
+#if PREDEC_MEDIR   //Arreglo
+	if(bq){ st.bq_bloques++; st.bq_instr += nb->n; st.bq_tam[tam_bloque(nb->n)]++; }   //Arreglo
+#endif   //Arreglo
 	cblk = nb;
 	c = nb->c;
 	left -= nb->n;
@@ -140,9 +153,10 @@ enter:
    Con cpu_verificar, siempre por la búsqueda, que es donde se comprueba. */
 link_end:
 	nb = cblk->succ[0];
-	if(likely(nb && nb->alive && left >= nb->n && !verif)) goto enter;
+	if(likely(nb && nb->alive && left >= nb->n && !verif)){ CONTAR(bq && st.bq_enlace[0][0]++); goto enter; }   //Arreglo
 	npc = pc + 4;
 	if(!left) goto done;
+	CONTAR(bq && st.bq_enlace[0][1]++);   //Arreglo
 	nb = lookup(pc);
 	if(nb && nb->n) cblk->succ[0] = nb;
 	goto dispatch;
@@ -150,9 +164,15 @@ link:
 	{
 		const int k = pc != cblk->end;
 		nb = cblk->succ[k];
-		if(likely(nb && nb->pc == pc && nb->alive && left >= nb->n && !verif)) goto enter;
+		if(likely(nb && nb->pc == pc && nb->alive && left >= nb->n && !verif)){ CONTAR(bq && st.bq_enlace[k][0]++); goto enter; }   //Arreglo
 		npc = pc + 4;
 		if(!left) goto done;
+#if PREDEC_MEDIR   //Arreglo
+		if(bq){   //Arreglo
+			st.bq_enlace[k][1]++;   //Arreglo
+			if(CB[BN - 2].h == h_tab[OP_JR] || CB[BN - 2].h == h_tab[OP_JALR]) st.bq_jr_sin_enlace++;   //Arreglo
+		}   //Arreglo
+#endif   //Arreglo
 		nb = lookup(pc);
 		if(nb && nb->n) cblk->succ[k] = nb;
 	}
@@ -166,7 +186,7 @@ step:
 	cpu_executed += seg - left;
 	seg = left;
 	st.pasos++;
-	prof_cpu_phase = CPF_PASO;   //arreglo
+	FASE(CPF_PASO);   //Arreglo
 	cpu_run_interp(1);
 	pc = cpu.pc;
 	npc = cpu.npc;
@@ -216,7 +236,7 @@ done:
 	cpu_cycles = end;
 	cpu_executed += seg;
 ret:
-	prof_cpu_phase = CPF_TARJETAS;   //arreglo
+	FASE(CPF_TARJETAS);   //Arreglo
 	return (u32)(cpu_cycles - start);
 
 	/* --- Las tarjetas ------------------------------------------------- */
@@ -343,10 +363,10 @@ ret:
 	OP(CFC1, G(T) = cpu.fcr31)
 	OP(CTC1, { cpu.fcr31 = G(T) & FCR31_WRITABLE; cpu.fcc_hazard_pc = 0; })
 	OP(FPU, {   //arreglo
-		st.fpu++;
-		prof_cpu_phase = CPF_FPU;
+		CONTAR(st.fpu++);   //Arreglo
+		FASE(CPF_FPU);   //Arreglo
 		cpu_cop1_s(compacto ? c->a.w : RAW(), IPC());
-		prof_cpu_phase = CPF_TARJETAS;
+		FASE(CPF_TARJETAS);   //Arreglo
 	})
 	OP(CVTSW, { float f = (float)(s32)FR(S); memcpy(f8 + D, &f, 4); })
 	OP(MFIC, G(T) = (u32)hle_get_intr_enabled())
@@ -357,10 +377,10 @@ ret:
 	})
 	OP(VFPU, {
 		SYNC_AT();
-		st.vfpu++;   //arreglo
-		prof_cpu_phase = CPF_VFPU;   //arreglo
+		CONTAR(st.vfpu++);   //Arreglo
+		FASE(CPF_VFPU);   //Arreglo
 		vfpu_exec(compacto ? c->a.w : RAW(), IPC());   //arreglo
-		prof_cpu_phase = CPF_TARJETAS;   //arreglo
+		FASE(CPF_TARJETAS);   //Arreglo
 		if(unlikely(cpu_stop_requested || !cblk->alive)) goto x_after;
 	})
 	L_SYSCALL:
@@ -452,4 +472,7 @@ ret:
 #undef ST8
 #undef BRANCH
 #undef BRANCH_LIKELY
+#undef FASE   //Arreglo
+#undef CAIDA   //Arreglo
+#undef CONTAR   //Arreglo
 }

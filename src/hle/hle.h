@@ -19,7 +19,7 @@
 
 /* Versión de WIISP (la misma que dist/apps/wiisp/meta.xml): sale en el
    menú y al principio de wiisp.log */
-#define WIISP_VERSION "0.5.17.1"
+#define WIISP_VERSION "0.5.17.2"   //Arreglo
 
 typedef void (*HleFunc)(void);
 
@@ -161,6 +161,7 @@ extern u64 kernel_stat_switches, kernel_stat_vfpu_loads, kernel_stat_guest_calls
 extern u64 hle_stat_syscalls, hle_stat_flips;
 void hle_set_profile_hook(void (*fn)(char *buf, size_t size));
 void hle_profile_report(const char *why);
+void hle_set_ventana_juego(u32 vblanks);   //Arreglo
 
 /* Estado de salida */
 int  hle_has_exited(void);
