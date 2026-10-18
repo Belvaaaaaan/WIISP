@@ -1900,6 +1900,35 @@ Autotest (4 registros y un `.capturas.txt`): sin (los dos a 0), enlace
 (solo `cpu_enlace`), con (los dos) y verif (los dos, `cpu_verificar`,
 `prof_bloques` y `capturas 400`).
 
+### Resultado de la 0.5.19 en el Wii (DBZ, sin / enlace / con / verif)
+
+Las cuatro corridas ejecutan lo mismo que siempre; verif: ningún bloque
+viejo (con el cierre nuevo comprobado); las 12 huellas de las capturas,
+las de siempre.
+
+| Corrida | Real | Velocidad | Ciclos / instr. PSP | Instr. Broadway / instr. PSP | CPU |
+|---|---|---|---|---|---|
+| sin (los dos a 0) | 102,5 s | 82,1 % | 26,17 | 23,60 | 48,1 s |
+| enlace | 98,7 s | 85,3 % | 24,12 | 22,18 | 44,4 s |
+| con | 99,1 s | 84,9 % | 23,84 | 21,90 | 43,8 s |
+| verif (+ `prof_bloques`, capturas) | 143,7 s | 58,6 % | 46,78 | 46,28 | 86,1 s |
+
+- `cpu_enlace`: −3,8 s (−7,8 % de ciclos); escena pesada de 31,0 a 29,2
+  ciclos; menús y 2D de 253 a 267 % y de 84 a 94 % (30-40 s).
+- `cpu_syscall_slot`: −0,6 s de CPU y lo que va por el intérprete de
+  siempre baja de 2,43 M instrucciones a 54.000 (quedan "no cabe en el
+  reloj"). El total sale 0,4 s peor, pero no por la CPU: las texturas
+  hicieron lo mismo con menos IPC (0,74 frente a 0,95) y el montón estaba
+  repartido de otra forma (MEM2 libre 12,9 frente a 14,3 MB). Las corridas
+  van seguidas en el mismo arranque y los búferes pueden caer en otra
+  memoria: comparar la cubeta CPU y los ciclos, no solo el total (y tenerlo
+  en cuenta para el mapa fijo de MEM1, 2.9). MEM1 libre: 48 KB.
+- Desde la 0.5.17.2 (106,2 s): −7 s; velocidad de 79 a 85 %.
+- Los aciertos de los enlaces de la corrida verif no valen: con
+  `cpu_verificar` los cierres `BEND`/`END` no usan el enlace (cuentan como
+  fallos). Para medir la pila de retornos, `prof_bloques` sin
+  `cpu_verificar`.
+
 ### Para el siguiente chat (empezar aquí)
 
 Metodología acordada (detalle en `docs/HOJA_DE_RUTA.md`): primero medir
@@ -1920,8 +1949,7 @@ Metodología acordada (detalle en `docs/HOJA_DE_RUTA.md`): primero medir
   (0.5.18.1), `cpu_enlace` y `cpu_syscall_slot` (0.5.19).
 - Herramientas para medir sin el Wii (banco de qemu con el código de
   devkitPPC, perfil por función, psq_l emulado, A/B): `tools/banco/LEEME.md`.
-- **Siguiente: el resultado de la 0.5.19 en el Wii** (sin / enlace / con;
-  verif sin bloques viejos y capturas iguales). Después: quitar los `bdnz`
+- **Siguiente** (resultado de la 0.5.19 arriba): quitar los `bdnz`
   del bucle (`no-branch-count-reg`, sin interruptor posible: versión
   aparte), una pila de retornos para `jr ra` (simularla antes en
   `prof_bloques`) o la parte b2 de la VFPU. Paired singles, aparcados.
