@@ -212,14 +212,22 @@ static u32 gen(u32 *code, u32 i, int faults, int bad29){
 			else code[i] = rtype(0x12, 7, sreg(), 0, 0, 0) | (rn(6) ? vt : 128 + rn(20));   //Arreglo
 			break;   //Arreglo
 		default:   //Arreglo
-			code[i] = 0xDE000000u | (rn(3) ? 0 : rn(16) << 8) | rn(256);   //Arreglo
+			if(rn(3)) code[i] = 0xDE000000u | (rn(4) ? (rn(3) ? 0 : rn(16) << 8) | rn(256) : rnd() & 0xFFFFF);   //Arreglo
+			else code[i] = (0xDC000000u | (rn(2) << 24)) | (rn(3) ? 0xE4 : rnd() & 0xFFFFF);   //Arreglo
 		}   //Arreglo
 		break;
 	}
 	case 21: {                                                /* vadd, vsub, vcmp */
 		u32 sz = (rn(2) << 15) | (rn(2) << 7);
-		if(rn(3)) code[i] = (0x18u << 26) | (rn(2) << 23) | (rn(128) << 16) | sz | (rn(128) << 8) | rn(128);
-		else code[i] = (0x1Bu << 26) | (rn(128) << 16) | sz | (rn(128) << 8) | rn(16);
+		static const u32 v19[] = { 0, 2, 1 };   //Arreglo
+		switch(rn(6)){   //Arreglo
+		case 0: code[i] = (0x18u << 26) | (rn(2) << 23) | (rn(128) << 16) | sz | (rn(128) << 8) | rn(128); break;   //Arreglo
+		case 1: code[i] = (0x1Bu << 26) | (rn(128) << 16) | sz | (rn(128) << 8) | rn(16); break;   //Arreglo
+		case 2: code[i] = (0x19u << 26) | (PICK(v19) << 23) | (rn(128) << 16) | sz | (rn(128) << 8) | rn(128); break;   //Arreglo
+		case 3: code[i] = (0x1Bu << 26) | ((2 + rn(2)) << 23) | (rn(128) << 16) | sz | (rn(128) << 8) | rn(128); break;   //Arreglo
+		case 4: code[i] = (0x34u << 26) | (rn(3) << 16) | sz | (rn(128) << 8) | rn(128); break;   //Arreglo
+		default: code[i] = (0x34u << 26) | ((rn(2) ? 16 + rn(4) : 20) << 21) | (rn(32) << 16) | sz | (rn(128) << 8) | rn(128);   //Arreglo
+		}   //Arreglo
 		break;
 	}
 	case 22: code[i] = itype(0x12, 0x08, (rn(8) << 2) | rn(4), boff(i)); break;  /* bvf, bvt, bvfl, bvtl */
@@ -391,6 +399,7 @@ static void one_program(int prog, int faults, Snap *init, Snap *ra, Snap *rb, Sn
 		opt_on[OPT_PROF_CPU] = (u8)((k ^ prog) & 1 & (k >> 2 | prog >> 2));   //Arreglo
 		opt_on[OPT_PROF_BLOQUES] = (u8)(((k >> 1) ^ prog) & 1 & (prog >> 3));   //Arreglo
 		opt_on[OPT_CPU_VFPU_TARJETAS] = (u8)(k >> 2 != 1);   //Arreglo
+		opt_on[OPT_CPU_VFPU_ARIT] = (u8)(k >> 2 == 2 || (k >> 2 == 0 && !(prog & 2)));   //Arreglo
 		opt_on[OPT_CPU_VFPU_VERIFICAR] = (u8)(k >> 2 == 2);   //Arreglo
 		put(init);
 		run_chunks(rc, chunks, 2);
@@ -404,6 +413,7 @@ void test_interp(void){
 	const u8 saved_comp = opt_on[OPT_PREDEC_COMPACTO], saved_su = opt_on[OPT_PREDEC_SIN_UNIR];   //arreglo
 	const u8 saved_pc = opt_on[OPT_PROF_CPU], saved_pb = opt_on[OPT_PROF_BLOQUES];   //Arreglo
 	const u8 saved_vt = opt_on[OPT_CPU_VFPU_TARJETAS], saved_vv = opt_on[OPT_CPU_VFPU_VERIFICAR];   //Arreglo
+	const u8 saved_va = opt_on[OPT_CPU_VFPU_ARIT];   //Arreglo
 	const int saved_intr = hle_get_intr_enabled(), saved_live = vfpu_live;
 	u64 total = 0;
 	int p, err_fd, k;   //arreglo
@@ -705,6 +715,51 @@ void test_interp(void){
 		CHECK_EQ(res[1][0], 0x40000000u);
 		CHECK_EQ(res[1][1], 0x3F800001u);
 	}
+	//Arreglo
+	{
+		static const u32 prog_v[] = {
+			0x6004088Cu,
+			0x6085098Du,
+			0x64068A0Eu,
+			0x6D048890u,
+			0x6D850991u,
+			0xD0008894u,
+			0xD0010995u,
+			0xD0020A16u,
+			0xD2038898u,
+			0xD282989Cu,
+			0x6540889Eu,
+			0xDC0000E1u,
+			0x600488A0u,
+			0x600488A4u,
+			0x1000FFFFu,
+			0x00000000u
+		};
+		const u32 P = 0x08A01200u, NV = 14;
+		VfpuState out[2];
+		PredecStats a, b;
+		u32 m, i;
+		for(m = 0; m < 2; m++){
+			opt_on[OPT_CPU_VFPU_TARJETAS] = 1;
+			opt_on[OPT_CPU_VFPU_ARIT] = (u8)m;
+			opt_on[OPT_PROF_CPU] = 1;
+			cpu_predec_flush();
+			vfpu_reset(&vfpu);
+			for(i = 0; i < 128; i++) vfpu.vi[i] = i % 7 == 0 ? 0x7F800001u + i : i % 5 == 0 ? 0x00000003u + i : 0x3F000000u + i * 0x00123457u;
+			for(i = 0; i < sizeof(prog_v) / 4; i++) mem_write32(P + 4 * i, prog_v[i]);
+			memset(&cpu, 0, sizeof(cpu));
+			cpu.pc = P;
+			cpu.npc = P + 4;
+			vfpu_live = 1;
+			cpu_predec_stats(&a);
+			cpu_run(NV + 2);
+			cpu_predec_stats(&b);
+			out[m] = vfpu;
+			CHECK_EQ(b.vfpu_tarjetas - a.vfpu_tarjetas, m ? NV - 1 : 0u);
+			CHECK_EQ(b.vfpu - a.vfpu, m ? 1u : NV);
+		}
+		CHECK(memcmp(&out[0], &out[1], sizeof(out[0])) == 0);
+	}
 	opt_on[OPT_PROF_CPU] = 0;   //Arreglo
 	/* bltzal ra: la condición usa el ra de antes de enlazar */
 	{
@@ -730,6 +785,7 @@ void test_interp(void){
 	opt_on[OPT_PROF_BLOQUES] = saved_pb;   //Arreglo
 	opt_on[OPT_CPU_VFPU_TARJETAS] = saved_vt;   //Arreglo
 	opt_on[OPT_CPU_VFPU_VERIFICAR] = saved_vv;   //Arreglo
+	opt_on[OPT_CPU_VFPU_ARIT] = saved_va;   //Arreglo
 	hle_set_intr_enabled(saved_intr);
 	vfpu_live = saved_live;
 	cpu_stop_requested = 0;

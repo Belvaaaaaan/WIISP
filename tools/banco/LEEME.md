@@ -58,7 +58,9 @@ al repositorio), `gcc-powerpc-linux-gnu` y `qemu-user`. Las salidas van a
   Con `BANCO=vfpu_banco.c` corre otro programa (`vfpu_banco.c`: lv.q y
   sv.q por columnas y filas, lv.s, sv.s, mtv y mfv) y da además las
   instrucciones por instrucción VFPU: 0.5.17.2 164; 0.5.18 45 (con
-  `--opt cpu_vfpu_tarjetas=0`, 164).
+  `--opt cpu_vfpu_tarjetas=0`, 164). `BANCO=vfpu_arit_banco.c`: vmul,
+  vsub, vmin, vmax, vmov, vf2i, vi2f, vscl, vadd, vpfx y vabs; 0.5.18.1
+  150 por instrucción VFPU (con `--opt cpu_vfpu_arit=0`, 263).
 - `cpu_grande.py` + `medir_cache.sh`: fallos de caché por instrucción de la
   PSP con cachegrind (valgrind) sobre el CLI del PC, en programas de N
   funciones con bucles, cargas, escrituras, ramas y llamadas en orden

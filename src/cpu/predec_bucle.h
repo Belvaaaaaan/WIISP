@@ -46,6 +46,8 @@ PREDEC_ATRIB static u32 PREDEC_BUCLE(u32 max_cycles){   //arreglo
 			&&L_BEQL, &&L_BNEL, &&L_BLEZL, &&L_BGTZL, &&L_BLTZL, &&L_BGEZL, &&L_BLTZALL, &&L_BGEZALL,
 			&&L_J, &&L_JAL, &&L_JR, &&L_JALR, &&L_BC1, &&L_BV,
 			&&L_LVS, &&L_SVS, &&L_LVQ, &&L_SVQ, &&L_LVQT, &&L_SVQT, &&L_MFV, &&L_MTV, &&L_VFPU_V,   //Arreglo
+			&&L_VADD, &&L_VSUB, &&L_VMUL, &&L_VMOV, &&L_VABS, &&L_VNEG, &&L_VMIN, &&L_VMAX, &&L_VSCL,   //Arreglo
+			&&L_VI2F, &&L_VF2I, &&L_VPFX,   //Arreglo
 			&&L_END, &&L_BEND
 		};
 		memcpy(h_tab, labels, sizeof(h_tab));
@@ -411,6 +413,18 @@ ret:
 	VTARJ(SVQT, VS_SVQ)   //Arreglo
 	VTARJ(MFV, VS_MFV)   //Arreglo
 	VTARJ(MTV, VS_MTV)   //Arreglo
+	VTARJ(VADD, VS_VADD)   //Arreglo
+	VTARJ(VSUB, VS_VSUB)   //Arreglo
+	VTARJ(VMUL, VS_VMUL)   //Arreglo
+	VTARJ(VMOV, VS_VMOV)   //Arreglo
+	VTARJ(VABS, VS_VABS_NEG)   //Arreglo
+	VTARJ(VNEG, VS_VABS_NEG)   //Arreglo
+	VTARJ(VMIN, VS_VMIN_MAX)   //Arreglo
+	VTARJ(VMAX, VS_VMIN_MAX)   //Arreglo
+	VTARJ(VSCL, VS_VSCL)   //Arreglo
+	VTARJ(VI2F, VS_VI2F)   //Arreglo
+	VTARJ(VF2I, VS_VF2I)   //Arreglo
+	VTARJ(VPFX, VS_VPFX)   //Arreglo
 #undef VTARJ   //Arreglo
 	L_VFPU_V: {   //Arreglo
 		SYNC_AT();   //Arreglo

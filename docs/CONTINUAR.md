@@ -22,6 +22,8 @@ nueva sin perder nada. Léelo junto con `README.md`, `ARQUITECTURA.md` y
   el comentario `//Arreglo` y **ningún otro comentario**. Lo que haga falta
   explicar va en `docs/ARREGLOS.md` (versión y descripción breve) y en este
   documento.
+- El autotest genera como mucho 4 registros (`.log`) y un `.capturas.txt`:
+  el usuario no puede mandar más de 5 archivos en un mensaje.
 - Nunca subir datos de juegos (ISO, EBOOT descifrados, volcados): son de
   Sony/Rockstar.
 - PPSSPP (GPLv2+) es la referencia de comportamiento: ante una duda de cómo
@@ -1755,6 +1757,57 @@ comparar las huellas de las capturas con las de la 0.5.17.2 (pedir el
   rápidos en C sin prefijos (`vecdo3_fast`...): la parte b es llevarlos a
   tarjetas sin la llamada.
 
+Las 12 huellas de las capturas de la 0.5.18 son las de la 0.5.17.2.
+
+### v0.5.18.1: tarjetas VFPU, parte b (`cpu_vfpu_arit`)
+
+`vadd`, `vsub`, `vmul` (cualquier tamaño), `vmov`, `vabs`, `vneg`,
+`vmin`, `vmax`, `vscl`, `vi2f`, `vf2i` (los cuatro redondeos) y `vpfx`
+(S, T y D) con tarjeta propia (`cpu_vfpu_arit`, encendido; solo con
+`cpu_vfpu_tarjetas`). La tarjeta lleva la instrucción entera y los índices
+salen de la tabla `vfpu_vidx` (en pares y tríos la fila puede dar la
+vuelta, así que no hay un paso fijo como en lv.q).
+- Solo sin prefijos pendientes (S y T 0xE4, D 0) y con el contexto
+  cargado, como los caminos rápidos de `vfpu_exec` (que en ese caso no
+  consumen prefijos); si no, `vfpu_exec`. `vpfx` solo escribe su registro
+  de control.
+- La cuenta es la misma en los dos sitios: `flush`, `canon`, la elección
+  de vmin/vmax por componente y la conversión de vf2i pasaron a `vfpu.h`
+  (`vfpu_flush`, `vfpu_canon`, `vfpu_minmax_bits`, `vfpu_f2i_lane`) y las
+  usan `vfpu.c` y las tarjetas. vi2f y vf2i no tenían camino rápido: con
+  prefijos neutros el general no hace nada más que la cuenta.
+- Fuera, a propósito: `vdot`, `vtfm`, `vhdp`, `vmmul`... GCC une `a * b +
+  c` en `fmadds` en el PowerPC (redondea una vez) y podría hacerlo en un
+  sitio y no en el otro. vdiv (raro) y las conversiones de enteros cortos
+  (`vs2i`, `vi2s`...) también quedan para después.
+
+Medido (banco de qemu, `BANCO=vfpu_arit_banco.c`): de 263 a 150
+instrucciones del Broadway por instrucción VFPU (la cuenta misma pesa:
+denormales, NaN canónico, el `double` de vf2i). `vfpu_banco` sigue en 45,
+`cpu_banco` en 17,3; cachegrind igual. El bucle unido crece de 14,4 a 18,9
+KB (solo se cargan en la caché las líneas de las tarjetas que se usan).
+
+Verificación: test_interp con esas instrucciones en los programas
+aleatorios (y prefijos S, T y D con datos de 20 bits), cada programa con y
+sin `cpu_vfpu_arit` y con `cpu_vfpu_verificar` (507.504 verificadas,
+ninguna distinta); caso dirigido con las doce, un `vpfxs` pendiente (la
+siguiente cae a `vfpu_exec`) y el recuento. 12 mutaciones detectadas (sin
+flush, sin canon, sin mirar el prefijo D, modo de vf2i, factor de vi2f,
+min y max cambiados, vpfxd con 20 bits, índice de vscl, vmov y vabs
+cambiados, recuento en otra casilla, vmax con otro código, cambiar el
+interruptor sin vaciar). Huellas de test_vdec sin cambios;
+`build_tests_dkp.sh` sin fallos; pspautotests 275/275; A/B de
+`cpu_vfpu_arit` en las 572 (solo `gpu/complex`, `malloc` y savedata en
+paralelo; de una en una, iguales); `cpu_vfpu_verificar` en las 572 sin
+diferencias; tests/guest 22/22; recarga con ASan: en una corrida
+`cpu/fpu/fpu` dio 304 bytes de más en la tercera vuelta; sola, 5 de 5
+bien (como `guardband` y `dxt5` en la 0.5.17.2: intermitente).
+
+Autotest (como mucho 4 registros y un `.capturas.txt`, pedido del
+usuario): sin (`cpu_vfpu_arit` 0), con, verif (`cpu_vfpu_verificar`) y
+capturas (con `capturas 400` y `prof_cpu`, para contar las tarjetas);
+todas con `prof_pmc`, `prof_tirones` y ventanas de 600 vblanks.
+
 ### Para el siguiente chat (empezar aquí)
 
 Metodología acordada (detalle en `docs/HOJA_DE_RUTA.md`): primero medir
@@ -1771,13 +1824,15 @@ Metodología acordada (detalle en `docs/HOJA_DE_RUTA.md`): primero medir
   (0.5.15), la recarga, `registro_hilo`, `gx_paralelo` y `prof_es`
   (0.5.16), 2.2 `cpu_predec` (0.5.17), la memoria del predecodificado y
   las medidas de la CPU (0.5.17.1), medidas por tiempo de juego, `prof_cpu`
-  y `prof_bloques` (0.5.17.2), tarjetas VFPU parte a (0.5.18).
+  y `prof_bloques` (0.5.17.2), tarjetas VFPU parte a (0.5.18) y b
+  (0.5.18.1).
 - Herramientas para medir sin el Wii (banco de qemu con el código de
   devkitPPC, perfil por función, psq_l emulado, A/B): `tools/banco/LEEME.md`.
-- **Siguiente: el resultado de la 0.5.18 en el Wii** (sin frente a con,
-  verif sin diferencias, capturas iguales a las de la 0.5.17.2); después la
-  parte b de las tarjetas VFPU (aritmética simple en C) o 0.5.19
-  `cpu_enlace`, según lo que midan las corridas. Siguiente también: las peleas (leer vértices: `round_to_screen`, la división por
+- **Siguiente: el resultado de la 0.5.18.1 en el Wii** (sin frente a con,
+  verif sin diferencias, capturas iguales); después la parte c (paired
+  singles, solo verificable en el Wii) o 0.5.19 `cpu_enlace`.
+- Autotest: como mucho 4 registros y un `.capturas.txt` (el usuario no
+  puede mandar más de 5 archivos en un mensaje). Siguiente también: las peleas (leer vértices: `round_to_screen`, la división por
   w y tres conversiones a entero por la memoria, IPC 0,66; los índices CI8
   con dcbt) y, con lo que mida `prof_es`, las lecturas del disco. Juntar
   llamadas (`ge_charolas`, 1.4) sigue aparte. Otros candidatos medidos:

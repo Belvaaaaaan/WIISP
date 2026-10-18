@@ -85,6 +85,7 @@ enum {
 	OP_BEQL, OP_BNEL, OP_BLEZL, OP_BGTZL, OP_BLTZL, OP_BGEZL, OP_BLTZALL, OP_BGEZALL,
 	OP_J, OP_JAL, OP_JR, OP_JALR, OP_BC1, OP_BV,
 	OP_LVS, OP_SVS, OP_LVQ, OP_SVQ, OP_LVQT, OP_SVQT, OP_MFV, OP_MTV, OP_VFPU_V,   //Arreglo
+	OP_VADD, OP_VSUB, OP_VMUL, OP_VMOV, OP_VABS, OP_VNEG, OP_VMIN, OP_VMAX, OP_VSCL, OP_VI2F, OP_VF2I, OP_VPFX,   //Arreglo
 	OP_END, OP_BEND,
 	OP_N
 };
@@ -107,7 +108,7 @@ static u8 *reserva;              /* la de MEM1 (predec_mem1), si el anfitrión l
 static u32 reserva_tam;
 static int copia = -1;           /* qué copia del bucle llenó h_tab */
 static u8 medir;   //Arreglo
-static u8 vt_on, vt_verif;   //Arreglo
+static u8 vt_on, vt_verif, vt_arit;   //Arreglo
 
 #define FRIO(b) ((Frio *)(frio_base + (b)->c[(b)->n].a.w))   //arreglo
 
@@ -207,11 +208,13 @@ int cpu_predec_tarjetas_ok(void){
 /* Las arenas según predec_compacto y predec_mem1; si cambian, todo fuera */
 static int predec_config(void){
 	u8 want = (u8)(opt_on[OPT_PREDEC_COMPACTO] | (opt_on[OPT_PREDEC_MEM1] && reserva ? 2 : 0) |
-	               (opt_on[OPT_CPU_VFPU_TARJETAS] ? 4 : 0) | (opt_on[OPT_CPU_VFPU_VERIFICAR] ? 8 : 0));   //Arreglo
+	               (opt_on[OPT_CPU_VFPU_TARJETAS] ? 4 : 0) | (opt_on[OPT_CPU_VFPU_VERIFICAR] ? 8 : 0) |
+	               (opt_on[OPT_CPU_VFPU_ARIT] ? 16 : 0));   //Arreglo
 	if(likely(want == conf)) return arena != NULL;
 	conf = want;
 	vt_on = (want >> 2) & 1;   //Arreglo
 	vt_verif = (want >> 3) & 1;   //Arreglo
+	vt_arit = (want >> 4) & 1;   //Arreglo
 	if(!zona_head){
 		zonas = psp_mem.ram_size >> PREDEC_ZONA_BITS;
 		if(zonas > sizeof(cpu_code_map)) return 0;
@@ -282,6 +285,22 @@ static int decode_vfpu(u32 w, Card *cd){
 		if(rs == 7){ card_i(cd, OP_MTV, rt, 0, (u32)VFPU_INDEX(w & 0x7F) * 4); return OP_MTV; }
 		return 0;
 	}
+	if(vt_arit){   //Arreglo
+		int k = 0;   //Arreglo
+		const u32 sub = (w >> 23) & 7, sub21 = (w >> 21) & 0x1F, sub16 = (w >> 16) & 0x1F;   //Arreglo
+		switch(op){   //Arreglo
+		case 0x18: k = sub == 0 ? OP_VADD : sub == 1 ? OP_VSUB : 0; break;   //Arreglo
+		case 0x19: k = sub == 0 ? OP_VMUL : sub == 2 ? OP_VSCL : 0; break;   //Arreglo
+		case 0x1B: k = sub == 2 ? OP_VMIN : sub == 3 ? OP_VMAX : 0; break;   //Arreglo
+		case 0x34:   //Arreglo
+			if(sub21 == 0) k = sub16 == 0 ? OP_VMOV : sub16 == 1 ? OP_VABS : sub16 == 2 ? OP_VNEG : 0;   //Arreglo
+			else if(sub21 >= 16 && sub21 <= 19) k = OP_VF2I;   //Arreglo
+			else if(sub21 == 20) k = OP_VI2F;   //Arreglo
+			break;   //Arreglo
+		case 0x37: k = sub < 6 ? OP_VPFX : 0; break;   //Arreglo
+		}   //Arreglo
+		if(k){ card_w(cd, k, w); return k; }   //Arreglo
+	}   //Arreglo
 	return 0;
 }
 
@@ -591,10 +610,69 @@ static void lenta_store(u32 addr, u32 size, u32 v, u32 instr){
 	prof_cpu_phase = CPF_TARJETAS;
 }
 
+#define VFR(off) (*(float *)((u8 *)vfpu.v + (off)))   //Arreglo
+
+//Arreglo
+static inline __attribute__((always_inline)) int vfpu_arit(int k, u32 w){
+	const int n = (int)(((w >> 7) & 1) + ((w >> 14) & 2) + 1);
+	const u16 *xs = vfpu_vidx[n][(w >> 8) & 0x7F], *xd = vfpu_vidx[n][w & 0x7F];
+	union { float f[4]; u32 u[4]; s32 i[4]; } s, d;
+	int i;
+	if(k == OP_VPFX){
+		const int r = (int)((w >> 24) & 3);
+		vfpu.ctrl[VFPU_CTRL_SPREFIX + r] = r == VFPU_CTRL_DPREFIX ? w & 0xFFF : w & 0xFFFFF;
+		return 1;
+	}
+	if(((vfpu.ctrl[VFPU_CTRL_SPREFIX] ^ 0xE4) | (vfpu.ctrl[VFPU_CTRL_TPREFIX] ^ 0xE4) | vfpu.ctrl[VFPU_CTRL_DPREFIX]) || !vfpu_fast_paths)
+		return 0;
+	switch(k){
+	case OP_VADD: case OP_VSUB: case OP_VMUL: {
+		const u16 *xt = vfpu_vidx[n][(w >> 16) & 0x7F];
+		for(i = 0; i < n; i++){
+			const float a = vfpu_flush(VFR(xs[i])), b = vfpu_flush(VFR(xt[i]));
+			d.f[i] = vfpu_canon(k == OP_VADD ? a + b : k == OP_VSUB ? a - b : a * b);
+		}
+		break;
+	}
+	case OP_VMOV: for(i = 0; i < n; i++) d.f[i] = VFR(xs[i]); break;
+	case OP_VABS: for(i = 0; i < n; i++) d.f[i] = fabsf(VFR(xs[i])); break;
+	case OP_VNEG: for(i = 0; i < n; i++) d.f[i] = -VFR(xs[i]); break;
+	case OP_VMIN: case OP_VMAX: {
+		const u16 *xt = vfpu_vidx[n][(w >> 16) & 0x7F];
+		for(i = 0; i < n; i++)
+			d.u[i] = vfpu_minmax_bits(VFR(xs[i]), VFR(xt[i]), *(const u32 *)((const u8 *)vfpu.vi + xs[i]),
+			                          *(const u32 *)((const u8 *)vfpu.vi + xt[i]), k == OP_VMAX);
+		break;
+	}
+	case OP_VSCL: {
+		const float m = vfpu.v[VFPU_INDEX((w >> 16) & 0x7F)];
+		for(i = 0; i < n; i++) d.f[i] = VFR(xs[i]) * m;
+		break;
+	}
+	case OP_VI2F: {
+		const float m = 1.0f / (float)(1u << ((w >> 16) & 0x1F));
+		for(i = 0; i < n; i++) s.f[i] = VFR(xs[i]);
+		for(i = 0; i < n; i++) d.f[i] = (float)s.i[i] * m;
+		break;
+	}
+	case OP_VF2I: {
+		const float m = (float)(1u << ((w >> 16) & 0x1F));
+		const int mode = (int)((w >> 21) & 0x1F);
+		for(i = 0; i < n; i++) s.f[i] = VFR(xs[i]);
+		for(i = 0; i < n; i++) d.u[i] = vfpu_f2i_lane(s.f[i], m, mode);
+		break;
+	}
+	default: return 0;
+	}
+	for(i = n - 1; i >= 0; i--) VFR(xd[i]) = d.f[i];
+	return 1;
+}
+
 //Arreglo
 static inline __attribute__((always_inline)) int vfpu_tarjeta(int k, const Card *c, u8 *r8, u8 *ram, u32 lim4){
 	u32 a, o, *v;
 	if(unlikely(!vfpu_live)) return 0;
+	if(k >= OP_VADD) return vfpu_arit(k, c->a.w);   //Arreglo
 	if(k == OP_MFV){ *(u32 *)(r8 + c->a.i.t) = *(const u32 *)((const u8 *)vfpu.vi + (u16)c->a.i.imm); return 1; }
 	if(k == OP_MTV){ *(u32 *)((u8 *)vfpu.vi + (u16)c->a.i.imm) = *(const u32 *)(r8 + c->a.i.s); return 1; }
 	a = *(const u32 *)(r8 + c->a.i.s) + (u32)(s32)c->a.i.imm;

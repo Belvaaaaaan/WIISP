@@ -10,6 +10,8 @@
 #ifndef WIISP_VFPU_H
 #define WIISP_VFPU_H
 
+#include <math.h>   //Arreglo
+#include <string.h>   //Arreglo
 #include "cpu/cpu.h"
 
 /* Registros de control (mfvc/mtvc 128 + n) */
@@ -64,6 +66,69 @@ extern const char *const vfpu_stat_name[VS_COUNT];
 void vfpu_stats_fold(void);   /* pasa los contadores rápidos a vfpu_stat */
 extern u32 vfpu_stat_bv;      /* bvf/bvt, los cuenta el intérprete */
 extern u32 vfpu_stat_now[VS_COUNT];   //Arreglo
+extern u16 vfpu_vidx[5][128][4];   //Arreglo
+
+//Arreglo
+static inline float vfpu_flush(float f){
+	return fabsf(f) < 1.17549435e-38f ? f * 0.0f : f;
+}
+
+//Arreglo
+static inline float vfpu_canon(float f){
+	if(__builtin_expect(f != f, 0)){
+		const u32 u = 0x7F800001u;
+		float n;
+		memcpy(&n, &u, 4);
+		return n;
+	}
+	return fabsf(f) < 1.17549435e-38f ? f * 0.0f : f;
+}
+
+//Arreglo
+static inline int vfpu_nan_or_inf(float f){ return !(fabsf(f) <= 3.40282347e+38f); }
+
+//Arreglo
+static inline u32 vfpu_minmax_bits(float a, float b, u32 ua, u32 ub, int is_max){
+	if(vfpu_nan_or_inf(a) || vfpu_nan_or_inf(b)){
+		const s32 sa = (s32)ua, sb = (s32)ub;
+		const int both_neg = sa < 0 && sb < 0, take_max = is_max ? !both_neg : both_neg;
+		if(take_max) return (u32)(sb > sa ? sb : sa);
+		return (u32)(sb < sa ? sb : sa);
+	}
+	{
+		const float fa = vfpu_flush(a), fb = vfpu_flush(b);
+		if(is_max) return fb < fa ? ua : ub;
+		return fa < fb ? ua : ub;
+	}
+}
+
+//Arreglo
+static inline s32 vfpu_f2i_mode(double sv, int mode){
+	const s32 t = (s32)sv;
+	s32 fl;
+	double fr;
+	switch(mode){
+	case 17: return t;
+	case 18: return t + ((double)t < sv);
+	case 19: return t - ((double)t > sv);
+	default:
+		fl = t - ((double)t > sv);
+		fr = sv - (double)fl;
+		if(fr < 0.5) return fl;
+		if(fr > 0.5) return fl + 1;
+		return fl + (fl & 1);
+	}
+}
+
+//Arreglo
+static inline u32 vfpu_f2i_lane(float s, float mult, int mode){
+	double sv;
+	if(s != s) return 0x7FFFFFFF;
+	sv = (double)(s * mult);
+	if(sv > (double)0x7FFFFFFF) return 0x7FFFFFFF;
+	if(sv <= -2147483648.0) return 0x80000000u;
+	return (u32)vfpu_f2i_mode(sv, mode);
+}
 
 /* Funciones de la VFPU, exactas al hardware (para pruebas) */
 float vfpu_sin(float x);

@@ -5,6 +5,27 @@ la 0.5.17.2; antes se marcaban con `//arreglo`). Aquí va, por versión, qué
 se arregló o cambió y una descripción breve. El detalle está en
 `docs/CONTINUAR.md`.
 
+## 0.5.18.1
+
+- `cpu/predec.c`, `cpu/predec_bucle.h`: tarjetas propias para `vadd`,
+  `vsub`, `vmul`, `vmov`, `vabs`, `vneg`, `vmin`, `vmax`, `vscl`, `vi2f`,
+  `vf2i` y `vpfx` (`cpu_vfpu_arit`, encendido; necesita
+  `cpu_vfpu_tarjetas`). Sin prefijos pendientes hacen la misma cuenta que
+  los caminos rápidos de `vfpu_exec`; con prefijos, contexto sin cargar o
+  `vfpu_fast_paths` a 0, van a `vfpu_exec`. `vpfx` solo pide el contexto
+  cargado. También las compara `cpu_vfpu_verificar`.
+- `cpu/vfpu.h`, `cpu/vfpu.c`: `vfpu_flush`, `vfpu_canon`,
+  `vfpu_nan_or_inf`, `vfpu_minmax_bits`, `vfpu_f2i_mode` y
+  `vfpu_f2i_lane` pasan a `vfpu.h` y las usan `vfpu.c` y las tarjetas (la
+  misma cuenta en los dos sitios); `vfpu_vidx` (la tabla de índices)
+  visible.
+- `tests/test_interp.c`: programas aleatorios con vmul, vscl, vdot, vmin,
+  vmax, vmov, vabs, vneg, vf2i, vi2f y prefijos S y T (y D con datos de 20
+  bits); cada programa con y sin `cpu_vfpu_arit`; caso dirigido con las
+  doce, un prefijo pendiente y el recuento de tarjetas.
+- `tools/banco/vfpu_arit_banco.c`: banco de la aritmética de la VFPU.
+- `hle/hle.h`: versión 0.5.18.1.
+
 ## 0.5.18
 
 - `cpu/predec.c`, `cpu/predec_bucle.h`: tarjetas propias para `lv.s`,

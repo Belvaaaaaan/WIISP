@@ -207,6 +207,12 @@ DBZ), idénticas bit a bit a `vfpu_exec` y comprobables en el Wii con
 Broadway por instrucción VFPU. Siguen la aritmética simple (b) y los
 paired singles (c).
 
+Hecha (v0.5.18.1): 2.6 b, `cpu_vfpu_arit`: tarjetas para vadd, vsub, vmul,
+vmov, vabs, vneg, vmin, vmax, vscl, vi2f, vf2i y vpfx sin prefijos, con la
+misma cuenta que los caminos rápidos de `vfpu_exec` (funciones compartidas
+en `vfpu.h`). Banco de qemu: de 263 a 150 instrucciones por instrucción
+VFPU. Sigue la parte c (paired singles).
+
 Primera tanda acordada (todas "más barato", verificables en el PC):
 0.1 `prof_espera`, **skinning rápido** (`ge_skin_rapido`), **matrices al
 cambiar** (`ge_mtx_cache`), **color constante** (`ge_color_const`), 2.1

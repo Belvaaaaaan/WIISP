@@ -79,15 +79,14 @@ static inline int is_nan_or_inf(float f){ return (f2u(f) & 0x7F800000u) == 0x7F8
    memoria y volver a leerlo. x * 0 conserva el signo. */
 #define VFPU_FLT_MIN 1.17549435e-38f
 static inline float flush(float f){
-	return fabsf(f) < VFPU_FLT_MIN ? f * 0.0f : f;
+	return vfpu_flush(f);   //Arreglo
 }
 
 /* Salida de las sumas y productos: NaN canónico y denormales a cero
    (pspautotests cpu/vfpu/specials). Además deja el mismo NaN en x86 y en
    PowerPC. */
 static inline float canon(float f){
-	if(__builtin_expect(f != f, 0)) return u2f(0x7F800001u);
-	return fabsf(f) < VFPU_FLT_MIN ? f * 0.0f : f;
+	return vfpu_canon(f);   //Arreglo
 }
 
 static inline VectorSize vec_size(u32 op){ return (VectorSize)(((op >> 7) & 1) + ((op >> 14) & 2) + 1); }
@@ -123,7 +122,7 @@ static inline int prefixes_neutral(void){
 #define FAST_OK() (prefixes_neutral() & vfpu_fast_paths)
 
 /* NaN o infinito, con la FPU */
-static inline int nan_or_inf_f(float f){ return !(fabsf(f) <= 3.40282347e+38f); }
+static inline int nan_or_inf_f(float f){ return vfpu_nan_or_inf(f); }   //Arreglo
 
 
 /* --- Registros ------------------------------------------------------------------------ */
@@ -132,7 +131,8 @@ static inline int nan_or_inf_f(float f){ return !(fabsf(f) <= 3.40282347e+38f); 
    precalculada: vidx[tamaño][reg][i] para vectores y
    midx[tamaño][reg][columna * 4 + fila] para matrices. En bytes, cada
    acceso es una carga indexada sin desplazamientos. */
-static u16 vidx[5][128][4];
+u16 vfpu_vidx[5][128][4];   //Arreglo
+#define vidx vfpu_vidx   //Arreglo
 static u16 midx[5][128][16];
 /* Matrices 4x4 y vectores de 4 guardados seguidos (M000, C000...): byte de
    inicio en vfpu.v, o -1 si no lo están */
@@ -1054,25 +1054,6 @@ static NOINLINE void op_vsgn(u32 op){
 	eat_prefixes();
 }
 
-/* s ya está en (-2^31, 2^31): sin floor/ceil, que en el Broadway son
-   llamadas lentas (no tiene instrucción de redondeo) */
-static inline s32 f2i_mode(double sv, int mode){
-	const s32 t = (s32)sv;   /* hacia cero */
-	s32 fl;
-	double fr;
-	switch(mode){
-	case 17: return t;                        /* vf2iz */
-	case 18: return t + ((double)t < sv);     /* vf2iu */
-	case 19: return t - ((double)t > sv);     /* vf2id */
-	default:                                  /* vf2in: al par más cercano */
-		fl = t - ((double)t > sv);
-		fr = sv - (double)fl;
-		if(fr < 0.5) return fl;
-		if(fr > 0.5) return fl + 1;
-		return fl + (fl & 1);
-	}
-}
-
 static NOINLINE void op_vf2i(u32 op){
 	FloatBits s, d;
 	int imm = (op >> 16) & 0x1F, i, mode = (op >> 21) & 0x1F;
@@ -1080,14 +1061,7 @@ static NOINLINE void op_vf2i(u32 op){
 	VectorSize sz = vec_size(op);
 	read_vector(s.f, sz, VS);
 	swizzle_s(s.f, sz, 0.0f);
-	for(i = 0; i < nelem(sz); i++){
-		double sv;
-		if(s.f[i] != s.f[i]){ d.i[i] = 0x7FFFFFFF; continue; }
-		sv = (double)(s.f[i] * mult);
-		if(sv > (double)0x7FFFFFFF) d.i[i] = 0x7FFFFFFF;
-		else if(sv <= -2147483648.0) d.u[i] = 0x80000000u;
-		else d.i[i] = f2i_mode(sv, mode);
-	}
+	for(i = 0; i < nelem(sz); i++) d.u[i] = vfpu_f2i_lane(s.f[i], mult, mode);   //Arreglo
 	write_vector(d.f, sz, VD);
 	eat_prefixes();
 }
@@ -1732,21 +1706,7 @@ static void vminmax_fast(u32 op){
 	const u16 *xs = vidx[sz][VS], *xt = vidx[sz][VT];
 	FloatBits d;
 	int i;
-	for(i = 0; i < n; i++){
-		const float a = VF(xs[i]), b = VF(xt[i]);
-		if(nan_or_inf_f(a) || nan_or_inf_f(b)){
-			/* -NaN < -inf < reales < inf < NaN, con los bits */
-			const s32 sa = (s32)VI(xs[i]), sb = (s32)VI(xt[i]);
-			const int both_neg = sa < 0 && sb < 0, take_max = is_max ? !both_neg : both_neg;
-			if(take_max) d.i[i] = sb > sa ? sb : sa;
-			else d.i[i] = sb < sa ? sb : sa;
-		} else {
-			/* Los denormales comparan como cero y en empate gana t */
-			const float fa = flush(a), fb = flush(b);
-			if(is_max) d.f[i] = fb < fa ? a : b;
-			else d.f[i] = fa < fb ? a : b;
-		}
-	}
+	for(i = 0; i < n; i++) d.u[i] = vfpu_minmax_bits(VF(xs[i]), VF(xt[i]), VI(xs[i]), VI(xt[i]), is_max);   //Arreglo
 	write_vector(d.f, sz, VD);
 }
 

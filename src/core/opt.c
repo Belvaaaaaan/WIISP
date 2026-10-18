@@ -48,6 +48,7 @@ const OptInfo opt_info[OPT_N] = {
 	[OPT_PREDEC_MEM1]    = { "predec_mem1",    1, 1 },   //arreglo
 	[OPT_CPU_VFPU_TARJETAS] = { "cpu_vfpu_tarjetas", 1, 1 },   //Arreglo
 	[OPT_CPU_VFPU_VERIFICAR] = { "cpu_vfpu_verificar", 1, 0 },   //Arreglo
+	[OPT_CPU_VFPU_ARIT]  = { "cpu_vfpu_arit",  1, 1 },   //Arreglo
 	[OPT_CPU_FUSION]     = { "cpu_fusion",     0, 0 },
 	[OPT_HLE_RAPIDO]     = { "hle_rapido",     0, 0 },
 	[OPT_HLE_REEMPLAZO]  = { "hle_reemplazo",  0, 0 },
