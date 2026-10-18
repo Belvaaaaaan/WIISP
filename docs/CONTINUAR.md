@@ -1961,6 +1961,47 @@ Autotest (4 registros y un `.capturas.txt`): con (todo por defecto, para
 comparar con "con" de la 0.5.19), bloques (`prof_bloques`, sin
 `cpu_verificar`), vertices (`prof_vertices`) y capturas.
 
+### Resultado de la 0.5.19.1 en el Wii (DBZ, con / bloques / vertices / capturas)
+
+Las cuatro ejecutan lo mismo que siempre (la primera del arranque da su
+huella de siempre, 620a7fd8; las demás af4c4503); las 12 huellas de las
+capturas, las de siempre.
+
+| Corrida | Real | Velocidad | Ciclos / instr. PSP | Instr. Broadway / instr. PSP | CPU |
+|---|---|---|---|---|---|
+| con | 98,9 s | 85,1 % | 23,84 | 21,87 | 43,9 s |
+| bloques (`prof_bloques`) | 117,4 s | 71,7 % | 33,84 | 33,56 | 62,4 s |
+| vertices (`prof_vertices`) | 99,2 s | 84,9 % | 23,85 | 21,87 | 44,0 s |
+| capturas | 101,8 s | 82,7 % | 23,87 | 21,89 | 43,9 s |
+
+- Sin `bdnz`: neutro. 23,84 ciclos igual que la 0.5.19 y lo mismo ventana
+  por ventana (±0,1); el CTR ya no se comparte, pero no se notaba. Se
+  queda (no empeora y deja el CTR solo para el salto a la tarjeta).
+- Pila de retornos simulada: 27,5 M `jr ra`; el enlace de hoy acierta el
+  67,8 % (64,8-79 % según la ventana) y la pila el 99,7 %; la pila
+  acertaría 8,82 M de los 8,84 M que falla el enlace. Cada fallo cuesta
+  una búsqueda (53-81 ns medidos con `prof_cpu` en la 0.5.18.1): unos
+  0,5-0,7 s en toda la corrida, 0,1 s (0,4 %) por ventana de la pelea, menos
+  lo que cueste apilar en cada `jal`. Los stubs `jr ra` + `syscall`: 100 %.
+  Ganancia pequeña: no es lo siguiente.
+- Intérprete de siempre: 2-14 mil instrucciones por ventana (casi todo "no
+  cabe en el reloj"); en 2400-3000, 5.460 `beql` sin tarjeta.
+- Leer vértices por dentro, en la pelea (3600-fin, % del tiempo total):
+  preparar 0,8, decodificar 3,0, huesos 3,9, transformar 7,1, pantalla
+  11,2, luces uv y niebla 0,8, genérico 0,3 (27,1 en total). El reparto
+  entre transformar y pantalla no es exacto (el compilador mueve cuentas a
+  través de la marca y la división por w llega tarde), pero juntas son el
+  18 % de la pelea, unos 4,7 s por ventana de 26 s. PMC del GE: leer 511
+  ciclos por vértice, IPC 0,69 (unas 350 instrucciones) y L1D 1,4 por
+  1000 instrucciones: no es la memoria, son las cuentas.
+- Banco del GE (`bench_gx`, 0x11A uv16 c4444 p16, el 54 % de la pelea) con
+  `qlines.py`: `batch_range` 346 instrucciones por vértice (lo mismo que el
+  Wii). Pasar a pantalla, unas 180: `round_to_screen` 35, tres
+  `ge_floorf` 48, `floor_to_int` 20, `ge_f2i` de z 19, `offset_float` 15
+  (mira la clave en cada vértice), `ge_clip_flags_xy` 30 y 15 más. La
+  matriz (`ge_dot3_fused`, la recarga en cada vértice) 62; decodificar
+  ~40; uv y color 27; el resto del bucle ~30.
+
 ### Para el siguiente chat (empezar aquí)
 
 Metodología acordada (detalle en `docs/HOJA_DE_RUTA.md`): primero medir
@@ -1981,12 +2022,14 @@ Metodología acordada (detalle en `docs/HOJA_DE_RUTA.md`): primero medir
   (0.5.18.1), `cpu_enlace` y `cpu_syscall_slot` (0.5.19).
 - Herramientas para medir sin el Wii (banco de qemu con el código de
   devkitPPC, perfil por función, psq_l emulado, A/B): `tools/banco/LEEME.md`.
-- **Siguiente: el resultado de la 0.5.19.1 en el Wii** (ciclos frente a la
-  0.5.19, pila de retornos simulada, leer vértices por partes) y decidir
-  con eso. Lo de antes: quitar los `bdnz`
-  del bucle (`no-branch-count-reg`, sin interruptor posible: versión
-  aparte), una pila de retornos para `jr ra` (simularla antes en
-  `prof_bloques`) o la parte b2 de la VFPU. Paired singles, aparcados.
+- **Siguiente (propuesto, falta que el usuario lo apruebe): 0.5.20, pasar
+  a pantalla más barato** en el camino por lotes, con su interruptor y
+  bit a bit igual: el offset en float una vez por tanda, z ya entera y
+  acotada sin `ge_f2i`, x e y con una sola conversión, las banderas de
+  recorte junto con el rango de pantalla y la matriz en registros.
+  Objetivo en el banco: de 346 a ~230-250 instrucciones por vértice. La
+  pila de retornos real (~0,5 %) y la parte b2 de la VFPU, después.
+  Paired singles, aparcados.
 - Autotest: como mucho 4 registros y un `.capturas.txt` (el usuario no
   puede mandar más de 5 archivos en un mensaje). Siguiente también: las peleas (leer vértices: `round_to_screen`, la división por
   w y tres conversiones a entero por la memoria, IPC 0,66; los índices CI8
