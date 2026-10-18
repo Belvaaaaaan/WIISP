@@ -1808,6 +1808,37 @@ usuario): sin (`cpu_vfpu_arit` 0), con, verif (`cpu_vfpu_verificar`) y
 capturas (con `capturas 400` y `prof_cpu`, para contar las tarjetas);
 todas con `prof_pmc`, `prof_tirones` y ventanas de 600 vblanks.
 
+### Resultado de la 0.5.18.1 en el Wii (DBZ, sin / con / verif / capturas)
+
+Las cuatro corridas ejecutan lo mismo que las anteriores; verif:
+51.172.850 tarjetas de la VFPU comparadas con `vfpu_exec`, todas iguales;
+las 12 huellas de las capturas, las de siempre.
+
+| Corrida | Real | Velocidad | Ciclos / instr. PSP | Instr. Broadway / instr. PSP | CPU |
+|---|---|---|---|---|---|
+| sin (`cpu_vfpu_arit` 0) | 104,3 s | 80,7 % | 27,09 | 24,69 | 49,9 s |
+| con | 102,7 s | 82,0 % | 26,21 | 23,66 | 48,2 s |
+| verif | 255,3 s | 33,0 % | 109,04 | 135,59 | 200,9 s |
+| capturas (+ `prof_cpu`) | 106,3 s | 79,2 % | 26,76 | 24,90 | 49,2 s |
+
+- −1,6 s frente a "sin" (−3,2 % de ciclos); escena pesada de 32,4 a 31,0
+  ciclos, de 37,5 a 38,1 %. Desde la 0.5.17.2 (106,2 s) van −3,5 s.
+- "sin" (lo mismo que "con" de la 0.5.18) sale 0,4 ciclos peor que en la
+  0.5.18 (27,09 frente a 26,67; escena pesada 32,4 frente a 32,0): o es
+  ruido o el bucle más grande (18,9 KB) cuesta algo en la caché de
+  instrucciones. Vigilarlo.
+- VFPU por `vfpu_exec`: de 39,7 M instrucciones (9,0 s) en la 0.5.18 a
+  18,7 M (4,4 s); en la escena pesada va por tarjeta el 69 % (14,0 de 20,2
+  M por ventana) y lo que queda cuesta ~250 ns por instrucción (vtfm,
+  vdot, conversiones, con prefijos...).
+- En la compilación del Wii (devkitPPC, `-ffp-contract=fast` por defecto)
+  no hay ni una `fmadds` en `vfpu.o` ni en `predec.o`: llevar vdot, vtfm,
+  vhdp, vmmul a tarjetas es posible, compilando los dos con
+  `-ffp-contract=off` para que siga así.
+- Paired singles (parte c): poca ganancia esperada (lo caro de las tarjetas
+  aritméticas son las cargas por la tabla de índices, `flush` y `canon` por
+  componente, no la operación), solo se verifica en el Wii; se aparca.
+
 ### Para el siguiente chat (empezar aquí)
 
 Metodología acordada (detalle en `docs/HOJA_DE_RUTA.md`): primero medir
@@ -1828,9 +1859,10 @@ Metodología acordada (detalle en `docs/HOJA_DE_RUTA.md`): primero medir
   (0.5.18.1).
 - Herramientas para medir sin el Wii (banco de qemu con el código de
   devkitPPC, perfil por función, psq_l emulado, A/B): `tools/banco/LEEME.md`.
-- **Siguiente: el resultado de la 0.5.18.1 en el Wii** (sin frente a con,
-  verif sin diferencias, capturas iguales); después la parte c (paired
-  singles, solo verificable en el Wii) o 0.5.19 `cpu_enlace`.
+- **Siguiente: decidir entre** 0.5.19 `cpu_enlace` (más la tarjeta de los
+  stubs `jr`+`syscall`) y la parte b2 de la VFPU (vdot, vtfm, vhdp, vmmul,
+  vcmp y las conversiones, con `[STATS]` más fino para las conversiones).
+  Paired singles, aparcados (ver "Resultado de la 0.5.18.1").
 - Autotest: como mucho 4 registros y un `.capturas.txt` (el usuario no
   puede mandar más de 5 archivos en un mensaje). Siguiente también: las peleas (leer vértices: `round_to_screen`, la división por
   w y tres conversiones a entero por la memoria, IPC 0,66; los índices CI8
