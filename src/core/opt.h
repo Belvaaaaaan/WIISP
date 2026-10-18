@@ -85,6 +85,8 @@ enum {
 	OPT_PREDEC_SIN_UNIR,  /* el bucle compilado sin unir los finales de las
 	                         tarjetas (-fno-crossjumping) */
 	OPT_PREDEC_MEM1,      /* los bloques en MEM1 (reservada al arrancar) */
+	OPT_CPU_VFPU_TARJETAS,   //Arreglo
+	OPT_CPU_VFPU_VERIFICAR,   //Arreglo
 	OPT_CPU_FUSION,       /* 2.3 especializar y fusionar */
 	OPT_HLE_RAPIDO,       /* 2.4a camino mínimo de CpuSuspendIntr y Memcpy */
 	OPT_HLE_REEMPLAZO,    /* 2.4b reemplazo de funciones por hash */

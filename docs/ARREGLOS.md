@@ -5,6 +5,34 @@ la 0.5.17.2; antes se marcaban con `//arreglo`). Aquí va, por versión, qué
 se arregló o cambió y una descripción breve. El detalle está en
 `docs/CONTINUAR.md`.
 
+## 0.5.18
+
+- `cpu/predec.c`, `cpu/predec_bucle.h`: tarjetas propias para `lv.s`,
+  `sv.s`, `lv.q`, `sv.q` (columnas y filas por separado), `mtv` y `mfv`
+  (`cpu_vfpu_tarjetas`, encendido). Copian los 32 bits tal cual; con el
+  contexto de la VFPU sin cargar, la dirección desalineada o fuera de la
+  RAM o una máscara del prefijo D pendiente (`lv.q`) van a `vfpu_exec` como
+  antes. `sv.s` y `sv.q` avisan al mapa de código como `sw`. Siguen
+  contando en `[STATS]` igual que `vfpu_exec`.
+- `cpu/predec.c`: `cpu_vfpu_verificar` (apagado): cada una de esas
+  instrucciones se hace con la tarjeta, se deshace, se hace con
+  `vfpu_exec` y se comparan registros, VFPU y memoria; las diferencias van
+  al registro (`[PREDEC] tarjeta VFPU distinta`).
+- `cpu/predec.c`: cambiar `cpu_vfpu_tarjetas` o `cpu_vfpu_verificar` vacía
+  los bloques.
+- `cpu/vfpu.c`, `cpu/vfpu.h`: `vfpu_stat_now` visible para las tarjetas.
+- `hle/hle.c`: "VFPU en tarjetas propias" en "CPU por dentro" (con
+  `prof_cpu`) y línea `cpu_vfpu_verificar`.
+- `tests/test_interp.c`: programas aleatorios con `lv.q`/`sv.q`,
+  `mtv`/`mfv`/`mfvc`/`mtvc` y prefijos D; `sv.s` y `sv.q` sobre el propio
+  código; contexto de la VFPU sin cargar; cada programa con tarjetas, sin
+  ellas y con verificación; se comparan también los recuentos de la VFPU
+  y `vfpu_live`. Casos dirigidos: `sv.q` y `sv.s` que reescriben su
+  bloque, máscara del prefijo D y contexto sin cargar.
+- `tools/banco/vfpu_banco.c` y `BANCO=` en `medir_cpu.sh`: banco de la
+  VFPU con el costo por instrucción de la VFPU.
+- `hle/hle.h`: versión 0.5.18.
+
 ## 0.5.17.2
 
 - `core/opt.c`: `predec_sin_unir` pasa a 0 por defecto (en el Wii empeoraba

@@ -200,6 +200,13 @@ cuentan al medir (`prof_cpu`); `prof_bloques` (instrucciones por bloque
 ejecutado y qué cae al intérprete de siempre) y `prof_ventana_juego`
 (informes cada N vblanks de juego). Detalle en docs/CONTINUAR.md.
 
+Hecha (v0.5.18): 2.6, primera parte, `cpu_vfpu_tarjetas`: tarjetas propias
+para lv.s, sv.s, lv.q, sv.q, mtv y mfv (43 % de las instrucciones VFPU de
+DBZ), idénticas bit a bit a `vfpu_exec` y comprobables en el Wii con
+`cpu_vfpu_verificar`. En el banco de qemu, de 164 a 45 instrucciones del
+Broadway por instrucción VFPU. Siguen la aritmética simple (b) y los
+paired singles (c).
+
 Primera tanda acordada (todas "más barato", verificables en el PC):
 0.1 `prof_espera`, **skinning rápido** (`ge_skin_rapido`), **matrices al
 cambiar** (`ge_mtx_cache`), **color constante** (`ge_color_const`), 2.1

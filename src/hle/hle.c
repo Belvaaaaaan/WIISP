@@ -805,6 +805,10 @@ static void profile_report(const char *why, int forzar){   //Arreglo
 		        p.arena_usada / 1024, p.arena_total / 1024, (unsigned long long)(p.vaciados - b->vaciados),
 		        opt_on[OPT_CPU_VERIFICAR] ? (p.verif_viejos ? "; cpu_verificar: HAY BLOQUES VIEJOS ([PREDEC] en el registro)"
 		                                                    : "; cpu_verificar: ningun bloque viejo") : "");
+		if(opt_on[OPT_CPU_VFPU_VERIFICAR])   //Arreglo
+			hle_log("[TIEMPOS] cpu_vfpu_verificar: %llu tarjetas de la VFPU comparadas con vfpu_exec, %s\n",
+			        (unsigned long long)(p.vfpu_verif - b->vfpu_verif),
+			        p.vfpu_verif_mal ? "HAY DIFERENCIAS ([PREDEC] en el registro)" : "todas iguales");   //Arreglo
 		//arreglo
 		/* La CPU por dentro (muestreo) y dónde está cada cosa (0x80... es
 		   MEM1 y 0x90... MEM2 en el Wii) */
@@ -828,6 +832,9 @@ static void profile_report(const char *why, int forzar){   //Arreglo
 					n2 += (size_t)snprintf(l2 + n2, sizeof(l2) - n2, " (%llu, %.0f ns cada una)", (unsigned long long)cuenta[k],
 					                       1e9 * cpu_s * f / (double)cuenta[k]);
 			}
+			if(opt_on[OPT_PROF_CPU])   //Arreglo
+				n2 += (size_t)snprintf(l2 + n2, sizeof(l2) - n2, "; VFPU en tarjetas propias %llu",
+				                       (unsigned long long)(p.vfpu_tarjetas - b->vfpu_tarjetas));   //Arreglo
 			snprintf(l2 + n2, sizeof(l2) - n2, "; memoria: bloques en %08X%s (%u de %u KB), frio en %08X (%u de %u KB), "
 			         "tabla en %08X, mapa en %08X, RAM de la PSP en %08X", (unsigned)p.dir_arena,
 			         p.compacto ? " compactos" : "", p.arena_usada / 1024, p.arena_total / 1024, (unsigned)p.dir_frio,

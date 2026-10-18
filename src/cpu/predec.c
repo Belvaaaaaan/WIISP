@@ -84,6 +84,7 @@ enum {
 	OP_BEQ, OP_BNE, OP_BLEZ, OP_BGTZ, OP_BLTZ, OP_BGEZ, OP_BLTZAL, OP_BGEZAL,
 	OP_BEQL, OP_BNEL, OP_BLEZL, OP_BGTZL, OP_BLTZL, OP_BGEZL, OP_BLTZALL, OP_BGEZALL,
 	OP_J, OP_JAL, OP_JR, OP_JALR, OP_BC1, OP_BV,
+	OP_LVS, OP_SVS, OP_LVQ, OP_SVQ, OP_LVQT, OP_SVQT, OP_MFV, OP_MTV, OP_VFPU_V,   //Arreglo
 	OP_END, OP_BEND,
 	OP_N
 };
@@ -106,6 +107,7 @@ static u8 *reserva;              /* la de MEM1 (predec_mem1), si el anfitrión l
 static u32 reserva_tam;
 static int copia = -1;           /* qué copia del bucle llenó h_tab */
 static u8 medir;   //Arreglo
+static u8 vt_on, vt_verif;   //Arreglo
 
 #define FRIO(b) ((Frio *)(frio_base + (b)->c[(b)->n].a.w))   //arreglo
 
@@ -204,9 +206,12 @@ int cpu_predec_tarjetas_ok(void){
 //arreglo
 /* Las arenas según predec_compacto y predec_mem1; si cambian, todo fuera */
 static int predec_config(void){
-	u8 want = (u8)(opt_on[OPT_PREDEC_COMPACTO] | (opt_on[OPT_PREDEC_MEM1] && reserva ? 2 : 0));
+	u8 want = (u8)(opt_on[OPT_PREDEC_COMPACTO] | (opt_on[OPT_PREDEC_MEM1] && reserva ? 2 : 0) |
+	               (opt_on[OPT_CPU_VFPU_TARJETAS] ? 4 : 0) | (opt_on[OPT_CPU_VFPU_VERIFICAR] ? 8 : 0));   //Arreglo
 	if(likely(want == conf)) return arena != NULL;
 	conf = want;
+	vt_on = (want >> 2) & 1;   //Arreglo
+	vt_verif = (want >> 3) & 1;   //Arreglo
 	if(!zona_head){
 		zonas = psp_mem.ram_size >> PREDEC_ZONA_BITS;
 		if(zonas > sizeof(cpu_code_map)) return 0;
@@ -256,6 +261,36 @@ static void card_b(Card *cd, int op, u32 d, u32 s, u32 t, u32 sa){
 	cd->a.r.d = (u8)d; cd->a.r.s = (u8)(s * 4); cd->a.r.t = (u8)(t * 4); cd->a.r.sa = (u8)sa;
 }
 static int nop(Card *cd){ card_w(cd, OP_NOP, 0); return K_NORMAL; }
+
+//Arreglo
+static int decode_vfpu(u32 w, Card *cd){
+	const u32 op = w >> 26, rs = RS_(w), rt = RT_(w);
+	switch(op){
+	case 0x32: case 0x3A:
+		card_i(cd, op == 0x32 ? OP_LVS : OP_SVS, rs, 0, w & 0xFFFC);
+		cd->a.i.t = (u8)VFPU_INDEX(rt | ((w & 3) << 5));
+		return op == 0x32 ? OP_LVS : OP_SVS;
+	case 0x36: case 0x3E: {
+		const int k = (w & 1) ? (op == 0x36 ? OP_LVQT : OP_SVQT) : (op == 0x36 ? OP_LVQ : OP_SVQ);
+		card_i(cd, k, rs, 0, w & 0xFFFC);
+		cd->a.i.t = (u8)(((rt << 2) & 0x70) + ((w & 1) ? (rt & 3) : (rt & 3) * 4));
+		return k;
+	}
+	case 0x12:
+		if(w & 0x80) return 0;
+		if(rs == 3 && rt){ card_i(cd, OP_MFV, 0, rt, (u32)VFPU_INDEX(w & 0x7F) * 4); return OP_MFV; }
+		if(rs == 7){ card_i(cd, OP_MTV, rt, 0, (u32)VFPU_INDEX(w & 0x7F) * 4); return OP_MTV; }
+		return 0;
+	}
+	return 0;
+}
+
+//Arreglo
+static int vfpu_card(u32 w, Card *cd){
+	if(!vt_on || !decode_vfpu(w, cd)) return 0;
+	if(vt_verif) card_w(cd, OP_VFPU_V, w);
+	return 1;
+}
 
 /* La tarjeta de una instrucción; *target, el destino de un salto fijo */
 static int decode(u32 w, u32 ipc, Card *cd, u32 *target){
@@ -360,6 +395,7 @@ static int decode(u32 w, u32 ipc, Card *cd, u32 *target){
 		}
 	case 0x12:
 		if(rs == 8){ card_b(cd, OP_BV, (w >> 18) & 7, 0, 0, rt & 3); return K_SALTO; }
+		if(vfpu_card(w, cd)) return K_NORMAL;   //Arreglo
 		card_w(cd, OP_VFPU, w);   //arreglo
 		return K_NORMAL;
 	case 0x1C:
@@ -416,6 +452,7 @@ static int decode(u32 w, u32 ipc, Card *cd, u32 *target){
 	case 0x39: card_i(cd, OP_SWC1, rs, rt, imm); return K_NORMAL;
 	case 0x18: case 0x19: case 0x1B: case 0x32: case 0x34: case 0x35: case 0x36:
 	case 0x37: case 0x3A: case 0x3C: case 0x3D: case 0x3E: case 0x3F:
+		if(vfpu_card(w, cd)) return K_NORMAL;   //Arreglo
 		card_w(cd, OP_VFPU, w);   //arreglo
 		return K_NORMAL;
 	default: return K_PARA;
@@ -552,6 +589,84 @@ static void lenta_store(u32 addr, u32 size, u32 v, u32 instr){
 	prof_cpu_phase = CPF_LENTA;
 	cpu_slow_store(addr, size, v, instr);
 	prof_cpu_phase = CPF_TARJETAS;
+}
+
+//Arreglo
+static inline __attribute__((always_inline)) int vfpu_tarjeta(int k, const Card *c, u8 *r8, u8 *ram, u32 lim4){
+	u32 a, o, *v;
+	if(unlikely(!vfpu_live)) return 0;
+	if(k == OP_MFV){ *(u32 *)(r8 + c->a.i.t) = *(const u32 *)((const u8 *)vfpu.vi + (u16)c->a.i.imm); return 1; }
+	if(k == OP_MTV){ *(u32 *)((u8 *)vfpu.vi + (u16)c->a.i.imm) = *(const u32 *)(r8 + c->a.i.s); return 1; }
+	a = *(const u32 *)(r8 + c->a.i.s) + (u32)(s32)c->a.i.imm;
+	o = (a & PSP_ADDR_MASK) - PSP_RAM_BASE;
+	switch(k){
+	case OP_LVS:
+		if((a & 3) || o >= lim4) return 0;
+		vfpu.vi[c->a.i.t] = rd_le32(ram + o);
+		return 1;
+	case OP_SVS:
+		if((a & 3) || o >= lim4) return 0;
+		wr_le32(ram + o, vfpu.vi[c->a.i.t]);
+		if(unlikely(cpu_code_map[o >> PREDEC_ZONA_BITS])){ cpu_predec_store(o, 4); return 2; }
+		return 1;
+	case OP_LVQ: case OP_LVQT: {
+		const u32 p = k == OP_LVQ ? 1 : 4;
+		if((a & 15) || o >= lim4 - 12 || (vfpu.ctrl[VFPU_CTRL_DPREFIX] & 0xF00)) return 0;
+		v = vfpu.vi + c->a.i.t;
+		v[0] = rd_le32(ram + o);
+		v[p] = rd_le32(ram + o + 4);
+		v[2 * p] = rd_le32(ram + o + 8);
+		v[3 * p] = rd_le32(ram + o + 12);
+		return 1;
+	}
+	case OP_SVQ: case OP_SVQT: {
+		const u32 p = k == OP_SVQ ? 1 : 4;
+		if((a & 15) || o >= lim4 - 12) return 0;
+		v = vfpu.vi + c->a.i.t;
+		wr_le32(ram + o, v[0]);
+		wr_le32(ram + o + 4, v[p]);
+		wr_le32(ram + o + 8, v[2 * p]);
+		wr_le32(ram + o + 12, v[3 * p]);
+		if(unlikely(cpu_code_map[o >> PREDEC_ZONA_BITS])){ cpu_predec_store(o, 16); return 2; }
+		return 1;
+	}
+	}
+	return 0;
+}
+
+//Arreglo
+static void vfpu_verificar_una(u32 w, u32 pc, u32 lim4){
+	static VfpuState v0, v1;
+	u32 r0[32], r1[32], a, o = 0, n = 0;
+	u8 m0[16], m1[16];
+	Card t;
+	const int k = decode_vfpu(w, &t);
+	int res;
+	if(k == OP_SVS || k == OP_SVQ || k == OP_SVQT){
+		n = k == OP_SVS ? 4 : 16;
+		a = cpu.r[RS_(w)] + (u32)(s32)(s16)(w & 0xFFFC);
+		o = (a & PSP_ADDR_MASK) - PSP_RAM_BASE;
+		if((a & (n - 1)) || o >= lim4 + 4 - n) n = 0;
+		if(n) memcpy(m0, psp_mem.ram + o, n);
+	}
+	v0 = vfpu;
+	memcpy(r0, cpu.r, sizeof(r0));
+	res = k ? vfpu_tarjeta(k, &t, (u8 *)cpu.r, psp_mem.ram, lim4) : 0;
+	if(res){
+		v1 = vfpu;
+		memcpy(r1, cpu.r, sizeof(r1));
+		if(n){ memcpy(m1, psp_mem.ram + o, n); memcpy(psp_mem.ram + o, m0, n); }
+		vfpu = v0;
+		memcpy(cpu.r, r0, sizeof(r0));
+	}
+	vfpu_exec(w, pc);
+	if(!res) return;
+	st.vfpu_verif++;
+	if(memcmp(&v1, &vfpu, sizeof(v1)) || memcmp(r1, cpu.r, sizeof(r1)) || (n && memcmp(m1, psp_mem.ram + o, n))){
+		if(st.vfpu_verif_mal < 16)
+			hle_log_quiet("[PREDEC] tarjeta VFPU distinta de vfpu_exec en %08X (%08X)\n", pc, w);
+		st.vfpu_verif_mal++;
+	}
 }
 
 //Arreglo

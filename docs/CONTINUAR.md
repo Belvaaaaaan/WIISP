@@ -1653,6 +1653,77 @@ capturas con las de la 0.5.17.1 (pedir su `.capturas.txt`).
   la VFPU, ~4 s); 0.5.19 `cpu_enlace` más la tarjeta de los stubs y quizá
   una pila de retornos; medir leer vértices por partes (`prof_vertices`,
   16 s); histograma de syscalls (`prof_hle`).
+- Huellas de las capturas de la corrida "capturas" (cuadros 400 a 4800, de
+  400 en 400): 9E8BC705 BCED373F 01FB6F73 59DF52DF 42533F39 8F6D7AF0
+  B0BE5CCA 5219B693 0432AB0C 8B0AF11D 1C1E13BE E9392291.
+
+### v0.5.18: tarjetas propias para la VFPU, parte a (`cpu_vfpu_tarjetas`, 2.6)
+
+Antes, cada instrucción VFPU del predecodificado ponía al día el estado
+global (pc, reloj, contadores de 64 bits) y llamaba a `vfpu_exec`: contexto
+cargado, decodificar, contar, `op_svq` (no en línea), `mem_ptr_r`,
+`write_vector` con la tabla `vidx` y la máscara del prefijo D; al volver,
+¿parar?, ¿bloque vivo? En el banco de qemu, 164 instrucciones del Broadway
+por instrucción VFPU (~120-130 ciclos en el Wii).
+
+Ahora `lv.s`, `sv.s`, `lv.q`, `sv.q`, `mtv` y `mfv` tienen tarjeta propia
+(`cpu_vfpu_tarjetas`, encendido):
+- Operandos ya preparados: registro base, desplazamiento con signo y el
+  índice en `vfpu.vi` (lv.s/sv.s), o el de la primera componente
+  (lv.q/sv.q: en una cuádrupla el registro siempre empieza en la fila 0,
+  así que las componentes van seguidas en una columna y de 16 en 16 bytes
+  en una fila; dos tarjetas, `LVQ`/`SVQ` y `LVQT`/`SVQT`). `mtv`/`mfv`
+  con el desplazamiento en bytes de los dos registros.
+- Camino rápido: contexto de la VFPU cargado, RAM, dirección alineada (4
+  o 16) y, en lv.q, sin máscara del prefijo D pendiente. Si no, la misma
+  llamada a `vfpu_exec` de antes (con la instrucción de lo frío), con sus
+  fallos, la carga perezosa del contexto, la VRAM y el scratchpad. `mfv`
+  a `$zero` (barrera) y `mfvc`/`mtvc` siguen por `vfpu_exec`.
+- Copian los 32 bits tal cual (no pasan por `float`). `sv.s`/`sv.q` avisan
+  al mapa de código como `sw` y salen si tiraron su bloque. Cuentan en
+  `vfpu_stat_now` igual que `vfpu_exec`: `[STATS]` no cambia.
+- `cpu_vfpu_verificar` (apagado, para el Wii): esas instrucciones van por
+  una tarjeta que hace la cuenta con la tarjeta, la deshace, la repite con
+  `vfpu_exec` y compara registros, VFPU entera y memoria; si algo difiere,
+  `[PREDEC] tarjeta VFPU distinta de vfpu_exec en PC (instrucción)` (16
+  como mucho) y la línea `[TIEMPOS] cpu_vfpu_verificar: N tarjetas ...`.
+- Con `prof_cpu`, "CPU por dentro" dice cuántas fueron por tarjeta propia;
+  las que van por `vfpu_exec` siguen contando como VFPU.
+
+Medido: banco de qemu con un programa nuevo de la VFPU
+(`BANCO=vfpu_banco.c tools/banco/medir_cpu.sh`): de 164 a 45 instrucciones
+del Broadway por instrucción VFPU (la primera versión, con el bucle de 4
+componentes y la tabla de índices, daba 52: el bucle usaba el CTR del
+salto a la siguiente tarjeta). En el PC el mismo programa pasa de 142 a
+391 MIPS. `cpu_banco` sigue en 17,3; cachegrind sin cambios (no tiene
+VFPU). El bucle unido crece de 12,0 a 14,4 KB.
+
+Verificación: test_interp con lv.q/sv.q (alineadas y, en los programas
+con fallos, desalineadas), mtv/mfv/mfvc/mtvc (también a `$zero`), prefijos
+D con máscara, `sv.s`/`sv.q` sobre el propio código y el contexto de la
+VFPU sin cargar en uno de cada cinco programas; cada programa con
+tarjetas, sin ellas y con `cpu_vfpu_verificar` (202.860 verificadas,
+ninguna distinta); se comparan también los recuentos de la VFPU y
+`vfpu_live`. Casos dirigidos: `sv.q` y `sv.s` que reescriben su propio
+bloque, máscara del prefijo D (cae a `vfpu_exec`) y contexto sin cargar.
+Mutaciones detectadas (13 de 15; las otras dos son equivalentes): sin
+mirar la máscara, sin avisar al mapa de código (sv.q y sv.s), índice de
+lv.s sin `VFPU_INDEX`, bit alto de lv.q mal, alineación de 4 en vez de
+16, `mfv` a `$zero` con tarjeta, recuento en otra casilla, sin mirar el
+contexto cargado, filas con paso de columna, columna y fila cambiadas,
+paso de sv.q cambiado, cambiar `cpu_vfpu_tarjetas` sin vaciar; la
+verificación misma ve los índices mal (decenas de miles de diferencias).
+Huellas de test_vdec sin cambios (x86 4D4A1D8B, PowerPC 0657B177,
+devkitPPC B3A2BCD3); `build_tests_dkp.sh` sin fallos; pspautotests
+275/275; A/B de `cpu_vfpu_tarjetas` en las 572 (solo `malloc` y savedata
+en paralelo; de una en una, iguales); `cpu_vfpu_verificar` en las 572:
+ninguna diferencia (26 usan la VFPU); tests/guest 22/22; recarga con ASan.
+
+Autotest (DBZ, todas con `prof_pmc`, `prof_tirones`, `prof_ventana_juego`
+y `ventana 600`, sin capturas salvo la última): sin (`cpu_vfpu_tarjetas`
+0), con (1), cpu (1 y `prof_cpu`: cuántas van por tarjeta), verif (1 y
+`cpu_vfpu_verificar`) y capturas (1 con `capturas 400`: tienen que dar las
+huellas de la 0.5.17.2 de arriba).
 
 ### Para el siguiente chat (empezar aquí)
 
@@ -1670,12 +1741,13 @@ Metodología acordada (detalle en `docs/HOJA_DE_RUTA.md`): primero medir
   (0.5.15), la recarga, `registro_hilo`, `gx_paralelo` y `prof_es`
   (0.5.16), 2.2 `cpu_predec` (0.5.17), la memoria del predecodificado y
   las medidas de la CPU (0.5.17.1), medidas por tiempo de juego, `prof_cpu`
-  y `prof_bloques` (0.5.17.2).
+  y `prof_bloques` (0.5.17.2), tarjetas VFPU parte a (0.5.18).
 - Herramientas para medir sin el Wii (banco de qemu con el código de
   devkitPPC, perfil por función, psq_l emulado, A/B): `tools/banco/LEEME.md`.
-- **Siguiente: 0.5.18, tarjetas VFPU** (parte a: lv.s, lv.q, sv.s, sv.q,
-  mtv, mfv) y después 0.5.19 `cpu_enlace`, según "Resultado de la 0.5.17.2
-  en el Wii". Siguiente también: las peleas (leer vértices: `round_to_screen`, la división por
+- **Siguiente: el resultado de la 0.5.18 en el Wii** (sin frente a con,
+  verif sin diferencias, capturas iguales a las de la 0.5.17.2); después la
+  parte b de las tarjetas VFPU (aritmética simple en C) o 0.5.19
+  `cpu_enlace`, según lo que midan las corridas. Siguiente también: las peleas (leer vértices: `round_to_screen`, la división por
   w y tres conversiones a entero por la memoria, IPC 0,66; los índices CI8
   con dcbt) y, con lo que mida `prof_es`, las lecturas del disco. Juntar
   llamadas (`ge_charolas`, 1.4) sigue aparte. Otros candidatos medidos:

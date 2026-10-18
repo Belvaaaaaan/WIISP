@@ -54,7 +54,7 @@ const char *const vfpu_stat_name[VS_COUNT] = {
 #define VSTAT(x) (vfpu_stat_now[x]++)
 /* Contadores de 32 bits (un u64 son seis instrucciones en el Broadway); se
    pasan a vfpu_stat en cada frame con vfpu_stats_fold() */
-static u32 vfpu_stat_now[VS_COUNT];
+u32 vfpu_stat_now[VS_COUNT];   //Arreglo
 u32 vfpu_stat_bv;
 #define NOINLINE __attribute__((noinline))
 

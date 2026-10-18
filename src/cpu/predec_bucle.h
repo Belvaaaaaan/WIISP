@@ -45,6 +45,7 @@ PREDEC_ATRIB static u32 PREDEC_BUCLE(u32 max_cycles){   //arreglo
 			&&L_BEQ, &&L_BNE, &&L_BLEZ, &&L_BGTZ, &&L_BLTZ, &&L_BGEZ, &&L_BLTZAL, &&L_BGEZAL,
 			&&L_BEQL, &&L_BNEL, &&L_BLEZL, &&L_BGTZL, &&L_BLTZL, &&L_BGEZL, &&L_BLTZALL, &&L_BGEZALL,
 			&&L_J, &&L_JAL, &&L_JR, &&L_JALR, &&L_BC1, &&L_BV,
+			&&L_LVS, &&L_SVS, &&L_LVQ, &&L_SVQ, &&L_LVQT, &&L_SVQT, &&L_MFV, &&L_MTV, &&L_VFPU_V,   //Arreglo
 			&&L_END, &&L_BEND
 		};
 		memcpy(h_tab, labels, sizeof(h_tab));
@@ -219,6 +220,15 @@ x_likely_nt:
 	left++;
 	goto link_end;
 
+x_vfpu:   //Arreglo
+	SYNC_AT();   //Arreglo
+	CONTAR(st.vfpu++);   //Arreglo
+	FASE(CPF_VFPU);   //Arreglo
+	vfpu_exec(RAW(), IPC());   //Arreglo
+	FASE(CPF_TARJETAS);   //Arreglo
+	if(unlikely(cpu_stop_requested || !cblk->alive)) goto x_after;   //Arreglo
+	{ const void *n_ = c[1].h; c++; goto *n_; }   //Arreglo
+
 after_call:
 	/* Vuelta del HLE, como en cpu_run */
 	pc = cpu.pc;
@@ -383,6 +393,33 @@ ret:
 		FASE(CPF_TARJETAS);   //Arreglo
 		if(unlikely(cpu_stop_requested || !cblk->alive)) goto x_after;
 	})
+#define VTARJ(name, vs) L_##name: { \
+		const void *n_ = c[1].h; \
+		const int r_ = vfpu_tarjeta(OP_##name, c, r8, ram, lim4); \
+		if(unlikely(!r_)) goto x_vfpu; \
+		vfpu_stat_now[vs]++; \
+		CONTAR(st.vfpu_tarjetas++); \
+		if(r_ == 2 && !cblk->alive) goto x_after; \
+		c++; \
+		goto *n_; \
+	}   //Arreglo
+	VTARJ(LVS, VS_LV)   //Arreglo
+	VTARJ(SVS, VS_SV)   //Arreglo
+	VTARJ(LVQ, VS_LVQ)   //Arreglo
+	VTARJ(SVQ, VS_SVQ)   //Arreglo
+	VTARJ(LVQT, VS_LVQ)   //Arreglo
+	VTARJ(SVQT, VS_SVQ)   //Arreglo
+	VTARJ(MFV, VS_MFV)   //Arreglo
+	VTARJ(MTV, VS_MTV)   //Arreglo
+#undef VTARJ   //Arreglo
+	L_VFPU_V: {   //Arreglo
+		SYNC_AT();   //Arreglo
+		FASE(CPF_VFPU);   //Arreglo
+		vfpu_verificar_una(c->a.w, IPC(), lim4);   //Arreglo
+		FASE(CPF_TARJETAS);   //Arreglo
+		if(unlikely(cpu_stop_requested || !cblk->alive)) goto x_after;   //Arreglo
+		{ const void *n_ = c[1].h; c++; goto *n_; }   //Arreglo
+	}   //Arreglo
 	L_SYSCALL:
 		cpu.llbit = 0;
 		SYNC_AT();

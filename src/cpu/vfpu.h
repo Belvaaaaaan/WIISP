@@ -63,6 +63,7 @@ extern u64 vfpu_stat[VS_COUNT];
 extern const char *const vfpu_stat_name[VS_COUNT];
 void vfpu_stats_fold(void);   /* pasa los contadores rápidos a vfpu_stat */
 extern u32 vfpu_stat_bv;      /* bvf/bvt, los cuenta el intérprete */
+extern u32 vfpu_stat_now[VS_COUNT];   //Arreglo
 
 /* Funciones de la VFPU, exactas al hardware (para pruebas) */
 float vfpu_sin(float x);
