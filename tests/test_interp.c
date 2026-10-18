@@ -123,6 +123,11 @@ static u32 gen(u32 *code, u32 i, int faults, int bad29){
 	u32 f, op;
 
 	if(faults && !rn(48)){ code[i] = gen_fault(i, bad29); return 1; }
+	if(faults && !rn(40) && i + 1 < NPROG){   //Arreglo
+		code[i] = rn(2) ? rtype(0, 30 + rn(2), 0, 0, 0, 0x08) : itype(PICK(bops), sreg(), sreg(), boff(i));   //Arreglo
+		code[i + 1] = (rn(0x100000) << 6) | 0x0C;   //Arreglo
+		return 2;   //Arreglo
+	}   //Arreglo
 	if(smc && !rn(10)){
 		/* Un nop (sw de $zero) o basura (otro registro) en una instrucción
 		   del programa, delante o detrás */
@@ -400,10 +405,13 @@ static void one_program(int prog, int faults, Snap *init, Snap *ra, Snap *rb, Sn
 		opt_on[OPT_PROF_BLOQUES] = (u8)(((k >> 1) ^ prog) & 1 & (prog >> 3));   //Arreglo
 		opt_on[OPT_CPU_VFPU_TARJETAS] = (u8)(k >> 2 != 1);   //Arreglo
 		opt_on[OPT_CPU_VFPU_ARIT] = (u8)(k >> 2 == 2 || (k >> 2 == 0 && !(prog & 2)));   //Arreglo
+		opt_on[OPT_CPU_ENLACE] = (u8)((k + prog) % 3 != 0);   //Arreglo
+		opt_on[OPT_CPU_SYSCALL_SLOT] = (u8)((k + prog / 3) % 2);   //Arreglo
 		opt_on[OPT_CPU_VFPU_VERIFICAR] = (u8)(k >> 2 == 2);   //Arreglo
 		put(init);
 		run_chunks(rc, chunks, 2);
 		CHECK(same(ra, rc, prog));
+		CHECK(cpu_predec_enlaces_ok());   //Arreglo
 	}
 }
 
@@ -414,6 +422,7 @@ void test_interp(void){
 	const u8 saved_pc = opt_on[OPT_PROF_CPU], saved_pb = opt_on[OPT_PROF_BLOQUES];   //Arreglo
 	const u8 saved_vt = opt_on[OPT_CPU_VFPU_TARJETAS], saved_vv = opt_on[OPT_CPU_VFPU_VERIFICAR];   //Arreglo
 	const u8 saved_va = opt_on[OPT_CPU_VFPU_ARIT];   //Arreglo
+	const u8 saved_en = opt_on[OPT_CPU_ENLACE], saved_sc = opt_on[OPT_CPU_SYSCALL_SLOT];   //Arreglo
 	const int saved_intr = hle_get_intr_enabled(), saved_live = vfpu_live;
 	u64 total = 0;
 	int p, err_fd, k;   //arreglo
@@ -506,6 +515,32 @@ void test_interp(void){
 		cpu_run(60);
 		CHECK_EQ(cpu.r[3], 1010u);
 		CHECK_EQ(cpu.r[2], 20u);
+	}
+	//Arreglo
+	{
+		const u32 A = 0x08A00E00u, B = 0x08A01400u;
+		const u8 sv = opt_on[OPT_CPU_VERIFICAR];
+		u32 *wb = (u32 *)mem_ptr(B, 4);
+		cpu_predec_flush();
+		opt_on[OPT_CPU_ENLACE] = 1;
+		opt_on[OPT_CPU_VERIFICAR] = 0;
+		mem_write32(A, itype(0x09, 2, 2, 1));
+		mem_write32(A + 4, (2u << 26) | (B >> 2));
+		mem_write32(A + 8, 0);
+		mem_write32(B, itype(0x09, 3, 3, 1));
+		mem_write32(B + 4, (2u << 26) | (A >> 2));
+		mem_write32(B + 8, 0);
+		memset(&cpu, 0, sizeof(cpu));
+		cpu.pc = A;
+		cpu.npc = A + 4;
+		cpu_run(60);
+		CHECK_EQ(cpu.r[3], 10u);
+		wr_le32(wb, itype(0x09, 3, 3, 100));
+		opt_on[OPT_CPU_VERIFICAR] = 1;
+		cpu_run(60);
+		CHECK_EQ(cpu.r[3], 1010u);
+		CHECK_EQ(cpu.r[2], 20u);
+		opt_on[OPT_CPU_VERIFICAR] = sv;
 	}
 	/* Lo mismo cayendo al bloque siguiente (un branch likely no tomado al
 	   final de una zona) */
@@ -786,6 +821,8 @@ void test_interp(void){
 	opt_on[OPT_CPU_VFPU_TARJETAS] = saved_vt;   //Arreglo
 	opt_on[OPT_CPU_VFPU_VERIFICAR] = saved_vv;   //Arreglo
 	opt_on[OPT_CPU_VFPU_ARIT] = saved_va;   //Arreglo
+	opt_on[OPT_CPU_ENLACE] = saved_en;   //Arreglo
+	opt_on[OPT_CPU_SYSCALL_SLOT] = saved_sc;   //Arreglo
 	hle_set_intr_enabled(saved_intr);
 	vfpu_live = saved_live;
 	cpu_stop_requested = 0;

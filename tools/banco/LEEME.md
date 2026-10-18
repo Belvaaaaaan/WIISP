@@ -54,7 +54,9 @@ al repositorio), `gcc-powerpc-linux-gnu` y `qemu-user`. Las salidas van a
   un juego), restando una corrida de 20 vueltas a una de 40.
   `medir_cpu.sh --opt cpu_predec=0` es el intérprete de antes: 28,7;
   con `cpu_predec` (0.5.17): 17,4; 0.5.17.1: 17,5; 0.5.17.2: 17,3 (con
-  `--opt prof_cpu=1` 17,5; con `prof_bloques` 25,9).
+  `--opt prof_cpu=1` 17,5; con `prof_bloques` 25,9); 0.5.19 15,4 (con
+  `--opt cpu_enlace=0` 17,5: las tarjetas de salto cargan siempre el
+  sucesor).
   Con `BANCO=vfpu_banco.c` corre otro programa (`vfpu_banco.c`: lv.q y
   sv.q por columnas y filas, lv.s, sv.s, mtv y mfv) y da además las
   instrucciones por instrucción VFPU: 0.5.17.2 164; 0.5.18 45 (con

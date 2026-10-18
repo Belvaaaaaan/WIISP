@@ -5,6 +5,31 @@ la 0.5.17.2; antes se marcaban con `//arreglo`). Aquí va, por versión, qué
 se arregló o cambió y una descripción breve. El detalle está en
 `docs/CONTINUAR.md`.
 
+## 0.5.19
+
+- `cpu/predec.c`, `cpu/predec_bucle.h`: `cpu_enlace` (encendido). Las
+  tarjetas de salto con destino fijo eligen el bloque siguiente (`nbx`)
+  junto con el destino, y el cierre nuevo (`BENDD`) solo mira si ese bloque
+  sigue vivo y si cabe en el reloj. Los enlaces sin hacer apuntan a un
+  bloque nulo (nunca vivo). `jr`/`jalr` siguen por el cierre de siempre. Si
+  el delay slot es un nop, su tarjeta hace de cierre. Diseño propuesto en
+  otra conversación y comprobado aquí.
+- `cpu/predec.c`: `cpu_syscall_slot` (encendido): un `syscall` en el delay
+  slot de un salto (los stubs `jr ra` + `syscall` de las importaciones) ya
+  no corta el bloque ni pasa por el intérprete de siempre.
+- `cpu/predec_bucle.h`: con `cpu_verificar`, el cierre nuevo comprueba el
+  bloque al que va (antes los enlaces se apagaban al verificar).
+- `cpu/predec.c`, `cpu/predec.h`: `cpu_predec_enlaces_ok` para las
+  pruebas; `PREDEC_ZONA_BITS` se puede cambiar al compilar.
+- `tests/test_enlace.c` (nuevo, del mismo diseño): bucles que llaman a
+  rutinas en varias zonas y reescriben su código, también desde los delay
+  slots, con y sin `cpu_enlace` y con `cpu_verificar`.
+- `tests/test_interp.c`: saltos con `syscall` en el delay slot en los
+  programas con fallos; combinaciones con y sin los dos interruptores;
+  `cpu_predec_enlaces_ok` tras cada programa; caso dirigido de un enlace a
+  un bloque cambiado sin aviso con `cpu_verificar`.
+- `hle/hle.h`: versión 0.5.19.
+
 ## 0.5.18.1
 
 - `cpu/predec.c`, `cpu/predec_bucle.h`: tarjetas propias para `vadd`,

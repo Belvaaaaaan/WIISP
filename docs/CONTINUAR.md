@@ -1839,6 +1839,67 @@ las 12 huellas de las capturas, las de siempre.
   aritméticas son las cargas por la tabla de índices, `flush` y `canon` por
   componente, no la operación), solo se verifica en el Wii; se aparca.
 
+### v0.5.19: enlace directo entre bloques (`cpu_enlace`) y syscall en el delay slot (`cpu_syscall_slot`)
+
+Diseño: lo propuso otra conversación (con un prototipo y `test_enlace.c`)
+a partir de esta rama; aquí se comprobó (su prototipo pasaba la suite y
+bajaba el banco de 17,3 a 15,4) y se adaptó: dos interruptores, sin
+comentarios salvo `//Arreglo`, `cpu_verificar` en el cierre nuevo y más
+pruebas.
+
+- `cpu_enlace` (encendido): al construir, un bloque que acaba en un salto
+  con destino fijo (b*, j, jal, bc1, bv) lleva el cierre `BENDD`; con
+  `jr`/`jalr`, el `BEND` de siempre. La tarjeta del salto elige el sucesor
+  (`nbx = succ[1]` si salta, `succ[0]` si no; con `if`, no con índice, para
+  que no se calcule el booleano antes del `mtctr`). `BENDD` lee del elegido
+  `h`, `n` y `alive` (la misma línea de 32 bytes) y entra si está vivo y
+  cabe en el reloj; si no, por `link` como antes. Un enlace sin hacer
+  apunta a un bloque nulo (alive 0; una unión con sitio para `c[0]`). Si
+  el delay slot es un nop, su tarjeta hace de cierre. Sin listas de
+  enlaces de entrada: `alive` sigue siendo la red (cuesta casi nada).
+  En devkitPPC el cierre son ~14 instrucciones con una carga dependiente
+  (antes 26 y ~7 eslabones). Las tarjetas de salto cargan el sucesor
+  siempre, también con el interruptor apagado (sin copias nuevas del
+  bucle: MEM1 tiene 84 KB libres).
+- `cpu_syscall_slot` (encendido): un `syscall` en el delay slot ya no corta
+  el bloque (SYNC_AT ya pone pc = destino del salto, como el intérprete):
+  los stubs `jr ra` + `syscall` (dos instrucciones por llamada al HLE,
+  2,4 M por corrida de DBZ) dejan de ir por el intérprete de siempre.
+- `cpu_verificar`: el cierre nuevo comprueba el bloque al que va (si está
+  viejo, lo tira y sigue por la búsqueda); antes los enlaces se apagaban al
+  verificar y la verificación del Wii no pasaba por ellos.
+
+Medido (banco de qemu, `medir_cpu.sh`): 17,3 (0.5.18.1) → 17,5 con los dos
+apagados → 15,4 con `cpu_enlace` (−11 %); `cpu_syscall_slot` no cambia el
+banco (no llama al HLE). En `guion_eco` (tests/guest) lo que va por el
+intérprete de siempre pasa de 2402 instrucciones a 0.
+
+Verificación: `test_enlace` (3000 programas, cada uno con y sin
+`cpu_enlace`, arenas normales y diminutas, con y sin `predec_compacto` y a
+veces con `cpu_verificar`); test_interp con saltos con `syscall` en el
+delay slot, las dos opciones en las combinaciones y `cpu_predec_enlaces_ok`
+(cada sucesor guardado de un cierre directo es el bloque nulo o un bloque
+de la arena con el pc que toca); caso dirigido de un enlace a un bloque
+cambiado sin aviso con `cpu_verificar`. 165.340 comprobaciones, 0 fallos
+(x86 con ASan, PowerPC y devkitPPC; huellas de test_vdec sin cambios). 11
+mutaciones, todas detectadas (`BENDD` sin `alive`, J sin `nbx`, sucesores
+cambiados, likely tomado sin `nbx`, SYNC_AT del delay slot con pc = end,
+sin la comprobación de `cpu_verificar`, cualquier delay slot como cierre,
+enlace guardado en el otro sucesor, `syscall` sin `llbit = 0`, `jr` con
+`BENDD`, bv sin `nbx`). pspautotests 275/275; A/B de `cpu_enlace` y de
+`cpu_syscall_slot` en las 572: solo `malloc`, savedata e
+`io/file/file`+`utility/savedata/idlist` (esta pareja también cambia con
+`prof_es`, que no toca la emulación: es de las pruebas); `cpu_verificar`
+en las 572: ningún bloque viejo; tests/guest 22/22. Recarga con ASan: 2-3
+pruebas por corrida con 304 bytes de más en la tercera vuelta (otras cada
+vez); la 0.5.18.1 también lo hace (0-3 por corrida con las mismas tres
+pruebas en paralelo): es de antes y depende de los tiempos; pendiente de
+investigar.
+
+Autotest (4 registros y un `.capturas.txt`): sin (los dos a 0), enlace
+(solo `cpu_enlace`), con (los dos) y verif (los dos, `cpu_verificar`,
+`prof_bloques` y `capturas 400`).
+
 ### Para el siguiente chat (empezar aquí)
 
 Metodología acordada (detalle en `docs/HOJA_DE_RUTA.md`): primero medir
@@ -1856,13 +1917,14 @@ Metodología acordada (detalle en `docs/HOJA_DE_RUTA.md`): primero medir
   (0.5.16), 2.2 `cpu_predec` (0.5.17), la memoria del predecodificado y
   las medidas de la CPU (0.5.17.1), medidas por tiempo de juego, `prof_cpu`
   y `prof_bloques` (0.5.17.2), tarjetas VFPU parte a (0.5.18) y b
-  (0.5.18.1).
+  (0.5.18.1), `cpu_enlace` y `cpu_syscall_slot` (0.5.19).
 - Herramientas para medir sin el Wii (banco de qemu con el código de
   devkitPPC, perfil por función, psq_l emulado, A/B): `tools/banco/LEEME.md`.
-- **Siguiente: decidir entre** 0.5.19 `cpu_enlace` (más la tarjeta de los
-  stubs `jr`+`syscall`) y la parte b2 de la VFPU (vdot, vtfm, vhdp, vmmul,
-  vcmp y las conversiones, con `[STATS]` más fino para las conversiones).
-  Paired singles, aparcados (ver "Resultado de la 0.5.18.1").
+- **Siguiente: el resultado de la 0.5.19 en el Wii** (sin / enlace / con;
+  verif sin bloques viejos y capturas iguales). Después: quitar los `bdnz`
+  del bucle (`no-branch-count-reg`, sin interruptor posible: versión
+  aparte), una pila de retornos para `jr ra` (simularla antes en
+  `prof_bloques`) o la parte b2 de la VFPU. Paired singles, aparcados.
 - Autotest: como mucho 4 registros y un `.capturas.txt` (el usuario no
   puede mandar más de 5 archivos en un mensaje). Siguiente también: las peleas (leer vértices: `round_to_screen`, la división por
   w y tres conversiones a entero por la memoria, IPC 0,66; los índices CI8

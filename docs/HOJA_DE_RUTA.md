@@ -213,6 +213,13 @@ misma cuenta que los caminos rápidos de `vfpu_exec` (funciones compartidas
 en `vfpu.h`). Banco de qemu: de 263 a 150 instrucciones por instrucción
 VFPU. Sigue la parte c (paired singles).
 
+Hecha (v0.5.19): 2.3a, primera parte, `cpu_enlace` (la tarjeta del salto
+elige el bloque siguiente; cierre de ~14 instrucciones con una sola carga
+dependiente) y `cpu_syscall_slot` (los stubs de las importaciones sin el
+intérprete de siempre). Banco de qemu: de 17,5 a 15,4 instrucciones del
+Broadway por instrucción de la PSP. Pendientes: quitar los `bdnz` del bucle
+(`no-branch-count-reg`) y una pila de retornos para `jr ra`.
+
 Primera tanda acordada (todas "más barato", verificables en el PC):
 0.1 `prof_espera`, **skinning rápido** (`ge_skin_rapido`), **matrices al
 cambiar** (`ge_mtx_cache`), **color constante** (`ge_color_const`), 2.1

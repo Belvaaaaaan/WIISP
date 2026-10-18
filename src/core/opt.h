@@ -88,6 +88,8 @@ enum {
 	OPT_CPU_VFPU_TARJETAS,   //Arreglo
 	OPT_CPU_VFPU_VERIFICAR,   //Arreglo
 	OPT_CPU_VFPU_ARIT,   //Arreglo
+	OPT_CPU_ENLACE,   //Arreglo
+	OPT_CPU_SYSCALL_SLOT,   //Arreglo
 	OPT_CPU_FUSION,       /* 2.3 especializar y fusionar */
 	OPT_HLE_RAPIDO,       /* 2.4a camino mínimo de CpuSuspendIntr y Memcpy */
 	OPT_HLE_REEMPLAZO,    /* 2.4b reemplazo de funciones por hash */

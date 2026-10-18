@@ -29,7 +29,7 @@ PREDEC_ATRIB static u32 PREDEC_BUCLE(u32 max_cycles){   //arreglo
 #endif   //Arreglo
 	u32 pc, npc, left, seg, bt = 0;
 	const Card *c = NULL;
-	Block *cblk = NULL, *nb;
+	Block *cblk = NULL, *nb, *nbx = NULO;   //Arreglo
 
 	if(unlikely(copia != PREDEC_COPIA)){   //arreglo
 		static const void *const labels[OP_N] = {
@@ -48,7 +48,7 @@ PREDEC_ATRIB static u32 PREDEC_BUCLE(u32 max_cycles){   //arreglo
 			&&L_LVS, &&L_SVS, &&L_LVQ, &&L_SVQ, &&L_LVQT, &&L_SVQT, &&L_MFV, &&L_MTV, &&L_VFPU_V,   //Arreglo
 			&&L_VADD, &&L_VSUB, &&L_VMUL, &&L_VMOV, &&L_VABS, &&L_VNEG, &&L_VMIN, &&L_VMAX, &&L_VSCL,   //Arreglo
 			&&L_VI2F, &&L_VF2I, &&L_VPFX,   //Arreglo
-			&&L_END, &&L_BEND
+			&&L_END, &&L_BEND, &&L_BENDD   //Arreglo
 		};
 		memcpy(h_tab, labels, sizeof(h_tab));
 		cpu_predec_flush();   //arreglo
@@ -121,11 +121,11 @@ PREDEC_ATRIB static u32 PREDEC_BUCLE(u32 max_cycles){   //arreglo
 #define ST8(a, v, tail)  STX(a, v, 1, lim1, ram[o_] = (u8)(v), tail)
 
 /* Saltos: bt es a dónde va después del delay slot */
-#define BRANCH(name, cond) OP(name, { bt = (cond) ? cblk->target : cblk->end; })
+#define BRANCH(name, cond) OP(name, { if(cond){ bt = cblk->target; nbx = cblk->succ[1]; } else { bt = cblk->end; nbx = cblk->succ[0]; } })   //Arreglo
 #define BRANCH_LIKELY(name, cond) L_##name: { \
-		if(cond){ const void *n_ = c[1].h; bt = cblk->target; c++; goto *n_; } \
+		if(cond){ const void *n_ = c[1].h; bt = cblk->target; nbx = cblk->succ[1]; c++; goto *n_; } \
 		goto x_likely_nt; \
-	}
+	}   //Arreglo
 
 /* Buscar (o traducir) el bloque de pc */
 dispatch:
@@ -446,18 +446,18 @@ ret:
 	BRANCH(BGTZ, (s32)G(S) > 0)
 	BRANCH(BLTZ, (s32)G(S) < 0)
 	BRANCH(BGEZ, (s32)G(S) >= 0)
-	OP(BLTZAL, { s32 v = (s32)G(S); G(31 * 4) = cblk->end; bt = v < 0 ? cblk->target : cblk->end; })
-	OP(BGEZAL, { s32 v = (s32)G(S); G(31 * 4) = cblk->end; bt = v >= 0 ? cblk->target : cblk->end; })
+	OP(BLTZAL, { s32 v = (s32)G(S); G(31 * 4) = cblk->end; if(v < 0){ bt = cblk->target; nbx = cblk->succ[1]; } else { bt = cblk->end; nbx = cblk->succ[0]; } })   //Arreglo
+	OP(BGEZAL, { s32 v = (s32)G(S); G(31 * 4) = cblk->end; if(v >= 0){ bt = cblk->target; nbx = cblk->succ[1]; } else { bt = cblk->end; nbx = cblk->succ[0]; } })   //Arreglo
 	BRANCH_LIKELY(BEQL, G(S) == G(T))
 	BRANCH_LIKELY(BNEL, G(S) != G(T))
 	BRANCH_LIKELY(BLEZL, (s32)G(S) <= 0)
 	BRANCH_LIKELY(BGTZL, (s32)G(S) > 0)
 	BRANCH_LIKELY(BLTZL, (s32)G(S) < 0)
 	BRANCH_LIKELY(BGEZL, (s32)G(S) >= 0)
-	L_BLTZALL: { s32 v = (s32)G(S); G(31 * 4) = cblk->end; if(v < 0){ const void *n_ = c[1].h; bt = cblk->target; c++; goto *n_; } goto x_likely_nt; }
-	L_BGEZALL: { s32 v = (s32)G(S); G(31 * 4) = cblk->end; if(v >= 0){ const void *n_ = c[1].h; bt = cblk->target; c++; goto *n_; } goto x_likely_nt; }
-	OP(J, bt = cblk->target)
-	OP(JAL, { G(31 * 4) = cblk->end; bt = cblk->target; })
+	L_BLTZALL: { s32 v = (s32)G(S); G(31 * 4) = cblk->end; if(v < 0){ const void *n_ = c[1].h; bt = cblk->target; nbx = cblk->succ[1]; c++; goto *n_; } goto x_likely_nt; }   //Arreglo
+	L_BGEZALL: { s32 v = (s32)G(S); G(31 * 4) = cblk->end; if(v >= 0){ const void *n_ = c[1].h; bt = cblk->target; nbx = cblk->succ[1]; c++; goto *n_; } goto x_likely_nt; }   //Arreglo
+	OP(J, { bt = cblk->target; nbx = cblk->succ[1]; })   //Arreglo
+	OP(JAL, { G(31 * 4) = cblk->end; bt = cblk->target; nbx = cblk->succ[1]; })   //Arreglo
 	OP(JR, bt = G(S))
 	OP(JALR, { u32 v = G(S); G(D) = cblk->end; bt = v; })
 	L_BC1: {
@@ -466,10 +466,10 @@ ret:
 		cpu.fcc_hazard_pc = 0;
 		taken = (SAF & 1) ? cond : !cond;
 		if(SAF & 2){
-			if(taken){ const void *n_ = c[1].h; bt = cblk->target; c++; goto *n_; }
+			if(taken){ const void *n_ = c[1].h; bt = cblk->target; nbx = cblk->succ[1]; c++; goto *n_; }   //Arreglo
 			goto x_likely_nt;
 		}
-		{ const void *n_ = c[1].h; bt = taken ? cblk->target : cblk->end; c++; goto *n_; }
+		{ const void *n_ = c[1].h; if(taken){ bt = cblk->target; nbx = cblk->succ[1]; } else { bt = cblk->end; nbx = cblk->succ[0]; } c++; goto *n_; }   //Arreglo
 	}
 	L_BV: {
 		int val, taken, chk = 0;
@@ -483,7 +483,8 @@ ret:
 				goto x_likely_nt;
 			}
 			bt = cblk->target;
-		} else bt = taken ? cblk->target : cblk->end;
+			nbx = cblk->succ[1];   //Arreglo
+		} else if(taken){ bt = cblk->target; nbx = cblk->succ[1]; } else { bt = cblk->end; nbx = cblk->succ[0]; }   //Arreglo
 		if(unlikely(chk)) goto x_after;
 		{ const void *n_ = c[1].h; c++; goto *n_; }
 	}
@@ -494,6 +495,27 @@ ret:
 	L_BEND:
 		pc = bt;
 		goto link;
+	L_BENDD: {   //Arreglo
+		Block *const nb_ = nbx;
+		const void *const h_ = nb_->c[0].h;
+		const u32 n_ = nb_->n;
+		pc = bt;
+		if(unlikely(verif) && nb_->alive && !verif_ok(nb_)) kill_block(nb_);
+		if(likely(nb_->alive && left >= n_)){
+#if PREDEC_MEDIR
+			(void)h_;
+			CONTAR(bq && st.bq_enlace[pc != cblk->end][0]++);
+			nb = nb_;
+			goto enter;
+#else
+			cblk = nb_;
+			c = nb_->c;
+			left -= n_;
+			goto *h_;
+#endif
+		}
+		goto link;
+	}
 
 #undef G
 #undef FR

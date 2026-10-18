@@ -86,11 +86,18 @@ enum {
 	OP_J, OP_JAL, OP_JR, OP_JALR, OP_BC1, OP_BV,
 	OP_LVS, OP_SVS, OP_LVQ, OP_SVQ, OP_LVQT, OP_SVQT, OP_MFV, OP_MTV, OP_VFPU_V,   //Arreglo
 	OP_VADD, OP_VSUB, OP_VMUL, OP_VMOV, OP_VABS, OP_VNEG, OP_VMIN, OP_VMAX, OP_VSCL, OP_VI2F, OP_VF2I, OP_VPFX,   //Arreglo
-	OP_END, OP_BEND,
+	OP_END, OP_BEND, OP_BENDD,   //Arreglo
 	OP_N
 };
 
 static const void *h_tab[OP_N];
+
+//Arreglo
+static union {
+	Block b;
+	u8 sitio[sizeof(Block) + 2 * sizeof(Card)];
+} nulo_u __attribute__((aligned(32))) = { .b = { .pc = 0xFFFFFFFFu, .n = 0xFFFF, .alive = 0 } };
+#define NULO (&nulo_u.b)
 
 /* --- Arena, tabla y zonas ------------------------------------------------- */
 
@@ -109,6 +116,7 @@ static u32 reserva_tam;
 static int copia = -1;           /* qué copia del bucle llenó h_tab */
 static u8 medir;   //Arreglo
 static u8 vt_on, vt_verif, vt_arit;   //Arreglo
+static u8 en_on, sc_on;   //Arreglo
 
 #define FRIO(b) ((Frio *)(frio_base + (b)->c[(b)->n].a.w))   //arreglo
 
@@ -204,17 +212,37 @@ int cpu_predec_tarjetas_ok(void){
 	return 1;
 }
 
+//Arreglo
+int cpu_predec_enlaces_ok(void){
+	u32 i, k;
+	Block *b;
+	for(i = 0; i < (1u << TABLA_BITS); i++)
+		for(b = tabla[i]; b; b = FRIO(b)->hnext){
+			if(b->c[b->n].h != h_tab[OP_BENDD]) continue;
+			for(k = 0; k < 2; k++){
+				const Block *s = b->succ[k];
+				if(s == NULO) continue;
+				if((const u8 *)s < arena || (const u8 *)s >= arena + arena_used) return 0;
+				if(s->pc != (k ? b->target : b->end)) return 0;
+			}
+		}
+	return NULO->alive == 0 && NULO->pc == 0xFFFFFFFFu;
+}
+
 //arreglo
 /* Las arenas según predec_compacto y predec_mem1; si cambian, todo fuera */
 static int predec_config(void){
 	u8 want = (u8)(opt_on[OPT_PREDEC_COMPACTO] | (opt_on[OPT_PREDEC_MEM1] && reserva ? 2 : 0) |
 	               (opt_on[OPT_CPU_VFPU_TARJETAS] ? 4 : 0) | (opt_on[OPT_CPU_VFPU_VERIFICAR] ? 8 : 0) |
-	               (opt_on[OPT_CPU_VFPU_ARIT] ? 16 : 0));   //Arreglo
+	               (opt_on[OPT_CPU_VFPU_ARIT] ? 16 : 0) | (opt_on[OPT_CPU_ENLACE] ? 32 : 0) |
+	               (opt_on[OPT_CPU_SYSCALL_SLOT] ? 64 : 0));   //Arreglo
 	if(likely(want == conf)) return arena != NULL;
 	conf = want;
 	vt_on = (want >> 2) & 1;   //Arreglo
 	vt_verif = (want >> 3) & 1;   //Arreglo
 	vt_arit = (want >> 4) & 1;   //Arreglo
+	en_on = (want >> 5) & 1;   //Arreglo
+	sc_on = (want >> 6) & 1;   //Arreglo
 	if(!zona_head){
 		zonas = psp_mem.ram_size >> PREDEC_ZONA_BITS;
 		if(zonas > sizeof(cpu_code_map)) return 0;
@@ -503,6 +531,7 @@ static Block *alloc_block(u32 n, Frio **fp){
 		arena_used += hot + cold;
 	}
 	memset(b, 0, sizeof(*b));
+	b->succ[0] = b->succ[1] = NULO;   //Arreglo
 	memset(f, 0, sizeof(*f));
 	*fp = f;
 	return b;
@@ -533,7 +562,10 @@ static Block *build(u32 pc, u32 lim4){
 			Card cd;
 			if(o + 4 >= lim4) break;
 			wd = rd_le32(ram + o + 4);
-			if(decode(wd, pc + n * 4 + 4, &cd, &td) != K_NORMAL) break;
+			{   //Arreglo
+				const int kd = decode(wd, pc + n * 4 + 4, &cd, &td);   //Arreglo
+				if(kd != K_NORMAL && !(kd == K_SYSCALL && sc_on)) break;   //Arreglo
+			}   //Arreglo
 			target = t;
 			tmp[n + 1] = cd;
 			raw[n + 1] = wd;
@@ -554,7 +586,11 @@ static Block *build(u32 pc, u32 lim4){
 	memcpy(b->c, tmp, n * sizeof(Card));
 	memcpy(f->raw, raw, n * 4);   //arreglo
 	/* La de cierre (un bloque que acaba en syscall no llega a ella) */
-	b->c[n].h = h_tab[branch ? OP_BEND : OP_END];
+	if(en_on){   //Arreglo
+		const int ind = branch && (tmp[n - 2].h == h_tab[OP_JR] || tmp[n - 2].h == h_tab[OP_JALR]);   //Arreglo
+		b->c[n].h = h_tab[branch ? (ind ? OP_BEND : OP_BENDD) : OP_END];   //Arreglo
+		if(branch && b->c[n - 1].h == h_tab[OP_NOP]) b->c[n - 1].h = b->c[n].h;   //Arreglo
+	} else b->c[n].h = h_tab[branch ? OP_BEND : OP_END];   //Arreglo
 	//arreglo
 	f->z0 = o0 >> PREDEC_ZONA_BITS;
 	f->z1 = (o0 + (n ? n * 4 - 1 : 0)) >> PREDEC_ZONA_BITS;

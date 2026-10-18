@@ -39,7 +39,9 @@
 #include "core/types.h"
 #include "core/memory.h"
 
+#ifndef PREDEC_ZONA_BITS   //Arreglo
 #define PREDEC_ZONA_BITS 10   /* zonas de 1 KB */
+#endif   //Arreglo
 
 /* Una entrada por zona de 1 KB de la RAM (hasta 64 MB): distinta de 0 si
    hay bloques en ella */
@@ -95,5 +97,6 @@ void cpu_predec_tam_pruebas(u32 bloques, u32 frio);
    la copia del bucle que corre ahora (predec_sin_unir)? */
 int cpu_predec_tarjetas_ok(void);
 void cpu_predec_caida_nombre(u32 k, char *buf, u32 size);   //Arreglo
+int cpu_predec_enlaces_ok(void);   //Arreglo
 
 #endif
