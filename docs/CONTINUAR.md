@@ -1725,6 +1725,36 @@ y `ventana 600`, sin capturas salvo la última): sin (`cpu_vfpu_tarjetas`
 `cpu_vfpu_verificar`) y capturas (1 con `capturas 400`: tienen que dar las
 huellas de la 0.5.17.2 de arriba).
 
+### Resultado de la 0.5.18 en el Wii (DBZ, sin / con / cpu / verif / capturas)
+
+Las cinco corridas ejecutan lo mismo, y lo mismo que la 0.5.17.2 (mismas
+`[LLAMADA]`, `[MANDO]`, `[IO]` y `[STATS]`). verif: 30.166.472 tarjetas de
+la VFPU comparadas con `vfpu_exec` en el Wii, todas iguales. Falta
+comparar las huellas de las capturas con las de la 0.5.17.2 (pedir el
+`.capturas.txt`).
+
+| Corrida | Real | Velocidad | Ciclos / instr. PSP | Instr. Broadway / instr. PSP | CPU |
+|---|---|---|---|---|---|
+| sin (`cpu_vfpu_tarjetas` 0) | 106,3 s | 79,2 % | 28,16 | 26,28 | 51,8 s |
+| con | 103,9 s | 81,0 % | 26,67 | 24,32 | 49,2 s |
+| con + `prof_cpu` | 105,9 s | 79,5 % | 27,91 | 25,71 | 51,3 s |
+| verif | 193,0 s | 43,6 % | 75,15 | 90,19 | 138,3 s |
+| capturas | 106,2 s | 79,3 % | 26,59 | 24,32 | 48,9 s |
+
+- −2,4 s en la corrida (−2,3 %), −5,3 % de ciclos por instrucción; en la
+  escena pesada (60-84 s) −7,8 % de ciclos (34,7 → 32,0) y de 36,5 a
+  37,6 % de velocidad. "sin" calca la base de la 0.5.17.2 (106,2 s, 28,20).
+- Se estimaban ~4 s y fueron ~2,5: lv/sv/mtv/mfv eran más baratas que la
+  media de la VFPU (la media de 178 ns incluía la aritmética). En la escena
+  pesada van por tarjeta 8,6 M de las 20,2 M instrucciones VFPU de cada
+  ventana (42 %); las 11,6 M que siguen por `vfpu_exec` cuestan ~225-233 ns
+  cada una (~165 ciclos): ~2,65 s de cada ventana de 26,6 s (10 %).
+- Lo que queda de la VFPU ([STATS]): conversiones 7,6 %, vmin/vmax 5,5,
+  vmul 5,2, vpfx 4,4, vf2i 4,0, vi2f 3,9, vmov 3,8, vsub 2,8, vtfm 2,3,
+  vscl 1,9, vadd 1,8 (4,4 % con prefijos). `vfpu_exec` ya tiene caminos
+  rápidos en C sin prefijos (`vecdo3_fast`...): la parte b es llevarlos a
+  tarjetas sin la llamada.
+
 ### Para el siguiente chat (empezar aquí)
 
 Metodología acordada (detalle en `docs/HOJA_DE_RUTA.md`): primero medir
