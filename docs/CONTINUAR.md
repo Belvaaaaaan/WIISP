@@ -1607,6 +1607,53 @@ contadores), bloques (`prof_cpu` y `prof_bloques`, sin capturas: solo para
 los recuentos) y capturas (como base, con `capturas 400`, para comparar
 las imágenes con las de la 0.5.17.1).
 
+### Resultado de la 0.5.17.2 en el Wii (DBZ, base / cpu / bloques / capturas)
+
+Las cuatro corridas ejecutan lo mismo que la 0.5.17.1 (mismas `[LLAMADA]`,
+`[MANDO]`, `[IO]` y `[STATS]`: 819.031.925 instrucciones del guion,
+20.417.174 de VFPU; 1343,1 M en total). Faltó comparar las huellas de las
+capturas con las de la 0.5.17.1 (pedir su `.capturas.txt`).
+
+| Corrida | Real | Velocidad | Ciclos / instr. PSP | Instr. Broadway / instr. PSP |
+|---|---|---|---|---|
+| 0.5.17.1 l2 (la mejor) | ~108,9 s | 77,3 % | 29,47 | ~28 |
+| base | 106,2 s | 79,3 % | 28,20 | 26,3 |
+| cpu (`prof_cpu`) | 108,6 s | 77,5 % | 29,41 | 27,3 |
+| bloques | 119,1 s | 70,7 % | 34,75 | 34,3 |
+| capturas | 109,8 s | 76,7 % | 28,13 | 26,3 |
+
+- Los contadores de las tarjetas costaban 1,2 ciclos y 1,0 instrucción del
+  Broadway por instrucción de la PSP (~4 % de la CPU): eran las 1-2
+  instrucciones de más de la 0.5.17.1. `predec_sin_unir` a 0 casi no
+  cambia (cpu 29,41 frente a l2 29,47, los dos con contadores).
+- Tirones: el de 60,2 s de 971 a 930 ms; el de 35,1 s de ~770 a 736 ms.
+- Escenas por ventana de juego: 0-30 s menús y 2D (227-341 %); 30-50 s
+  82-93 %, CPU 74-78 % del tiempo; 50-60 s carga (tirón de 448 ms de E/S a
+  los 56,9 s); 60-84 s escena pesada 36-38 %: GE 44-50 % (16.000 vértices
+  por vblank, 44 % con huesos, 496 ciclos por vértice; 873 llamadas por
+  vblank, 2785 ciclos de comandos cada una) y CPU 37-40 %, un tercio VFPU
+  (9,4 % de las instrucciones). Ahí la CPU hace 33 instrucciones del
+  Broadway por instrucción de la PSP (22 en las 2D): cada instrucción VFPU
+  son ~120 instrucciones del Broadway; el costo es de instrucciones.
+- Reparto de la corrida (base, 106 s): CPU 51,9 s (tarjetas ~36, VFPU
+  ~11,7 con 69,9 M instrucciones a ~175 ns, FPU 2,3, intérprete de siempre
+  1,1, buscar 0,7); GE 35,0 s (leer vértices 16,0, ensamblar 6,1, comandos
+  5,8, enviar 4,9, estado 1,9); texturas 6,0; syscalls 3,3; esperar GX 2,2;
+  E/S 2,2.
+- `prof_bloques`: 5,1 instrucciones por bloque ejecutado (4,3-5,9 según la
+  ventana); 23-35 % de los bloques son de 2. 262 M pasos entre bloques (a
+  ~24 ciclos, ~8-9 s de los 36 de tarjetas): **la 2.3 empieza por
+  `cpu_enlace`, no por fusiones**. Enlaces: al siguiente 100 %, al destino
+  90-96 %; 10,9 M fallos (uno cada 123 instrucciones), el 89 % `jr`/`jalr`
+  (retornos), ~0,7 s.
+- Intérprete de siempre: 2.426.211 instrucciones, exactamente dos por
+  syscall (1.186.131): los stubs de las importaciones (`jr ra` con el
+  `syscall` en el delay slot). ~1,1 s; una tarjeta para ese par lo quita.
+- Orden que sale de aquí: 0.5.18 tarjetas VFPU (a: lv/sv/mtv/mfv, ~43 % de
+  la VFPU, ~4 s); 0.5.19 `cpu_enlace` más la tarjeta de los stubs y quizá
+  una pila de retornos; medir leer vértices por partes (`prof_vertices`,
+  16 s); histograma de syscalls (`prof_hle`).
+
 ### Para el siguiente chat (empezar aquí)
 
 Metodología acordada (detalle en `docs/HOJA_DE_RUTA.md`): primero medir
@@ -1626,11 +1673,9 @@ Metodología acordada (detalle en `docs/HOJA_DE_RUTA.md`): primero medir
   y `prof_bloques` (0.5.17.2).
 - Herramientas para medir sin el Wii (banco de qemu con el código de
   devkitPPC, perfil por función, psq_l emulado, A/B): `tools/banco/LEEME.md`.
-- **Siguiente: analizar las corridas de la 0.5.17.2** (base frente a cpu:
-  lo que costaban los contadores; bloques: instrucciones por bloque y qué
-  cae al intérprete de siempre, que decide entre 2.3a y fusiones) y después
-  0.5.18 (tarjetas VFPU), según el plan acordado de arriba ("Resultado de
-  la 0.5.17.1 en el Wii y plan"). Siguiente también: las peleas (leer vértices: `round_to_screen`, la división por
+- **Siguiente: 0.5.18, tarjetas VFPU** (parte a: lv.s, lv.q, sv.s, sv.q,
+  mtv, mfv) y después 0.5.19 `cpu_enlace`, según "Resultado de la 0.5.17.2
+  en el Wii". Siguiente también: las peleas (leer vértices: `round_to_screen`, la división por
   w y tres conversiones a entero por la memoria, IPC 0,66; los índices CI8
   con dcbt) y, con lo que mida `prof_es`, las lecturas del disco. Juntar
   llamadas (`ge_charolas`, 1.4) sigue aparte. Otros candidatos medidos:
