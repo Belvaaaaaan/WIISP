@@ -84,6 +84,7 @@ typedef struct {
 	u64 bq_bloques, bq_instr, bq_tam[7], bq_enlace[2][2], bq_jr_sin_enlace;   //Arreglo
 	u64 bq_caidas[4], bq_caida_op[PREDEC_CAIDA_OPS];   //Arreglo
 	u64 vfpu_tarjetas, vfpu_verif, vfpu_verif_mal;   //Arreglo
+	u64 ras_jr, ras_enlace, ras_ok, ras_gana, ras_stub, ras_stub_ok;   //Arreglo
 } PredecStats;
 void cpu_predec_stats(PredecStats *out);
 

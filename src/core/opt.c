@@ -23,6 +23,7 @@ const OptInfo opt_info[OPT_N] = {
 	[OPT_PROF_CPU]       = { "prof_cpu",       1, 0 },   //Arreglo
 	[OPT_PROF_BLOQUES]   = { "prof_bloques",   1, 0 },   //Arreglo
 	[OPT_PROF_VENTANA_JUEGO] = { "prof_ventana_juego", 1, 0 },   //Arreglo
+	[OPT_PROF_VERTICES]  = { "prof_vertices",  1, 0 },   //Arreglo
 	[OPT_GE_SKIN_RAPIDO] = { "ge_skin_rapido", 1, 1 },
 	[OPT_GE_MTX_CACHE]   = { "ge_mtx_cache",   1, 1 },
 	[OPT_GE_COLOR_CONST] = { "ge_color_const", 0, 0 },

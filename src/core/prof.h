@@ -143,6 +143,11 @@ enum {
 extern volatile int prof_cpu_phase;
 extern volatile u32 prof_cpu_samples[CPF_N];
 
+enum { VXF_PREPARAR, VXF_DECODIFICAR, VXF_HUESOS, VXF_TRANSFORMAR, VXF_PANTALLA, VXF_LUCES, VXF_GENERICO, VXF_N };   //Arreglo
+extern u8 prof_vtx_on;   //Arreglo
+extern volatile int prof_vtx_phase;   //Arreglo
+extern volatile u32 prof_vtx_samples[VXF_N];   //Arreglo
+
 /* Desde el temporizador (interrupción o hilo aparte) */
 void prof_sample(void);
 

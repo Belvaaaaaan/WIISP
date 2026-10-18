@@ -449,6 +449,7 @@ static struct {
 	PredecStats pd;
 	u32 samples[PROF_N], ge_samples[GEF_N];
 	u32 cpu_samples[CPF_N];   //arreglo
+	u32 vtx_samples[VXF_N];   //Arreglo
 	u64 pmc[PROF_PMC_SLOTS][PMC_N];
 	GeStats ge;
 } prof_base;
@@ -516,6 +517,7 @@ static void profile_snapshot(void){
 	memcpy(prof_base.samples, (const void *)prof_samples, sizeof(prof_base.samples));
 	memcpy(prof_base.ge_samples, (const void *)prof_ge_samples, sizeof(prof_base.ge_samples));
 	memcpy(prof_base.cpu_samples, (const void *)prof_cpu_samples, sizeof(prof_base.cpu_samples));   //arreglo
+	memcpy(prof_base.vtx_samples, (const void *)prof_vtx_samples, sizeof(prof_base.vtx_samples));   //Arreglo
 	if(prof_pmc_on) prof_pmc_account();
 	memcpy(prof_base.pmc, prof_pmc_acc, sizeof(prof_base.pmc));
 	ge_get_stats(&prof_base.ge);
@@ -547,6 +549,18 @@ static void profile_ge_lines(const GeStats *g, const GeStats *b, u32 vblanks){
 		if(len < sizeof(line) - 32) snprintf(line + len, sizeof(line) - len, " (%u muestras)", (unsigned)st);
 		hle_log("%s\n", line);
 	}
+	if(opt_on[OPT_PROF_VERTICES] && st){   //Arreglo
+		static const char *const vn[VXF_N] = { "preparar", "decodificar", "huesos", "transformar", "pantalla",
+		                                       "luces uv y niebla", "camino generico" };
+		u32 sv = 0;
+		for(i = 0; i < VXF_N; i++) sv += prof_vtx_samples[i] - prof_base.vtx_samples[i];
+		len = (size_t)snprintf(line, sizeof(line), "[TIEMPOS] Leer vertices por dentro (prof_vertices, %u muestras, %% del tiempo total):",
+		                       (unsigned)sv);
+		for(i = 0; i < VXF_N && len < sizeof(line) - 48; i++)
+			len += (size_t)snprintf(line + len, sizeof(line) - len, " %s %.1f%%", vn[i],
+			                        pct(prof_vtx_samples[i] - prof_base.vtx_samples[i], st));
+		hle_log("%s\n", line);
+	}   //Arreglo
 	hle_log("[TIEMPOS] Dibujo: %u llamadas (%.0f por vblank; %.0f%% con indices, %.0f%% reutilizan vertices); "
 	        "%.0f%% listas de triangulos, %.0f%% tiras, %.0f%% abanicos, %.0f%% sprites, %.0f%% lineas y puntos; "
 	        "%u curvas\n",
@@ -718,6 +732,15 @@ static void profile_bloques_lines(const PredecStats *p, const PredecStats *b, u6
 	         e[1][0] + e[1][1] ? 100.0 * (double)e[1][0] / (double)(e[1][0] + e[1][1]) : 0.0, (unsigned long long)e[1][1],
 	         (unsigned long long)(p->bq_jr_sin_enlace - b->bq_jr_sin_enlace));
 	hle_log("%s\n", line);
+	{   //Arreglo
+		const u64 jr = p->ras_jr - b->ras_jr, sb = p->ras_stub - b->ras_stub;
+		hle_log("[TIEMPOS] Pila de retornos simulada (prof_bloques, 32 entradas): %llu jr ra; el enlace acierta %.1f%%, la pila "
+		        "%.1f%%; la pila acertaria %llu de los %llu que falla el enlace; stubs jr ra + syscall: %llu, la pila acierta %.1f%%\n",
+		        (unsigned long long)jr, jr ? 100.0 * (double)(p->ras_enlace - b->ras_enlace) / (double)jr : 0.0,
+		        jr ? 100.0 * (double)(p->ras_ok - b->ras_ok) / (double)jr : 0.0, (unsigned long long)(p->ras_gana - b->ras_gana),
+		        (unsigned long long)(jr - (p->ras_enlace - b->ras_enlace)), (unsigned long long)sb,
+		        sb ? 100.0 * (double)(p->ras_stub_ok - b->ras_stub_ok) / (double)sb : 0.0);
+	}   //Arreglo
 	for(i = 0; i < 4; i++) caidas += p->bq_caidas[i] - b->bq_caidas[i];
 	for(i = 0; i < PREDEC_CAIDA_OPS; i++){
 		ops[i] = p->bq_caida_op[i] - b->bq_caida_op[i];
@@ -921,6 +944,7 @@ static void profile_report(const char *why, int forzar){   //Arreglo
 static void profile_tick(void){
 	if(!prof_clock || !prof_hz) return;
 	if(opt_on[OPT_PROF_PMC] != prof_pmc_on) prof_pmc_enable(opt_on[OPT_PROF_PMC]);
+	prof_vtx_on = opt_on[OPT_PROF_VERTICES];   //Arreglo
 	//arreglo
 	prof_pmc_set_modo(opt_on[OPT_PROF_PMC_L2] ? 1 : opt_on[OPT_PROF_PMC_CTR] ? 2 : opt_on[OPT_PROF_PMC_CARGA] ? 3 : 0);
 	if(!prof_base.valid){ profile_snapshot(); return; }

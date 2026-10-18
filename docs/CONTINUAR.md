@@ -1929,6 +1929,38 @@ las de siempre.
   fallos). Para medir la pila de retornos, `prof_bloques` sin
   `cpu_verificar`.
 
+### v0.5.19.1: sin `bdnz` en el bucle y dos medidas (pila de retornos, `prof_vertices`)
+
+- Optimización (sin interruptor posible): las cuatro copias del bucle con
+  `optimize("no-branch-count-reg")`. En devkitPPC, de 25 `bdnz` a 0 en
+  `run_unido` y de 185 a 169 `mtctr`; las tarjetas siguen en línea. Banco
+  de qemu (instrucciones, no ciclos): `cpu_banco` 15,4 (igual); VFPU de
+  carga y guardado 45 → 44; aritmética de la VFPU 152 → 160 (los bucles por
+  componente cambian `bdnz` por suma, comparación y salto). En el Wii el
+  CTR es serializante: lo que cuenta son los ciclos, compararlos con la
+  corrida "con" de la 0.5.19 (23,84 ciclos por instrucción).
+- Medida: pila de retornos simulada con `prof_bloques` (solo en la copia de
+  medida del bucle): cuántos `jr ra` acertaría frente al enlace de hoy, y
+  en los stubs `jr ra` + `syscall`.
+- Medida: `prof_vertices` (apagado): en el camino por lotes (el de DBZ),
+  "leer vertices" incluye decodificar, los huesos y `read_vertex_body`
+  (transformar, pasar a pantalla, luces, uv, niebla): por eso "transformar"
+  salía casi a 0 %. El muestreo separa esas partes. Con el interruptor
+  apagado cuesta +0,25-0,5 % de instrucciones por vértice en el banco del
+  GE (2767 → 2781 sin huesos, 3263 → 3271 con huesos): cuatro marcas por
+  vértice, con el interruptor leído una vez por tanda (duplicar
+  `batch_range`, 70 KB, no cabe en MEM1).
+
+Verificación: test, test-ppc y devkitPPC 165.407 comprobaciones sin
+fallos, huellas de test_vdec sin cambios; pspautotests 275/275; A/B de
+`prof_vertices` y `prof_bloques` (con matemática rápida) en las 572: solo
+savedata, intermitente también con `prof_es`; tests/guest 22/22; recarga
+con ASan: 1 con los +304 bytes de siempre.
+
+Autotest (4 registros y un `.capturas.txt`): con (todo por defecto, para
+comparar con "con" de la 0.5.19), bloques (`prof_bloques`, sin
+`cpu_verificar`), vertices (`prof_vertices`) y capturas.
+
 ### Para el siguiente chat (empezar aquí)
 
 Metodología acordada (detalle en `docs/HOJA_DE_RUTA.md`): primero medir
@@ -1949,7 +1981,9 @@ Metodología acordada (detalle en `docs/HOJA_DE_RUTA.md`): primero medir
   (0.5.18.1), `cpu_enlace` y `cpu_syscall_slot` (0.5.19).
 - Herramientas para medir sin el Wii (banco de qemu con el código de
   devkitPPC, perfil por función, psq_l emulado, A/B): `tools/banco/LEEME.md`.
-- **Siguiente** (resultado de la 0.5.19 arriba): quitar los `bdnz`
+- **Siguiente: el resultado de la 0.5.19.1 en el Wii** (ciclos frente a la
+  0.5.19, pila de retornos simulada, leer vértices por partes) y decidir
+  con eso. Lo de antes: quitar los `bdnz`
   del bucle (`no-branch-count-reg`, sin interruptor posible: versión
   aparte), una pila de retornos para `jr ra` (simularla antes en
   `prof_bloques`) o la parte b2 de la VFPU. Paired singles, aparcados.

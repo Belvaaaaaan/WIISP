@@ -784,6 +784,22 @@ static void vfpu_verificar_una(u32 w, u32 pc, u32 lim4){
 }
 
 //Arreglo
+static u32 ras_pila[32], ras_cima, ras_hondo;
+
+//Arreglo
+static void ras_push(u32 vuelta){
+	ras_pila[ras_cima++ & 31] = vuelta;
+	if(ras_hondo < 32) ras_hondo++;
+}
+
+//Arreglo
+static int ras_pop(u32 pc){
+	if(!ras_hondo) return 0;
+	ras_hondo--;
+	return ras_pila[--ras_cima & 31] == pc;
+}
+
+//Arreglo
 static u32 caida_clave(u32 w){
 	const u32 op = w >> 26;
 	if(op == 0x00) return 64 + FN_(w);
@@ -843,7 +859,7 @@ void cpu_predec_caida_nombre(u32 k, char *buf, u32 size){
 #define PREDEC_BUCLE run_unido
 #define PREDEC_COPIA 0
 #define PREDEC_MEDIR 0   //Arreglo
-#define PREDEC_ATRIB
+#define PREDEC_ATRIB __attribute__((optimize("no-branch-count-reg")))   //Arreglo
 #include "cpu/predec_bucle.h"
 #undef PREDEC_BUCLE
 #undef PREDEC_COPIA
@@ -852,7 +868,7 @@ void cpu_predec_caida_nombre(u32 k, char *buf, u32 size){
 #define PREDEC_BUCLE run_sin_unir
 #define PREDEC_COPIA 1
 #define PREDEC_MEDIR 0   //Arreglo
-#define PREDEC_ATRIB __attribute__((optimize("no-crossjumping")))
+#define PREDEC_ATRIB __attribute__((optimize("no-crossjumping", "no-branch-count-reg")))   //Arreglo
 #include "cpu/predec_bucle.h"
 #undef PREDEC_BUCLE
 #undef PREDEC_COPIA
@@ -862,7 +878,7 @@ void cpu_predec_caida_nombre(u32 k, char *buf, u32 size){
 #define PREDEC_BUCLE run_unido_medir
 #define PREDEC_COPIA 2
 #define PREDEC_MEDIR 1
-#define PREDEC_ATRIB
+#define PREDEC_ATRIB __attribute__((optimize("no-branch-count-reg")))   //Arreglo
 #include "cpu/predec_bucle.h"
 #undef PREDEC_BUCLE
 #undef PREDEC_COPIA
@@ -871,7 +887,7 @@ void cpu_predec_caida_nombre(u32 k, char *buf, u32 size){
 #define PREDEC_BUCLE run_sin_unir_medir
 #define PREDEC_COPIA 3
 #define PREDEC_MEDIR 1
-#define PREDEC_ATRIB __attribute__((optimize("no-crossjumping")))
+#define PREDEC_ATRIB __attribute__((optimize("no-crossjumping", "no-branch-count-reg")))   //Arreglo
 #include "cpu/predec_bucle.h"
 #undef PREDEC_BUCLE
 #undef PREDEC_COPIA

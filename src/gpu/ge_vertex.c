@@ -1141,10 +1141,12 @@ static float last_uv[2], last_normal[3];
 /* El cuerpo de read_vertex, en línea: fast es constante en cada uso (el
    camino por lotes de ge_vdec_esp usa exactamente estas mismas expresiones,
    así que el compilador hace las mismas operaciones y salen los mismos bits) */
-static inline __attribute__((always_inline)) void read_vertex_body(const VFormat *f, const DecVertex *d, GeClipVertex *out, const int fast){
+static inline __attribute__((always_inline)) void read_vertex_body(const VFormat *f, const DecVertex *d, GeClipVertex *out, const int fast,
+                                                                   const int pv){   //Arreglo
 	GeVertex *v = &out->v;
 	float pos[3], normal[3];
 	int i;
+	if(pv) prof_vtx_phase = VXF_TRANSFORMAR;   //Arreglo
 
 	/* Todos los campos se escriben más abajo en todos los caminos */
 	memcpy(pos, d->pos, sizeof(pos));
@@ -1193,10 +1195,12 @@ static inline __attribute__((always_inline)) void read_vertex_body(const VFormat
 		}
 		v->clipw = out->clip[3];
 		v->fogdepth = 1.0f;
+		if(pv) prof_vtx_phase = VXF_PANTALLA;   //Arreglo
 		if(round_to_screen(sx, sy, sz, out->clip, ts.depth_clip, 0, v)){
 			ge_vertex_mark_outside(v);
 			return;
 		}
+		if(pv) prof_vtx_phase = VXF_LUCES;   //Arreglo
 
 		if(ts.enable_fog && ts.fog_ge && !fast){
 			GeRowTerm t[4];
@@ -1272,8 +1276,8 @@ static inline __attribute__((always_inline)) void read_vertex_body(const VFormat
 }
 
 static void read_vertex(const VFormat *f, const DecVertex *d, GeClipVertex *out){
-	if(ge_fast_math) read_vertex_body(f, d, out, 1);
-	else read_vertex_body(f, d, out, 0);
+	if(ge_fast_math) read_vertex_body(f, d, out, 1, 0);   //Arreglo
+	else read_vertex_body(f, d, out, 0, 0);   //Arreglo
 }
 
 /* --- Recorte (Clipper.cpp) -------------------------------------------------- */
@@ -1761,11 +1765,13 @@ static u32 index_at(const VSource *s, int i){
 static void read_raw(const VSource *s, u32 index, GeClipVertex *out){
 	DecVertex d;
 	int phase = prof_ge_enter(GEF_LEER);
+	if(prof_vtx_on) prof_vtx_phase = VXF_GENERICO;   //Arreglo
 	if(s->list) d = s->list[index];
 	else if(s->zero) memset(&d, 0, sizeof(d));
 	else decode_vertex(s->f, mem_ptr_r(s->vaddr + index * s->f->size, s->f->size), &d);
 	prof_ge_enter(GEF_TRANSFORMAR);
 	read_vertex(s->f, &d, out);
+	if(prof_vtx_on) prof_vtx_phase = VXF_PREPARAR;   //Arreglo
 	ge_stats.vertices++;
 	if(s->f->through) ge_stats.vertices_through++;
 	else if(s->f->wt) ge_stats.vertices_skinned++;
@@ -1908,6 +1914,7 @@ static int batch_range(const VSource *s, u32 first, int n, GeClipVertex *dst){
 	const u8 *p;
 	u32 size = f->size, off;
 	int i, psq = 0;
+	const int pv = prof_vtx_on;   //Arreglo
 	if(!opt_on[OPT_GE_VDEC_ESP] || !ge_fast_math || f->through || f->nmorph > 1 || s->zero || s->list || n <= 0)
 		return 0;
 	off = ((s->vaddr + first * size) & PSP_ADDR_MASK) - PSP_RAM_BASE;
@@ -1929,9 +1936,10 @@ static int batch_range(const VSource *s, u32 first, int n, GeClipVertex *dst){
 		DecVertex d; \
 		if(f->tc != (TC) || f->col != (COL) || f->nrm != (NRM) || f->pos != (POS) || f->wt != (WT)) __builtin_unreachable(); \
 		d.color0 = 0; \
+		if(pv) prof_vtx_phase = (WT) ? VXF_HUESOS : VXF_DECODIFICAR; \
 		decode_plain(f, p, &d, TC, COL, NRM, POS, WT, Q); \
-		read_vertex_body(f, &d, &dst[i], 1); \
-	}
+		read_vertex_body(f, &d, &dst[i], 1, pv); \
+	}   //Arreglo
 #define BATCH(TC, COL, NRM, POS, WT) do { if(psq){ BATCH1(TC, COL, NRM, POS, WT, 1) } else { BATCH1(TC, COL, NRM, POS, WT, 0) } } while(0)
 	switch((f->vtype & 0x7FF) | (f->wt && !opt_on[OPT_GE_SKIN_RAPIDO] ? 0x800 : 0)){
 	case 0x11A: BATCH(2, 6, 0, 2, 0); break;    /* uv16 c4444 p16 */
@@ -1943,11 +1951,13 @@ static int batch_range(const VSource *s, u32 first, int n, GeClipVertex *dst){
 	default:
 		for(i = 0; i < n; i++, p += size){
 			DecVertex d;
+			if(pv) prof_vtx_phase = f->wt ? VXF_HUESOS : VXF_DECODIFICAR;   //Arreglo
 			decode_vertex(f, p, &d);
-			read_vertex_body(f, &d, &dst[i], 1);
+			read_vertex_body(f, &d, &dst[i], 1, pv);   //Arreglo
 		}
 		break;
 	}
+	if(pv) prof_vtx_phase = VXF_PREPARAR;   //Arreglo
 #undef BATCH
 #undef BATCH1
 	if(opt_on[OPT_GE_VERIF]) verify_end(f, psp_mem.ram + off, n, dst);
@@ -2396,6 +2406,7 @@ void ge_draw_prim(u32 prim, u32 count){
 		es.v_ok = es.t_ok = 1;
 		if(opt_on[OPT_PROF_ESTADO]) census_vt(&f, v_clean, t_clean);
 		phase = prof_ge_enter(GEF_LEER);
+		if(prof_vtx_on) prof_vtx_phase = VXF_PREPARAR;   //Arreglo
 		vsource_init(&vr, &f, vaddr, iaddr, (int)count);
 		vsource_batch(&vr, (int)count);
 		prof_ge_leave(phase);

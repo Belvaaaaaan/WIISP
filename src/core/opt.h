@@ -42,6 +42,7 @@ enum {
 	OPT_PROF_CPU,   //Arreglo
 	OPT_PROF_BLOQUES,   //Arreglo
 	OPT_PROF_VENTANA_JUEGO,   //Arreglo
+	OPT_PROF_VERTICES,   //Arreglo
 	/* Primera tanda del GE (resultado idéntico) */
 	OPT_GE_SKIN_RAPIDO,   /* skinning mezclando las matrices por peso */
 	OPT_GE_MTX_CACHE,     /* matrices combinadas solo cuando cambian */

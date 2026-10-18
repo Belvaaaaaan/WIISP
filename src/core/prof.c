@@ -15,6 +15,9 @@ volatile int prof_ge_phase;
 volatile u32 prof_samples[PROF_N], prof_ge_samples[GEF_N];
 volatile int prof_cpu_phase;   //arreglo
 volatile u32 prof_cpu_samples[CPF_N];   //arreglo
+u8 prof_vtx_on;   //Arreglo
+volatile int prof_vtx_phase;   //Arreglo
+volatile u32 prof_vtx_samples[VXF_N];   //Arreglo
 
 void prof_set_clock(u64 (*clock)(void), u64 hz){
 	int i;
@@ -72,4 +75,5 @@ void prof_sample(void){
 	if(b != PROF_GE) return;
 	f = prof_ge_phase;
 	if((unsigned)f < GEF_N) prof_ge_samples[f]++;
+	if(f == GEF_LEER && prof_vtx_on && (unsigned)prof_vtx_phase < VXF_N) prof_vtx_samples[prof_vtx_phase]++;   //Arreglo
 }

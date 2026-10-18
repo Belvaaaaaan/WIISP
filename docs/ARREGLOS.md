@@ -5,6 +5,22 @@ la 0.5.17.2; antes se marcaban con `//arreglo`). Aquí va, por versión, qué
 se arregló o cambió y una descripción breve. El detalle está en
 `docs/CONTINUAR.md`.
 
+## 0.5.19.1
+
+- `cpu/predec.c`: el bucle del predecodificado (las cuatro copias) se
+  compila con `optimize("no-branch-count-reg")`: sin `bdnz`, el registro
+  CTR solo lo usa el salto a la siguiente tarjeta. Sin interruptor (es un
+  cambio del compilador).
+- `cpu/predec_bucle.h`, `cpu/predec.c`, `hle/hle.c`: con `prof_bloques`,
+  una pila de retornos simulada (32 entradas; se apila en jal, jalr y los
+  bltzal/bgezal tomados, se desapila en `jr ra`, también en los stubs):
+  línea `[TIEMPOS] Pila de retornos simulada`. Solo mide.
+- `core/prof.c`, `core/prof.h`, `gpu/ge_vertex.c`, `hle/hle.c`:
+  `prof_vertices` (apagado): "leer vertices" por partes con el muestreo
+  (preparar, decodificar, huesos, transformar, pantalla, luces uv y
+  niebla, camino genérico): línea `[TIEMPOS] Leer vertices por dentro`.
+- `hle/hle.h`: versión 0.5.19.1.
+
 ## 0.5.19
 
 - `cpu/predec.c`, `cpu/predec_bucle.h`: `cpu_enlace` (encendido). Las

@@ -22,10 +22,12 @@ PREDEC_ATRIB static u32 PREDEC_BUCLE(u32 max_cycles){   //arreglo
 #define FASE(f) (prof_cpu_phase = (f))   //Arreglo
 #define CAIDA(m) do { if(bq) caida((m), pc, lim4); } while(0)   //Arreglo
 #define CONTAR(x) ((void)(x))   //Arreglo
+#define RAS_PUSH() do { if(bq) ras_push(cblk->end); } while(0)   //Arreglo
 #else   //Arreglo
 #define FASE(f) ((void)0)   //Arreglo
 #define CAIDA(m) ((void)0)   //Arreglo
 #define CONTAR(x) ((void)0)   //Arreglo
+#define RAS_PUSH() ((void)0)   //Arreglo
 #endif   //Arreglo
 	u32 pc, npc, left, seg, bt = 0;
 	const Card *c = NULL;
@@ -435,6 +437,12 @@ ret:
 		{ const void *n_ = c[1].h; c++; goto *n_; }   //Arreglo
 	}   //Arreglo
 	L_SYSCALL:
+#if PREDEC_MEDIR   //Arreglo
+		if(bq && cblk->branch && IDX() == BN - 1 && CB[BN - 2].h == h_tab[OP_JR] && CB[BN - 2].a.r.s == 31 * 4){   //Arreglo
+			st.ras_stub++;   //Arreglo
+			st.ras_stub_ok += (u64)ras_pop(bt);   //Arreglo
+		}   //Arreglo
+#endif   //Arreglo
 		cpu.llbit = 0;
 		SYNC_AT();
 		hle_syscall(c->a.w);
@@ -446,20 +454,20 @@ ret:
 	BRANCH(BGTZ, (s32)G(S) > 0)
 	BRANCH(BLTZ, (s32)G(S) < 0)
 	BRANCH(BGEZ, (s32)G(S) >= 0)
-	OP(BLTZAL, { s32 v = (s32)G(S); G(31 * 4) = cblk->end; if(v < 0){ bt = cblk->target; nbx = cblk->succ[1]; } else { bt = cblk->end; nbx = cblk->succ[0]; } })   //Arreglo
-	OP(BGEZAL, { s32 v = (s32)G(S); G(31 * 4) = cblk->end; if(v >= 0){ bt = cblk->target; nbx = cblk->succ[1]; } else { bt = cblk->end; nbx = cblk->succ[0]; } })   //Arreglo
+	OP(BLTZAL, { s32 v = (s32)G(S); G(31 * 4) = cblk->end; if(v < 0){ bt = cblk->target; nbx = cblk->succ[1]; RAS_PUSH(); } else { bt = cblk->end; nbx = cblk->succ[0]; } })   //Arreglo
+	OP(BGEZAL, { s32 v = (s32)G(S); G(31 * 4) = cblk->end; if(v >= 0){ bt = cblk->target; nbx = cblk->succ[1]; RAS_PUSH(); } else { bt = cblk->end; nbx = cblk->succ[0]; } })   //Arreglo
 	BRANCH_LIKELY(BEQL, G(S) == G(T))
 	BRANCH_LIKELY(BNEL, G(S) != G(T))
 	BRANCH_LIKELY(BLEZL, (s32)G(S) <= 0)
 	BRANCH_LIKELY(BGTZL, (s32)G(S) > 0)
 	BRANCH_LIKELY(BLTZL, (s32)G(S) < 0)
 	BRANCH_LIKELY(BGEZL, (s32)G(S) >= 0)
-	L_BLTZALL: { s32 v = (s32)G(S); G(31 * 4) = cblk->end; if(v < 0){ const void *n_ = c[1].h; bt = cblk->target; nbx = cblk->succ[1]; c++; goto *n_; } goto x_likely_nt; }   //Arreglo
-	L_BGEZALL: { s32 v = (s32)G(S); G(31 * 4) = cblk->end; if(v >= 0){ const void *n_ = c[1].h; bt = cblk->target; nbx = cblk->succ[1]; c++; goto *n_; } goto x_likely_nt; }   //Arreglo
+	L_BLTZALL: { s32 v = (s32)G(S); G(31 * 4) = cblk->end; if(v < 0){ const void *n_ = c[1].h; bt = cblk->target; nbx = cblk->succ[1]; RAS_PUSH(); c++; goto *n_; } goto x_likely_nt; }   //Arreglo
+	L_BGEZALL: { s32 v = (s32)G(S); G(31 * 4) = cblk->end; if(v >= 0){ const void *n_ = c[1].h; bt = cblk->target; nbx = cblk->succ[1]; RAS_PUSH(); c++; goto *n_; } goto x_likely_nt; }   //Arreglo
 	OP(J, { bt = cblk->target; nbx = cblk->succ[1]; })   //Arreglo
-	OP(JAL, { G(31 * 4) = cblk->end; bt = cblk->target; nbx = cblk->succ[1]; })   //Arreglo
+	OP(JAL, { G(31 * 4) = cblk->end; bt = cblk->target; nbx = cblk->succ[1]; RAS_PUSH(); })   //Arreglo
 	OP(JR, bt = G(S))
-	OP(JALR, { u32 v = G(S); G(D) = cblk->end; bt = v; })
+	OP(JALR, { u32 v = G(S); G(D) = cblk->end; bt = v; RAS_PUSH(); })   //Arreglo
 	L_BC1: {
 		int cond = (cpu.fcr31 & FCR31_COND) != 0, taken;
 		if(cblk->end - 8 == cpu.fcc_hazard_pc) cond = cpu.fcc_old;
@@ -494,6 +502,16 @@ ret:
 		goto link_end;
 	L_BEND:
 		pc = bt;
+#if PREDEC_MEDIR   //Arreglo
+		if(bq && CB[BN - 2].h == h_tab[OP_JR] && CB[BN - 2].a.r.s == 31 * 4){   //Arreglo
+			const Block *e_ = cblk->succ[pc != cblk->end];   //Arreglo
+			const int eok = e_ && e_->pc == pc && e_->alive && left >= e_->n && !verif, rok = ras_pop(pc);   //Arreglo
+			st.ras_jr++;   //Arreglo
+			st.ras_enlace += (u64)eok;   //Arreglo
+			st.ras_ok += (u64)rok;   //Arreglo
+			st.ras_gana += (u64)(rok && !eok);   //Arreglo
+		}   //Arreglo
+#endif   //Arreglo
 		goto link;
 	L_BENDD: {   //Arreglo
 		Block *const nb_ = nbx;
@@ -548,4 +566,5 @@ ret:
 #undef FASE   //Arreglo
 #undef CAIDA   //Arreglo
 #undef CONTAR   //Arreglo
+#undef RAS_PUSH   //Arreglo
 }
