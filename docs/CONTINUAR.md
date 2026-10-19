@@ -2045,7 +2045,8 @@ que no, `w >= 0` en las banderas, no puede pasar: con w = 0 x sale
 infinita o NaN). pspautotests 275/275; A/B de `ge_pantalla_rapida` con
 matemática rápida en las 572: solo `malloc/malloc` y
 `utility/savedata/deleteemptyfilename`, que salen iguales o distintas
-según la corrida (también con `prof_es`); tests/guest 22/22.
+según la corrida (también con `prof_es`); tests/guest 22/22; recarga con
+ASan: 572 pruebas, 0 con problemas (esta vez sin los +304 bytes).
 
 Autotest (4 registros y un `.capturas.txt`): sin (`ge_pantalla_rapida`
 0), con (todo por defecto), verif (`ge_verificar`: cada tanda también uno
