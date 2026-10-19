@@ -59,6 +59,7 @@ enum {
 	                         donde puede caer con su swizzle */
 	OPT_GE_VDEC_ESP,      /* 1.2 decodificadores de vértices por vtype */
 	OPT_GE_VDEC_PSQ,      /* 1.2b conversión con psq_l y GQR */
+	OPT_GE_PANTALLA_RAPIDA,   //Arreglo
 	OPT_GE_VERIF,         /* comprobar los caminos rápidos del GE contra los de
 	                         referencia en el Wii (ge_vdec_esp, gx_envio_rapido,
 	                         ge_ensamblar_rapido, ge_vdec_psq): lento, solo

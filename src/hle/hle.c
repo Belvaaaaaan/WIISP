@@ -715,7 +715,7 @@ void hle_profile_report(const char *why){ profile_report(why, 0); }   //Arreglo
 
 //Arreglo
 static void profile_bloques_lines(const PredecStats *p, const PredecStats *b, u64 instr){
-	static const char *const tn[7] = { "1", "2", "3-4", "5-8", "9-16", "17-32", "33-64" };
+	static const char *const tn[7] = { "1", "2", "3-4", "5-8", "9-16", "17-32", "33-65" };   //Arreglo
 	u64 n = p->bq_bloques - b->bq_bloques, e[2][2], caidas = 0, ops[PREDEC_CAIDA_OPS];
 	char line[1024], nm[24];
 	size_t len;

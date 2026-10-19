@@ -1103,6 +1103,36 @@ static inline __attribute__((always_inline)) int round_to_screen(float sx, float
 	return outside;
 }
 
+//Arreglo
+typedef struct {
+	u32 ox, oy;
+	float fox, foy;
+} PantallaLote;
+
+//Arreglo
+static inline __attribute__((always_inline)) float floor_pos(float f){
+	float t = (f + 12582912.0f) - 12582912.0f;
+	return t > f ? t - 1.0f : t;
+}
+
+//Arreglo
+static inline __attribute__((always_inline)) void pantalla_lote(const PantallaLote *pl, float sx, float sy, float sz,
+                                                               const float *clip, GeVertex *v){
+	const float x16 = sx * 16.0f, y16 = sy * 16.0f;
+	const int ix = (int)x16, iy = (int)y16, iz = (int)sz;
+	u32 f;
+	v->x = (int)((u32)ix - pl->ox);
+	v->y = (int)((u32)iy - pl->oy);
+	v->z = (u16)iz;
+	v->fx = floor_pos(x16) - pl->fox;
+	v->fy = floor_pos(y16) - pl->foy;
+	v->fz = floor_pos(sz);
+	if(__builtin_fabsf(clip[0]) <= clip[3] && __builtin_fabsf(clip[1]) <= clip[3] && __builtin_fabsf(clip[2]) <= clip[3] && clip[3] > 0.0f)
+		f = GE_CF_WPOS;
+	else f = ge_clip_flags_planes(clip);
+	v->clip_flags = (u16)(f | GE_CF_SMALL);
+}
+
 /* ClipToScreen (recorte): siempre comprueba el rango */
 static int clip_to_screen(const float *clip, GeVertex *v){
 	float x = ge_viewport(clip[0], clip[3], ge_f24(ge.cmd[GE_VIEWPORTXSCALE]), ge_f24(ge.cmd[GE_VIEWPORTXCENTER]));
@@ -1142,7 +1172,7 @@ static float last_uv[2], last_normal[3];
    camino por lotes de ge_vdec_esp usa exactamente estas mismas expresiones,
    así que el compilador hace las mismas operaciones y salen los mismos bits) */
 static inline __attribute__((always_inline)) void read_vertex_body(const VFormat *f, const DecVertex *d, GeClipVertex *out, const int fast,
-                                                                   const int pv){   //Arreglo
+                                                                   const int pv, const PantallaLote *pl){   //Arreglo
 	GeVertex *v = &out->v;
 	float pos[3], normal[3];
 	int i;
@@ -1186,7 +1216,7 @@ static inline __attribute__((always_inline)) void read_vertex_body(const VFormat
 			iw = 1.0f / out->clip[3];
 			sx = out->clip[0] * iw * ts.screen_scale[0] + ts.screen_add[0];
 			sy = out->clip[1] * iw * ts.screen_scale[1] + ts.screen_add[1];
-			sz = ge_floorf(out->clip[2] * iw * ts.screen_scale[2] + ts.screen_add[2]);
+			sz = out->clip[2] * iw * ts.screen_scale[2] + ts.screen_add[2];   //Arreglo
 		} else {
 			for(i = 0; i < 4; i++) out->clip[i] = ge_clip_component(pos, ts.matrix, i);
 			sx = ge_viewport(out->clip[0], out->clip[3], ts.screen_scale[0], ts.screen_add[0]);
@@ -1196,10 +1226,15 @@ static inline __attribute__((always_inline)) void read_vertex_body(const VFormat
 		v->clipw = out->clip[3];
 		v->fogdepth = 1.0f;
 		if(pv) prof_vtx_phase = VXF_PANTALLA;   //Arreglo
-		if(round_to_screen(sx, sy, sz, out->clip, ts.depth_clip, 0, v)){
-			ge_vertex_mark_outside(v);
-			return;
-		}
+		if(fast && pl && sx >= 0.0f && sx < SCREEN_BOUND && sy >= 0.0f && sy < SCREEN_BOUND && sz >= 0.0f && sz < 65536.0f)   //Arreglo
+			pantalla_lote(pl, sx, sy, sz, out->clip, v);   //Arreglo
+		else {   //Arreglo
+			if(fast) sz = ge_floorf(sz);   //Arreglo
+			if(round_to_screen(sx, sy, sz, out->clip, ts.depth_clip, 0, v)){
+				ge_vertex_mark_outside(v);
+				return;
+			}
+		}   //Arreglo
 		if(pv) prof_vtx_phase = VXF_LUCES;   //Arreglo
 
 		if(ts.enable_fog && ts.fog_ge && !fast){
@@ -1276,8 +1311,8 @@ static inline __attribute__((always_inline)) void read_vertex_body(const VFormat
 }
 
 static void read_vertex(const VFormat *f, const DecVertex *d, GeClipVertex *out){
-	if(ge_fast_math) read_vertex_body(f, d, out, 1, 0);   //Arreglo
-	else read_vertex_body(f, d, out, 0, 0);   //Arreglo
+	if(ge_fast_math) read_vertex_body(f, d, out, 1, 0, NULL);   //Arreglo
+	else read_vertex_body(f, d, out, 0, 0, NULL);   //Arreglo
 }
 
 /* --- Recorte (Clipper.cpp) -------------------------------------------------- */
@@ -1915,11 +1950,20 @@ static int batch_range(const VSource *s, u32 first, int n, GeClipVertex *dst){
 	u32 size = f->size, off;
 	int i, psq = 0;
 	const int pv = prof_vtx_on;   //Arreglo
+	PantallaLote pl_;   //Arreglo
+	const PantallaLote *pl = NULL;   //Arreglo
 	if(!opt_on[OPT_GE_VDEC_ESP] || !ge_fast_math || f->through || f->nmorph > 1 || s->zero || s->list || n <= 0)
 		return 0;
 	off = ((s->vaddr + first * size) & PSP_ADDR_MASK) - PSP_RAM_BASE;
 	if(off >= psp_mem.ram_size || (u64)size * (u32)n > psp_mem.ram_size - off) return 0;
 	p = psp_mem.ram + off;
+	if(opt_on[OPT_GE_PANTALLA_RAPIDA]){   //Arreglo
+		pl_.ox = ge.cmd[GE_OFFSETX] & 0xFFFF;   //Arreglo
+		pl_.oy = ge.cmd[GE_OFFSETY] & 0xFFFF;   //Arreglo
+		pl_.fox = offset_float(0, pl_.ox);   //Arreglo
+		pl_.foy = offset_float(1, pl_.oy);   //Arreglo
+		pl = &pl_;   //Arreglo
+	}   //Arreglo
 	if(opt_on[OPT_GE_VERIF]) verify_begin(s, p, n);
 #ifdef GEKKO
 	psq = opt_on[OPT_GE_VDEC_PSQ];
@@ -1938,7 +1982,7 @@ static int batch_range(const VSource *s, u32 first, int n, GeClipVertex *dst){
 		d.color0 = 0; \
 		if(pv) prof_vtx_phase = (WT) ? VXF_HUESOS : VXF_DECODIFICAR; \
 		decode_plain(f, p, &d, TC, COL, NRM, POS, WT, Q); \
-		read_vertex_body(f, &d, &dst[i], 1, pv); \
+		read_vertex_body(f, &d, &dst[i], 1, pv, pl); \
 	}   //Arreglo
 #define BATCH(TC, COL, NRM, POS, WT) do { if(psq){ BATCH1(TC, COL, NRM, POS, WT, 1) } else { BATCH1(TC, COL, NRM, POS, WT, 0) } } while(0)
 	switch((f->vtype & 0x7FF) | (f->wt && !opt_on[OPT_GE_SKIN_RAPIDO] ? 0x800 : 0)){
@@ -1953,7 +1997,7 @@ static int batch_range(const VSource *s, u32 first, int n, GeClipVertex *dst){
 			DecVertex d;
 			if(pv) prof_vtx_phase = f->wt ? VXF_HUESOS : VXF_DECODIFICAR;   //Arreglo
 			decode_vertex(f, p, &d);
-			read_vertex_body(f, &d, &dst[i], 1, pv);   //Arreglo
+			read_vertex_body(f, &d, &dst[i], 1, pv, pl);   //Arreglo
 		}
 		break;
 	}

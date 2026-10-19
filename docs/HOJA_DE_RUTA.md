@@ -220,6 +220,20 @@ intérprete de siempre). Banco de qemu: de 17,5 a 15,4 instrucciones del
 Broadway por instrucción de la PSP. Pendientes: quitar los `bdnz` del bucle
 (`no-branch-count-reg`) y una pila de retornos para `jr ra`.
 
+Hecha (v0.5.19.1): sin `bdnz` en el bucle (neutro en el Wii) y dos medidas:
+la pila de retornos simulada (acertaría el 99,7 % de los `jr ra`, pero son
+~0,5 %) y `prof_vertices` (leer vértices por partes: pasar a pantalla y
+transformar, el 18 % de la pelea).
+
+Hecha (v0.5.20): 1.2c `ge_pantalla_rapida`: en el camino por lotes, un
+vértice con x, y en [0, 4096) y z en [0, 65536) pasa a pantalla sin
+comprobar rangos (nada sale fuera ni se acota), con una conversión a
+entero por coordenada, el offset en float una vez por tanda y las
+banderas de recorte sin mirar el rango; el resto, como siempre. Idéntico
+bit a bit (tests/test_vdec.c, también en los bordes) y comprobable en el
+Wii con `ge_verificar`. Banco de qemu: de 346,7 a 252,2 instrucciones por
+vértice (uv16 c4444 p16), unas 90 menos también con huesos.
+
 Primera tanda acordada (todas "más barato", verificables en el PC):
 0.1 `prof_espera`, **skinning rápido** (`ge_skin_rapido`), **matrices al
 cambiar** (`ge_mtx_cache`), **color constante** (`ge_color_const`), 2.1

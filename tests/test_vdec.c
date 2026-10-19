@@ -243,6 +243,7 @@ static void write_case_data(const Case *c){
 }
 
 static size_t cap_draws;   /* lo capturado antes de los vértices inmediatos */
+static int pantalla_off;   //Arreglo
 
 /* opt: los interruptores de los vértices; ens: ge_ensamblar_rapido */
 static void run_case(const Case *c, int opt, int ens, GeStats *st){
@@ -258,6 +259,7 @@ static void run_case(const Case *c, int opt, int ens, GeStats *st){
 	opt_on[OPT_GE_VDEC_PSQ] = (u8)opt;   /* solo cambia algo en el Wii (y en qemu con psq_l emulado) */
 	opt_on[OPT_GE_TRI_RAPIDO] = (u8)opt;
 	opt_on[OPT_GE_ENSAMBLAR] = (u8)ens;
+	opt_on[OPT_GE_PANTALLA_RAPIDA] = (u8)(opt && !pantalla_off);   //Arreglo
 	memset(&ge_stats, 0, sizeof(ge_stats));
 	cap_n = 0;
 	for(k = 0; k < 3; k++){
@@ -367,6 +369,78 @@ static void test_batch_formats(Case *c){
 	printf("  formatos con decodificador propio: %d tandas, %d primitivas\n", n, prims);
 }
 
+//Arreglo
+static float borde(const float *v, u32 n, float lo, float hi){
+	float f = rnd() % 3 ? frnd(lo, hi) : v[rnd() % n];
+	u32 b, k = rnd() % 8;
+	memcpy(&b, &f, 4);
+	if(k == 1) b++;
+	else if(k == 2) b--;
+	else if(k == 3) b += 1 + rnd() % 3;
+	else if(k == 4 && (b & 0x7FFFFFFFu)) b -= 1 + rnd() % 3;
+	else if(k == 5 && rnd() % 4 == 0) b ^= 0x80000000u;
+	memcpy(&f, &b, 4);
+	return f;
+}
+
+//Arreglo
+static void test_pantalla_bordes(Case *c){
+	static const float bx[] = { 0.0f, -0.0f, 4095.96875f, 4095.5f, 4096.0f, 1.0f, 0.03125f, 0.0625f, 2047.5f, 1e-30f,
+	                            -1e-30f, 4194303.0f, 1e30f, __builtin_inff(), __builtin_nanf("") };
+	static const float bz[] = { 0.0f, -0.0f, 65535.0f, 65535.5f, 65536.0f, 65536.5f, 0.5f, 1.0f, 32767.5f, 1e-30f,
+	                            -1e-30f, 4194303.0f, 1e30f, __builtin_inff(), __builtin_nanf("") };
+	static const float p2[] = { 1.0f, 16.0f, 0.0625f, 2.0f, 0.5f };
+	const u32 saved = rs;
+	char rep[400];
+	unsigned vc = 0, vd = 1;
+	int n, k, i;
+	ge_vdec_verif_report(rep, sizeof(rep));
+	opt_on[OPT_GE_VERIF] = 1;
+	for(n = 0; n < 600; n++){
+		GeStats sv;
+		float sx = p2[rnd() % 5], sy = p2[rnd() % 5], sz = p2[rnd() % 5], w = p2[rnd() % 5];
+		if(n % 8 == 7){ sx = 240.0f; sy = -136.0f; sz = frnd(-32000.0f, 32000.0f); }
+		if(n % 16 == 5) w = -w;
+		random_case(c);
+		c->imm_n = 0;
+		for(i = 0; i < 12; i++) c->world[i] = c->view[i] = (i % 4 == 0) ? 1.0f : 0.0f;
+		memset(c->proj, 0, sizeof(c->proj));
+		c->proj[0] = c->proj[5] = c->proj[10] = 1.0f;
+		c->proj[15] = w;
+		c->cmd[GE_VIEWPORTXSCALE] = f24(sx);
+		c->cmd[GE_VIEWPORTYSCALE] = f24(sy);
+		c->cmd[GE_VIEWPORTZSCALE] = f24(sz);
+		c->cmd[GE_VIEWPORTXCENTER] = c->cmd[GE_VIEWPORTYCENTER] = c->cmd[GE_VIEWPORTZCENTER] = 0;
+		c->cmd[GE_OFFSETX] = n % 3 == 0 ? 0 : n % 3 == 1 ? 0xFFFF : rnd() & 0xFFFF;
+		c->cmd[GE_OFFSETY] = n % 5 == 0 ? 0xFFFF : rnd() & 0xFFFF;
+		c->cmd[GE_DEPTHCLAMPENABLE] = (u32)(n >> 1) & 1;
+		c->cmd[GE_CLEARMODE] = 0;
+		for(k = 0; k < 3; k++){
+			const u32 cnt = 3 * (1 + rnd() % 16);
+			u8 *p = mem_ptr(VBASE + (u32)k * 0x40000u, cnt * 24);
+			c->vt[k] = k == 1 && rnd() % 4 == 0 ? 0x11F : 0x19F;
+			c->prim[k] = GE_PRIM_TRIANGLES;
+			c->count[k] = cnt;
+			for(i = 0; i < (int)cnt * 24 && p; i++) p[i] = (u8)rnd();
+			for(i = 0; i < (int)cnt && p && c->vt[k] == 0x19F; i++){
+				float pos[3];
+				pos[0] = borde(bx, sizeof(bx) / sizeof(bx[0]), 0.0f, 4095.96875f) * w / sx;
+				pos[1] = borde(bx, sizeof(bx) / sizeof(bx[0]), 0.0f, 4095.96875f) * w / sy;
+				pos[2] = borde(bz, sizeof(bz) / sizeof(bz[0]), 0.0f, 65535.99f) * w / sz;
+				memcpy(p + (u32)i * 24 + 12, pos, 12);
+			}
+		}
+		run_case(c, 1, 1, &sv);
+	}
+	opt_on[OPT_GE_VERIF] = 0;
+	ge_vdec_verif_report(rep, sizeof(rep));
+	CHECK(sscanf(rep, "Verificacion (ge_verificar): vertices %u comparados, %u distintos", &vc, &vd) == 2);
+	CHECK(vc > 20000 && vd == 0);
+	CHECK(strstr(rep, "triangulos 0 comparados") == NULL && strstr(rep, "comparados, 0 distintos; estado") != NULL);
+	printf("  bordes de ge_pantalla_rapida: %s\n", rep);
+	rs = saved;
+}
+
 void test_vdec(void){
 	const GeHwRenderer *saved_hw = ge_hw;
 	int saved_fast = ge_fast_math, saved_opt = opt_on[OPT_GE_VDEC_ESP], saved_skin = opt_on[OPT_GE_SKIN_RAPIDO];
@@ -384,7 +458,7 @@ void test_vdec(void){
 	ge_fast_math = 1;
 	opt_on[OPT_GE_SKIN_RAPIDO] = 1;
 	for(n = 0; n < 3000; n++){
-		GeStats sa, sb, sc;
+		GeStats sa, sb, sc, sd;   //Arreglo
 		int k;
 		random_case(&c);
 		random_imm(&c);
@@ -401,10 +475,12 @@ void test_vdec(void){
 		   ge_ensamblar_rapido, que no cambia ni los contadores (ge_tri_rapido
 		   cuenta como fuera de pantalla algunos que el camino viejo contaba
 		   como de espaldas) */
-		for(k = 0; k < 2; k++){
-			GeStats *sb_k = k ? &sc : &sb;
-			run_case(&c, 1, k, sb_k);
-			if(k) total_prims += (int)sc.primitives;
+		for(k = 0; k < 3; k++){   //Arreglo
+			GeStats *sb_k = k == 2 ? &sd : k ? &sc : &sb;   //Arreglo
+			pantalla_off = k == 2;   //Arreglo
+			run_case(&c, 1, k != 0, sb_k);   //Arreglo
+			pantalla_off = 0;   //Arreglo
+			if(k == 1) total_prims += (int)sc.primitives;   //Arreglo
 			if(an == cap_n && !memcmp(a, cap, an * sizeof(u32)) && sa.vertices == sb_k->vertices &&
 			   sa.vertex_reads == sb_k->vertex_reads && sa.tris == sb_k->tris && sa.tris_drawn == sb_k->tris_drawn &&
 			   sa.vertices_skinned == sb_k->vertices_skinned && sa.primitives == sb_k->primitives &&
@@ -420,7 +496,7 @@ void test_vdec(void){
 				       (unsigned)i, (unsigned)an, (unsigned)cap_n);
 			}
 		}
-		if(memcmp(&sb, &sc, sizeof(sb))) ens_bad++;
+		if(memcmp(&sb, &sc, sizeof(sb)) || memcmp(&sc, &sd, sizeof(sc))) ens_bad++;   //Arreglo
 	}
 	CHECK_EQ(bad, 0);
 	CHECK_EQ(ens_bad, 0);
@@ -429,6 +505,7 @@ void test_vdec(void){
 	CHECK(imm_words > 10000);   /* los inmediatos de verdad dibujan */
 	test_area_big();
 	test_batch_formats(&c);
+	test_pantalla_bordes(&c);   //Arreglo
 	/* El modo de verificación del Wii no encuentra nada aquí */
 	{
 		char rep[200];

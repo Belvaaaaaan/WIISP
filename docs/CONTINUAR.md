@@ -2002,6 +2002,56 @@ capturas, las de siempre.
   matriz (`ge_dot3_fused`, la recarga en cada vértice) 62; decodificar
   ~40; uv y color 27; el resto del bucle ~30.
 
+### v0.5.20: pasar a pantalla más barato en el camino por lotes (`ge_pantalla_rapida`, 1.2c)
+
+Lo que mostró la 0.5.19.1: "pantalla" y "transformar" son el 18 % de la
+pelea; en el banco del GE, de las 346 instrucciones por vértice de 0x11A
+unas 180 eran pasar a pantalla (tres suelos con dos comprobaciones de
+rango cada uno, tres conversiones a entero, la clave del offset en cada
+vértice, las banderas mirando un rango que ya se sabía).
+
+- `ge_pantalla_rapida` (encendido), solo en `batch_range` (el camino de
+  uno en uno, `read_vertex`, no cambia: es la referencia de `test_vdec` y
+  de `ge_verificar`). Si x e y están en [0, 4096 − 1/32) y z en
+  [0, 65536), nada sale fuera ni se acota en ninguno de los dos modos de
+  profundidad; para un valor ≥ 0 truncar es el suelo, así que cada
+  coordenada lleva una conversión (`fctiwz` + `stfiwx` + `lwz`) y el suelo
+  en float con el truco de 1,5 * 2^23 sin comprobar más; z en float es su
+  suelo (también para 0: nunca −0); x e y siempre caben en 21 bits
+  (`GE_CF_SMALL`). El offset en float se calcula una vez por tanda. Fuera
+  de ese rango (o NaN), `round_to_screen` como siempre.
+- Banco del GE (`batch_range` por vértice): 0x11A de 346,7 a 252,2;
+  0x4301 de 414,9 a 324,5; 0xC301 de 473,8 a 383,2; 0x1C301 de 593,4 a
+  502,7. Con el interruptor a 0, ~+5 (la comprobación de más). El código de
+  `batch_range` crece 14 KB (DOL +15 KB): el montón toma 15 KB menos de
+  MEM1 y los toma de MEM2 (17 MB libres).
+- Probado y descartado: la matriz y la escala de pantalla copiadas a una
+  estructura local para que no se recarguen en cada vértice: 249,9 frente
+  a 252,2 y peor con huesos (el compilador las vuelve a cargar por falta de
+  registros; además no se podría apagar con un interruptor).
+- Arreglo de medida: con `prof_bloques`, los bloques de 65 instrucciones
+  (salto en la 63 + delay slot) se contaban en `bq_tam[7]`, fuera de la
+  tabla, y sumaban en `bq_enlace[0][0]` ("al siguiente por el enlace"):
+  ahora van al último grupo, "33-65". Lo vio UBSan en `make test`.
+
+Verificación: test, test-ppc y devkitPPC 165.478 comprobaciones sin
+fallos, huellas de test_vdec sin cambios (4D4A1D8B, 0657B177, B3A2BCD3).
+`test_vdec` corre además cada caso por lotes sin el interruptor, y una
+prueba de los bordes (x, y alrededor de 0 y de 4096, z de 0 y de 65536,
+−0, NaN, infinitos, w negativa y de varias potencias de 2, offsets de 0 a
+0xFFFF; ~23.000 vértices por el camino nuevo y ~22.000 por el de siempre)
+con `ge_verificar`. Mutaciones del camino nuevo: 11 de 12 detectadas (la
+que no, `w >= 0` en las banderas, no puede pasar: con w = 0 x sale
+infinita o NaN). pspautotests 275/275; A/B de `ge_pantalla_rapida` con
+matemática rápida en las 572: solo `malloc/malloc` y
+`utility/savedata/deleteemptyfilename`, que salen iguales o distintas
+según la corrida (también con `prof_es`); tests/guest 22/22.
+
+Autotest (4 registros y un `.capturas.txt`): sin (`ge_pantalla_rapida`
+0), con (todo por defecto), verif (`ge_verificar`: cada tanda también uno
+a uno, comparado campo a campo; tiene que dar 0 distintos) y capturas
+(con `prof_vertices`, para ver el reparto nuevo de leer vértices).
+
 ### Para el siguiente chat (empezar aquí)
 
 Metodología acordada (detalle en `docs/HOJA_DE_RUTA.md`): primero medir
@@ -2019,17 +2069,17 @@ Metodología acordada (detalle en `docs/HOJA_DE_RUTA.md`): primero medir
   (0.5.16), 2.2 `cpu_predec` (0.5.17), la memoria del predecodificado y
   las medidas de la CPU (0.5.17.1), medidas por tiempo de juego, `prof_cpu`
   y `prof_bloques` (0.5.17.2), tarjetas VFPU parte a (0.5.18) y b
-  (0.5.18.1), `cpu_enlace` y `cpu_syscall_slot` (0.5.19).
+  (0.5.18.1), `cpu_enlace` y `cpu_syscall_slot` (0.5.19), la pila de
+  retornos simulada y `prof_vertices` (0.5.19.1) y 1.2c
+  `ge_pantalla_rapida` (0.5.20).
 - Herramientas para medir sin el Wii (banco de qemu con el código de
   devkitPPC, perfil por función, psq_l emulado, A/B): `tools/banco/LEEME.md`.
-- **Siguiente (propuesto, falta que el usuario lo apruebe): 0.5.20, pasar
-  a pantalla más barato** en el camino por lotes, con su interruptor y
-  bit a bit igual: el offset en float una vez por tanda, z ya entera y
-  acotada sin `ge_f2i`, x e y con una sola conversión, las banderas de
-  recorte junto con el rango de pantalla y la matriz en registros.
-  Objetivo en el banco: de 346 a ~230-250 instrucciones por vértice. La
-  pila de retornos real (~0,5 %) y la parte b2 de la VFPU, después.
-  Paired singles, aparcados.
+- **Siguiente: el resultado de la 0.5.20 en el Wii** (sin frente a con en
+  la pelea, `ge_verificar` a 0, el reparto de leer vértices con
+  `prof_vertices`). Después, por lo medido: transformar (la división por
+  w, 17 ciclos, y la cadena de la matriz), decodificar y huesos (el 7 %
+  de la pelea), la parte b2 de la VFPU o la pila de retornos real
+  (~0,5 %). Paired singles, aparcados.
 - Autotest: como mucho 4 registros y un `.capturas.txt` (el usuario no
   puede mandar más de 5 archivos en un mensaje). Siguiente también: las peleas (leer vértices: `round_to_screen`, la división por
   w y tres conversiones a entero por la memoria, IPC 0,66; los índices CI8

@@ -5,6 +5,28 @@ la 0.5.17.2; antes se marcaban con `//arreglo`). Aquí va, por versión, qué
 se arregló o cambió y una descripción breve. El detalle está en
 `docs/CONTINUAR.md`.
 
+## 0.5.20
+
+- `gpu/ge_vertex.c`: `ge_pantalla_rapida` (encendido). En el camino por
+  lotes (`batch_range`), si x e y caen en [0, 4096) y z en [0, 65536), el
+  paso a pantalla (`pantalla_lote`) no comprueba rangos ni acota: una sola
+  conversión a entero por coordenada (para un valor positivo truncar es
+  redondear hacia abajo), el suelo con el truco de 1,5 * 2^23 sin más
+  comprobaciones, el offset en float una vez por tanda y las banderas de
+  recorte sin mirar el rango de pantalla (siempre `GE_CF_SMALL`). Fuera de
+  ese rango, NaN o el camino de uno en uno, `round_to_screen` como
+  siempre. La z se redondea donde se usa.
+- `core/opt.h`, `core/opt.c`: interruptor `ge_pantalla_rapida`.
+- `cpu/predec.c`, `hle/hle.c`: con `prof_bloques`, un bloque de 65
+  instrucciones (salto en la 63 con su delay slot) se contaba fuera de la
+  tabla de tamaños y sumaba en los enlaces al siguiente; ahora va al
+  último grupo ("33-65"). Lo encontró UBSan en las pruebas.
+- `tests/test_vdec.c`: cada caso también con el camino por lotes sin
+  `ge_pantalla_rapida`; prueba dirigida de los bordes (x, y alrededor de 0
+  y de 4096, z alrededor de 0 y de 65536, -0, NaN, infinitos, w negativa,
+  offsets de 0 a 0xFFFF) comparando cada vértice con `ge_verificar`.
+- `hle/hle.h`: versión 0.5.20.
+
 ## 0.5.19.1
 
 - `cpu/predec.c`: el bucle del predecodificado (las cuatro copias) se

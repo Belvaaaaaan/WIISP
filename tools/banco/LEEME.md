@@ -10,6 +10,10 @@ al repositorio), `gcc-powerpc-linux-gnu` y `qemu-user`. Las salidas van a
   enlaza con el resto (gcc de Linux para PowerPC), `stub.c` (libogc de
   mentira) y `bench_gx.c` (tiras de 20 vértices como las de DBZ).
   `qemu-ppc $SALIDA/bench REPETICIONES VTYPE opcion=valor...`.
+  Con `qprof.py` (300 y 600 repeticiones, 6000 vértices de diferencia),
+  `batch_range` por vértice en la 0.5.20: 0x11A 252, 0x4301 325, 0xC301
+  383, 0x1C301 503 (con `ge_pantalla_rapida=0`: 352, 425, 484, 604; la
+  0.5.19.1: 347, 415, 474, 593).
 - `bench_lista.c` + `bench_cmd.c` (también los compila `build_banco.sh`):
   llamadas de dibujo como las de sceGu por el bucle de comandos de `ge.c` y
   `ge_raster.c` compilados con devkitPPC. `qemu-ppc $SALIDA/bench_lista

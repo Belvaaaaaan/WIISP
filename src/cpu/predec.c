@@ -818,7 +818,7 @@ static void caida(int motivo, u32 pc, u32 lim4){
 
 //Arreglo
 static inline u32 tam_bloque(u32 n){
-	return n <= 1 ? 0 : (u32)(32 - __builtin_clz(n - 1));
+	return n <= 1 ? 0 : n > 64 ? 6 : (u32)(32 - __builtin_clz(n - 1));   //Arreglo
 }
 
 //Arreglo
