@@ -50,6 +50,11 @@ al repositorio), `gcc-powerpc-linux-gnu` y `qemu-user`. Las salidas van a
   con `git worktree`) en las pspautotests: misma salida y misma huella de
   GX. Ojo: `gpu/exact/pixel` lee memoria que la GPU de mentira no escribe;
   con `GLIBC_TUNABLES=glibc.malloc.perturb=85` en las dos sale igual.
+- `gevert.sh DIR_BANCO [opcion=valor...]`: instrucciones por vértice
+  (total y `batch_range`) en el banco del GE para los formatos de DBZ.
+- `ventanas.py sin=a.log con=b.log ...`: compara los registros del
+  autotest del Wii por ventanas de juego (tiempo, velocidad, tirones, CPU
+  y GE, leer vértices y ciclos por unidad del PMC del GE).
 - `ab_opt.py`: pspautotests A/B con un interruptor a 0 y a 1
   (`ab_opt.py CLI PSPAUTOTESTS LISTA SALIDA opcion[,opcion] [hilos] [MR]`).
   `gpu/complex` y `malloc/malloc` cambian entre corridas (fechas, malloc).

@@ -2100,7 +2100,9 @@ Metodología acordada (detalle en `docs/HOJA_DE_RUTA.md`): primero medir
   retornos simulada y `prof_vertices` (0.5.19.1) y 1.2c
   `ge_pantalla_rapida` (0.5.20).
 - Herramientas para medir sin el Wii (banco de qemu con el código de
-  devkitPPC, perfil por función, psq_l emulado, A/B): `tools/banco/LEEME.md`.
+  devkitPPC, perfil por función, psq_l emulado, A/B) y para leer los
+  registros del Wii (`ventanas.py`): `tools/banco/LEEME.md`. El entorno
+  (devkitPPC, qemu, pspautotests, PPSSPP): `tools/setup_entorno.sh`.
 - **Siguiente (propuesto, falta que el usuario lo apruebe):** por lo
   medido en la 0.5.20, en la pelea: CPU 34 %, leer vértices 22 %
   (pantalla 7,5 %, transformar 5,7 %, huesos ~4 %, decodificar ~2,6 %),
