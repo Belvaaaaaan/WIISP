@@ -487,6 +487,156 @@ void ge_state_census_report(const GeStats *g, const GeStats *g0, char *buf, size
 #undef D
 }
 
+static struct {   //Arreglo
+	DisplayList *l;
+	u32 ini, fin, llamadas, vertices;
+	int pila, abierto, huesos, dibujo, fuera;
+	u64 ticks;
+} bb_obj;
+static int bb_tras_caja;
+
+static inline int bb_con_huesos(u32 vt){ return ((vt >> 9) & 3) && !(vt & (1u << 23)); }
+static inline u64 bb_reloj(void){ return prof_clock ? prof_clock() : 0; }
+
+static void bb_cerrar(void){
+	if(!bb_obj.abierto) return;
+	bb_obj.abierto = 0;
+	ge_stats.ob_n++;
+	ge_stats.ob_llamadas += bb_obj.llamadas;
+	ge_stats.ob_vertices += bb_obj.vertices;
+	ge_stats.ob_ticks += bb_obj.ticks;
+	if(!bb_obj.llamadas){ ge_stats.ob_vacios++; return; }
+	if(bb_obj.dibujo) return;
+	ge_stats.ob_nada++;
+	ge_stats.ob_nada_llamadas += bb_obj.llamadas;
+	ge_stats.ob_nada_vertices += bb_obj.vertices;
+	ge_stats.ob_nada_ticks += bb_obj.ticks;
+	ge_stats.ob_fuera += bb_obj.fuera;
+	if(bb_obj.huesos){
+		ge_stats.ob_nada_huesos++;
+		ge_stats.ob_nada_huesos_vertices += bb_obj.vertices;
+	}
+}
+
+static void __attribute__((noinline)) censo_bbox_caja(u32 count){
+	u64 t0 = bb_reloj();
+	bb_cerrar();
+	bb_tras_caja = 1;
+	ge_stats.bb_cmds++;
+	ge_stats.bb_vertices += count;
+	ge_stats.bb_huesos += bb_con_huesos(ge.cmd[GE_VERTEXTYPE]);
+	if(count == 0){ ge_stats.bb_count0++; ge.bbox_visible = 0; return; }
+	ge_bounding_box(count);
+	ge_stats.bb_visibles += ge.bbox_visible != 0;
+	ge_stats.bb_ticks += bb_reloj() - t0;
+}
+
+static void bb_saltado(u32 ini, u32 fin){
+	u32 a, vt = ge.cmd[GE_VERTEXTYPE], llamadas = 0, vertices = 0, huesos = 0;
+	int con_llamadas = 0;
+	if(fin <= ini || fin - ini > 0x100000){ ge_stats.bj_raros++; return; }
+	for(a = ini; a < fin; a += 4){
+		u32 op, cmd;
+		if(!mem_valid(a, 4)){ ge_stats.bj_raros++; return; }
+		op = mem_read32(a);
+		cmd = op >> 24;
+		if(cmd == GE_VERTEXTYPE) vt = op & 0xFFFFFF;
+		else if(cmd == GE_PRIM){
+			llamadas++;
+			vertices += op & 0xFFFF;
+			if(bb_con_huesos(vt)) huesos += op & 0xFFFF;
+		} else if(cmd == GE_CALL || cmd == GE_JUMP || cmd == GE_BJUMP || cmd == GE_RET || cmd == GE_END) con_llamadas = 1;
+	}
+	ge_stats.bj_llamadas += llamadas;
+	ge_stats.bj_vertices += vertices;
+	ge_stats.bj_huesos += huesos;
+	ge_stats.bj_con_llamadas += con_llamadas;
+}
+
+static void __attribute__((noinline)) censo_bbox_salto(DisplayList *l, u32 target){
+	ge_stats.bj_total++;
+	if(!bb_tras_caja) ge_stats.bj_sin_caja++;
+	bb_tras_caja = 0;
+	bb_cerrar();
+	if(!ge.bbox_visible){
+		ge_stats.bj_tomados++;
+		bb_saltado(l->pc + 4, target);
+		return;
+	}
+	memset(&bb_obj, 0, sizeof(bb_obj));
+	bb_obj.abierto = 1;
+	bb_obj.fuera = 1;
+	bb_obj.l = l;
+	bb_obj.ini = l->pc + 4;
+	bb_obj.fin = target;
+	bb_obj.pila = l->stackptr;
+}
+
+static void __attribute__((noinline)) censo_bbox_prim(DisplayList *l, u32 arg){
+	u32 n = arg & 0xFFFF, t0 = ge_stats.tris, p0 = ge_stats.primitives, o0 = ge_stats.tris_outside;
+	int huesos = bb_con_huesos(ge.cmd[GE_VERTEXTYPE]), nada, fuera, dentro;
+	u64 c0 = bb_reloj(), dt;
+	ge_draw_prim((arg >> 16) & 7, n);
+	dt = bb_reloj() - c0;
+	nada = ge_stats.primitives == p0;
+	fuera = nada && ge_stats.tris != t0 && ge_stats.tris - t0 == ge_stats.tris_outside - o0;
+	dentro = bb_obj.abierto && l == bb_obj.l &&
+	         (l->stackptr > bb_obj.pila || (l->stackptr == bb_obj.pila && l->pc >= bb_obj.ini && l->pc < bb_obj.fin));
+	if(bb_obj.abierto && !dentro) bb_cerrar();
+	if(dentro){
+		bb_obj.llamadas++;
+		bb_obj.vertices += n;
+		bb_obj.ticks += dt;
+		bb_obj.huesos |= huesos;
+		bb_obj.dibujo |= !nada;
+		bb_obj.fuera &= fuera;
+		return;
+	}
+	ge_stats.sc_llamadas++;
+	ge_stats.sc_vertices += n;
+	ge_stats.sc_ticks += dt;
+	if(!nada) return;
+	ge_stats.sc_nada++;
+	ge_stats.sc_nada_vertices += n;
+	ge_stats.sc_nada_ticks += dt;
+	if(huesos){
+		ge_stats.sc_nada_huesos++;
+		ge_stats.sc_nada_huesos_vertices += n;
+	}
+	if(fuera){
+		ge_stats.sc_fuera++;
+		ge_stats.sc_fuera_vertices += n;
+		ge_stats.sc_fuera_ticks += dt;
+	}
+}
+
+static double bb_ms(u64 t, u64 hz){ return hz ? 1000.0 * (double)t / (double)hz : 0.0; }
+
+void ge_bbox_census_report(const GeStats *g, const GeStats *g0, u64 hz, char *buf, size_t size){
+#define D(x) (g->x - g0->x)
+	snprintf(buf, size,
+	         "Censo de cajas (prof_bbox): BBOX %u (%u vertices de caja, %.1f ms; %u con huesos en el tipo de vertice): visibles %u, "
+	         "fuera %u, con 0 vertices %u, pasan sin probar %u; BJUMP %u (%u sin BBOX antes): tomados %u, que saltan %u llamadas "
+	         "y %u vertices (%u con huesos; %u tramos con saltos o llamadas dentro, %u tramos raros)\n"
+	         "Censo de cajas: objetos que pasan la caja %u (%u sin llamadas) con %u llamadas y %u vertices (%.1f ms); sin dibujar nada %u objetos "
+	         "(%u enteros fuera de pantalla), %u llamadas y %u vertices (%.1f ms); de ellos con huesos %u objetos y %u vertices\n"
+	         "Censo de cajas: llamadas fuera de objetos %u con %u vertices (%.1f ms); sin dibujar nada %u llamadas y %u vertices "
+	         "(%.1f ms), con huesos %u llamadas y %u vertices; enteras fuera de pantalla %u llamadas y %u vertices (%.1f ms)",
+	         (unsigned)D(bb_cmds), (unsigned)D(bb_vertices), bb_ms(D(bb_ticks), hz), (unsigned)D(bb_huesos),
+	         (unsigned)D(bb_visibles), (unsigned)(D(bb_cmds) - D(bb_visibles) - D(bb_count0)), (unsigned)D(bb_count0),
+	         (unsigned)D(bb_sin_probar), (unsigned)D(bj_total), (unsigned)D(bj_sin_caja), (unsigned)D(bj_tomados),
+	         (unsigned)D(bj_llamadas), (unsigned)D(bj_vertices), (unsigned)D(bj_huesos), (unsigned)D(bj_con_llamadas),
+	         (unsigned)D(bj_raros),
+	         (unsigned)D(ob_n), (unsigned)D(ob_vacios), (unsigned)D(ob_llamadas), (unsigned)D(ob_vertices), bb_ms(D(ob_ticks), hz),
+	         (unsigned)D(ob_nada), (unsigned)D(ob_fuera), (unsigned)D(ob_nada_llamadas), (unsigned)D(ob_nada_vertices),
+	         bb_ms(D(ob_nada_ticks), hz), (unsigned)D(ob_nada_huesos), (unsigned)D(ob_nada_huesos_vertices),
+	         (unsigned)D(sc_llamadas), (unsigned)D(sc_vertices), bb_ms(D(sc_ticks), hz), (unsigned)D(sc_nada),
+	         (unsigned)D(sc_nada_vertices), bb_ms(D(sc_nada_ticks), hz), (unsigned)D(sc_nada_huesos),
+	         (unsigned)D(sc_nada_huesos_vertices), (unsigned)D(sc_fuera), (unsigned)D(sc_fuera_vertices),
+	         bb_ms(D(sc_fuera_ticks), hz));
+#undef D
+}   //Arreglo
+
 /* --- Ejecución de comandos ---------------------------------------------- */
 
 /* Transferencia de bloques. Como en el hardware (medido por PPSSPP):
@@ -755,6 +905,7 @@ static void execute(DisplayList *l, u32 op){
 		break;
 	case GE_PRIM:
 		cycles_executed += (u64)vertex_cost() * (arg & 0xFFFF);
+		if(opt_on[OPT_PROF_BBOX]){ censo_bbox_prim(l, arg); break; }   //Arreglo
 		ge_draw_prim((arg >> 16) & 7, arg & 0xFFFF);
 		break;
 	case GE_BEZIER:
@@ -764,6 +915,7 @@ static void execute(DisplayList *l, u32 op){
 		ge_draw_spline(arg);
 		break;
 	case GE_BOUNDINGBOX:
+		if(opt_on[OPT_PROF_BBOX]){ cycles_executed += 22ull * (arg & 0xFFFF); censo_bbox_caja(arg & 0xFFFF); break; }   //Arreglo
 		if((arg & 0xFFFF) == 0){ ge.bbox_visible = 0; break; }
 		cycles_executed += 22ull * (arg & 0xFFFF);
 		ge_bounding_box(arg & 0xFFFF);
@@ -772,6 +924,7 @@ static void execute(DisplayList *l, u32 op){
 		jump_to(l, rel_addr(arg & 0xFFFFFC));
 		break;
 	case GE_BJUMP:
+		if(opt_on[OPT_PROF_BBOX]) censo_bbox_salto(l, rel_addr(arg & 0xFFFFFC));   //Arreglo
 		if(!ge.bbox_visible) jump_to(l, rel_addr(arg & 0xFFFFFC));
 		break;
 	case GE_CALL: {
@@ -838,6 +991,84 @@ void ge_test_execute(u32 op){
 	execute(&l, op);
 }
 
+static u8 cmd_con_caso[256];   //Arreglo
+
+static void __attribute__((constructor)) cmd_casos_tabla(void){   //Arreglo
+	static const u8 casos[] = {
+		GE_VADDR, GE_IADDR, GE_PRIM, GE_BEZIER, GE_SPLINE, GE_BOUNDINGBOX, GE_JUMP, GE_BJUMP, GE_CALL, GE_RET, GE_END,
+		GE_ORIGIN, GE_OFFSETADDR, GE_WORLDMATRIXNUMBER, GE_VIEWMATRIXNUMBER, GE_PROJMATRIXNUMBER, GE_TGENMATRIXNUMBER,
+		GE_BONEMATRIXNUMBER, GE_WORLDMATRIXDATA, GE_VIEWMATRIXDATA, GE_PROJMATRIXDATA, GE_TGENMATRIXDATA,
+		GE_BONEMATRIXDATA, GE_LOADCLUT, GE_TEXFLUSH, GE_TRANSFERSTART, GE_VAP
+	};
+	unsigned i;
+	for(i = 0; i < sizeof(casos); i++) cmd_con_caso[casos[i]] = 1;
+}
+
+int ge_test_cmd_con_caso(u32 cmd){ return cmd_con_caso[cmd & 0xFF]; }
+
+static void __attribute__((noinline)) verificar_simple(DisplayList *l, u32 op, u32 leido){
+	u32 cmd = op >> 24, arg = op & 0x00FFFFFFu, pc = l->pc;
+	u32 sucio = ge_sucio | (ge.cmd[cmd] != arg ? estado_grupo[cmd] : 0u);
+	u32 vaddr = ge.vaddr, iaddr = ge.iaddr, offset = ge.offset, cmds = ge_stats.commands, prims = ge_stats.primitives;
+	u32 clut = ge.clut_gen, st = (u32)gpu_state;
+	u64 ciclos = cycles_executed;
+	int malo;
+	execute(l, op);
+	ge_stats.cp_verif++;
+	malo = leido != op || ge_sucio != sucio || ge.cmd[cmd] != arg || ge.cur_cmd != cmd || l->pc != pc ||
+	       ge.vaddr != vaddr || ge.iaddr != iaddr || ge.offset != offset || ge_stats.commands != cmds + 1 ||
+	       ge_stats.primitives != prims || ge.clut_gen != clut || (u32)gpu_state != st || cycles_executed != ciclos;
+	if(malo && ge_stats.cp_verif_bad++ < 16)
+		hle_log_quiet("[VERIF] comando 0x%08X en 0x%08X distinto por el camino simple (leido 0x%08X)\n", (unsigned)op, (unsigned)pc,
+		              (unsigned)leido);
+}
+
+static void __attribute__((noinline)) run_commands_ptr(DisplayList *l){
+	const u8 *ram = psp_mem.ram;
+	const u32 lim = psp_mem.ram_size - 4;
+	while(gpu_state == GPU_RUNNING){
+		u32 pc = l->pc, off = (pc & PSP_ADDR_MASK) - PSP_RAM_BASE, op, cmd, arg;
+		if(pc == l->stall){ gpu_state = GPU_STALL; break; }
+		if(off <= lim) op = rd_le32(ram + off);
+		else if(mem_valid(pc, 4)) op = mem_read32(pc);
+		else { gpu_state = GPU_ERROR; break; }
+		cmd = op >> 24;
+		arg = op & 0x00FFFFFFu;
+		if(cmd_con_caso[cmd] | opt_on[OPT_PROF_ESTADO] | opt_on[OPT_GE_VERIF]){
+			if(opt_on[OPT_GE_VERIF] && !cmd_con_caso[cmd] && !opt_on[OPT_PROF_ESTADO]) verificar_simple(l, op, mem_read32(pc));
+			else execute(l, op);
+			l->pc += 4;
+			continue;
+		}
+		if(ge.cmd[cmd] != arg) ge_sucio |= estado_grupo[cmd];
+		ge.cmd[cmd] = arg;
+		ge.cur_cmd = cmd;
+		ge_stats.commands++;
+		l->pc = pc + 4;
+	}
+}   //Arreglo
+
+int ge_test_run_list(u32 pc, u32 end, u32 *fin){   //Arreglo
+	DisplayList l;
+	int st;
+	memset(&l, 0, sizeof(l));
+	l.pc = pc;
+	l.stall = end;
+	l.state = DL_RUNNING;
+	gpu_state = GPU_RUNNING;
+	if(opt_on[OPT_GE_CMD_PUNTERO]) run_commands_ptr(&l);
+	else while(gpu_state == GPU_RUNNING){
+		if(l.pc == l.stall){ gpu_state = GPU_STALL; break; }
+		if(!mem_valid(l.pc, 4)){ gpu_state = GPU_ERROR; break; }
+		execute(&l, mem_read32(l.pc));
+		l.pc += 4;
+	}
+	st = gpu_state;
+	gpu_state = GPU_DONE;
+	if(fin) *fin = l.pc;
+	return st;
+}   //Arreglo
+
 /* Ejecuta la cola hasta que algo la pare. Las listas no corren mientras la
    cabeza espere a que se atienda su interrupción. */
 static void process_dl_queue_body(void);
@@ -885,7 +1116,8 @@ static void process_dl_queue_body(void){
 		l->interrupted = 0;
 		gpu_state = l->pc == l->stall ? GPU_STALL : GPU_RUNNING;
 
-		while(gpu_state == GPU_RUNNING){
+		if(opt_on[OPT_GE_CMD_PUNTERO]) run_commands_ptr(l);   //Arreglo
+		else while(gpu_state == GPU_RUNNING){
 			if(l->pc == l->stall){ gpu_state = GPU_STALL; break; }
 			if(!mem_valid(l->pc, 4)){ gpu_state = GPU_ERROR; break; }
 			execute(l, mem_read32(l->pc));

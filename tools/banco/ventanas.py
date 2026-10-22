@@ -26,6 +26,10 @@ def parse(path):
             if m: w['leer'] = num(m.group(1))
         m = re.search(r'PMC del GE.*? leer (\d+) por vertice.*? ensamblar (\d+) por triangulo.*? enviar (\d+) por primitiva.*? estado (\d+) por llamada', l)
         if m: w.update(c_leer=int(m.group(1)), c_ens=int(m.group(2)), c_env=int(m.group(3)), c_est=int(m.group(4)))
+        m = re.search(r'PMC del GE.*? comandos (\d+) por llamada', l)
+        if m: w['c_cmd'] = int(m.group(1))
+        m = re.search(r'comandos (\d+) ciclos por comando', l)
+        if m: w['c_pcmd'] = int(m.group(1))
     return wins
 
 runs = [(a.split('=', 1)[0], parse(a.split('=', 1)[1])) for a in sys.argv[1:]]
@@ -36,7 +40,8 @@ print()
 cols = [('real', 's reales', '{:7.1f}'), ('vel', '% velocidad', '{:7.1f}'), ('tir_s', 's de tirones', '{:7.1f}'),
         ('cpu', '% CPU', '{:7.1f}'), ('ge', '% GE', '{:7.1f}'), ('leer', '% leer vertices', '{:7.1f}'),
         ('c_leer', 'ciclos por vertice', '{:7d}'), ('c_ens', 'ciclos por triangulo (ensamblar)', '{:7d}'),
-        ('c_env', 'ciclos por primitiva (enviar)', '{:7d}'), ('c_est', 'ciclos por llamada (estado)', '{:7d}')]
+        ('c_env', 'ciclos por primitiva (enviar)', '{:7d}'), ('c_est', 'ciclos por llamada (estado)', '{:7d}'),
+        ('c_cmd', 'ciclos por llamada (comandos)', '{:7d}'), ('c_pcmd', 'ciclos por comando', '{:7d}')]
 print('ventana     ' + ''.join(f'{k[:7]:>7}' for k, _ in runs))
 for i in range(min(len(w) for _, w in runs)):
     w0 = runs[0][1][i]

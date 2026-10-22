@@ -82,6 +82,14 @@ typedef struct {
 	   preparar comprobados */
 	u32 es_gx, es_gx_saltado, es_tri, es_tri_listo;
 	u32 es_gx_verif, es_gx_verif_bad, es_gx_verif_sin, es_tri_verif, es_tri_verif_bad;
+	u32 bb_cmds, bb_vertices, bb_visibles, bb_count0, bb_sin_probar, bb_huesos;   //Arreglo
+	u64 bb_ticks;   //Arreglo
+	u32 bj_total, bj_sin_caja, bj_tomados, bj_llamadas, bj_vertices, bj_huesos, bj_con_llamadas, bj_raros;   //Arreglo
+	u32 ob_n, ob_vacios, ob_llamadas, ob_vertices, ob_nada, ob_nada_llamadas, ob_nada_vertices, ob_nada_huesos, ob_nada_huesos_vertices, ob_fuera;   //Arreglo
+	u64 ob_ticks, ob_nada_ticks;   //Arreglo
+	u32 sc_llamadas, sc_vertices, sc_nada, sc_nada_vertices, sc_nada_huesos, sc_nada_huesos_vertices, sc_fuera, sc_fuera_vertices;   //Arreglo
+	u64 sc_ticks, sc_nada_ticks, sc_fuera_ticks;   //Arreglo
+	u32 cp_verif, cp_verif_bad;   //Arreglo
 } GeStats;
 void ge_get_stats(GeStats *out);
 
@@ -90,6 +98,7 @@ void ge_get_stats(GeStats *out);
 void ge_vtype_census(char *buf, size_t size);
 /* prof_estado: el censo de estado desde g0 hasta g en una línea por cada \n */
 void ge_state_census_report(const GeStats *g, const GeStats *g0, char *buf, size_t size);
+void ge_bbox_census_report(const GeStats *g, const GeStats *g0, u64 hz, char *buf, size_t size);   //Arreglo
 /* ge_verificar: vértices y descartes comparados y distintos desde el último informe */
 void ge_vdec_verif_report(char *buf, size_t size);
 

@@ -2485,7 +2485,7 @@ static int test_bounding_box(const VFormat *f, u32 vaddr, u32 iaddr, int count){
 	VSource src;
 	VFormat nt = *f;
 
-	if(count > 1024) return 1;
+	if(count > 1024){ ge_stats.bb_sin_probar++; return 1; }   //Arreglo
 
 	to4x4(ge.world, world);
 	to4x4(ge.view, view);
@@ -2508,7 +2508,7 @@ static int test_bounding_box(const VFormat *f, u32 vaddr, u32 iaddr, int count){
 	right = fox + (float)((rx2 < sx2 ? rx2 : sx2) + 1);
 	bottom = foy + (float)((ry2 < sy2 ? ry2 : sy2) + 1);
 	/* Si la caja sale del espacio de 4096, todo pasa */
-	if(right >= 4096.0f || bottom >= 4096.0f || left < 1.0f || top < 1.0f) return 1;
+	if(right >= 4096.0f || bottom >= 4096.0f || left < 1.0f || top < 1.0f){ ge_stats.bb_sin_probar++; return 1; }   //Arreglo
 
 	nt.through = 0;
 	memset(&src, 0, sizeof(src));
@@ -2544,6 +2544,7 @@ void ge_bounding_box(u32 count){
 	bytes = (f.idx ? 1 : f.size) * count;
 	if(!mem_valid(vaddr, bytes) || (f.idx && !mem_valid(iaddr, count * idx_size[f.idx]))){
 		ge.bbox_visible = 1;
+		ge_stats.bb_sin_probar++;   //Arreglo
 		return;
 	}
 	/* El GE solo mira un tramo de 0x100 */

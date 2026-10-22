@@ -2079,6 +2079,107 @@ a uno, comparado campo a campo; tiene que dar 0 distintos) y capturas
 - El peor tirón (771 ms a los 60,2 s de juego, 604 ms de CPU) es el
   mismo en las cuatro: no tiene que ver.
 
+### v0.5.21: censo de cajas (`prof_bbox`, para 1.3) y comandos leídos con un puntero (`ge_cmd_puntero`)
+
+Paso 10 de la hoja de ruta, empezando por 1.3 `ge_bbox`. Lo que había: el
+GE **ya emula BBOX y BJUMP** (la prueba aproximada de
+`DrawEngineCommon::TestBoundingBox` de PPSSPP, `test_bounding_box` en
+`ge_vertex.c`): si el juego manda la caja de un modelo y cae fuera, el
+BJUMP se salta sus llamadas, como en la PSP. Lo que se puede ganar con las
+cajas del juego depende de cuántas mande DBZ, de lo que cueste probarlas y
+de cuántos modelos pasan la caja pero no dibujan nada; eso solo se puede
+medir en el Wii con DBZ. Antes de programar `ge_bbox`, el censo:
+
+- `prof_bbox` (apagado, solo mide). Tres líneas `[TIEMPOS] Censo de
+  cajas`:
+  1. BBOX: cuántos, vértices de caja probados, milisegundos de la prueba,
+     cuántos con huesos en el tipo de vértice, visibles, fuera, con 0
+     vértices (fuera sin probar) y los que pasan sin probar (más de 1024
+     vértices, la caja sale del espacio de 4096 o memoria no válida).
+     BJUMP: cuántos (y sin BBOX antes), tomados, y las llamadas y vértices
+     del tramo que se saltan (recorrido lineal del tramo, contando PRIM y el
+     tipo de vértice; los tramos con saltos o llamadas dentro y los raros
+     aparte).
+  2. Objetos que pasan la caja (de un BJUMP no tomado a su destino, con la
+     misma lista y profundidad de llamadas o más): llamadas, vértices y
+     milisegundos; cuántos **no dibujan nada** (ni un triángulo ni un
+     sprite), de ellos enteros fuera de pantalla y con huesos. Los vacíos
+     (sin llamadas) aparte.
+  3. Llamadas fuera de objetos: cuántas, vértices y milisegundos; cuántas
+     no dibujan nada (con huesos aparte) y cuántas están enteras fuera de
+     pantalla. Es el techo de cualquier forma de saltarse llamadas enteras
+     (cajas propias), para comparar.
+  El tiempo es el de `ge_draw_prim` de cada llamada (dos lecturas del reloj
+  por llamada con el censo encendido).
+- Qué decidir con el censo (en la pelea): si DBZ no manda BBOX (o casi),
+  `ge_bbox` con las cajas del juego no sirve para DBZ: pasar a 1.4. Si
+  manda muchas y la prueba cuesta (ms de BBOX), hacerla más barata e
+  idéntica (la matriz combinada de `ge_mtx_cache`, decodificar solo la
+  posición). Si hay muchos objetos sin huesos que pasan la caja y no
+  dibujan nada, con muchos vértices, eso es lo que una prueba más fina
+  podría saltarse (con verificación: dibujar igual y comprobar que no
+  sale nada). Con huesos no: los vértices pueden salirse de la caja.
+
+Para que la vuelta al Wii también gane velocidad, una optimización de las
+medidas ("leer los comandos con un puntero", ~56 de las ~80-100
+instrucciones por comando):
+
+- `ge_cmd_puntero` (encendido), en `ge.c`: el bucle de comandos de una
+  lista (`run_commands_ptr`) lee cada comando de la RAM con un puntero en
+  vez de `mem_valid` + `mem_read32` (fuera de la RAM, el camino de siempre,
+  con los ganchos de la VRAM), y los 229 comandos sin `case` propio en
+  `execute` (los de estado: solo guardan su valor y marcan `ge_sucio`) se
+  aplican en el propio bucle, sin la llamada, el prólogo de `execute` (7
+  registros) ni la tabla de saltos (`mtctr`). Los 27 con `case` (y todos con
+  `prof_estado`) van por `execute`. La tabla `cmd_con_caso` está junto a
+  `execute`: un `case` nuevo tiene que ir también a la tabla
+  (`test_listas` comprueba que hay 27).
+- Con `ge_verificar`: cada comando sin `case` pasa por `execute` y se
+  compara con lo que habría hecho el bucle (valor, `ge_sucio`, pc,
+  direcciones, offset, CLUT, cuentas, estado de la lista y ciclos del GE), y
+  lo leído con el puntero con `mem_read32`. Línea `[TIEMPOS] Verificacion
+  de los comandos`; tiene que dar 0 distintos.
+- Banco de qemu (`bench_lista`, que ahora usa el mismo bucle que
+  `process_dl_queue_body`), instrucciones por llamada de leer y ejecutar
+  los comandos: escena 1 (14 comandos, textura con paleta) de 1469 a 679
+  (−54 %); escena 0 (4 comandos) 399 → 264; escena 2 (4 huesos y mundo, 81
+  comandos) 9392 → 7107; escena 3 (8 huesos) 15856 → 12375 (los datos de
+  matrices siguen por `execute`). Leer un comando baja de ~52 a ~18
+  instrucciones. Estimación para la pelea (873 llamadas por vblank, 14,5
+  comandos cada una): ~2 % del Broadway. DOL +7,5 KB.
+
+Verificación: test, test-ppc y devkitPPC 165.657 comprobaciones sin
+fallos; huellas de test_vdec sin cambios (4D4A1D8B, 0657B177, B3A2BCD3);
+`gevert.sh` igual que la 0.5.20 (252,2 / 324,5 / 383,2 / 502,7 / 268,3).
+`tests/test_listas.c`: 600 listas al azar en la RAM (también pegadas a su
+final), la VRAM con sus espejos, la scratchpad y alias sin caché o de
+kernel, con JUMP, CALL/RET, BJUMP (tramos saltados con FINISH y SIGNAL
+dentro), ORIGIN y OFFSETADDR entre zonas: 69.615 comandos, mismo estado
+final con y sin el interruptor; con `ge_verificar`, 17.838 comandos
+comparados, 0 distintos; cada uno de los 229 comandos sin `case`, 8 veces.
+Mutaciones detectadas: sin el camino lento fuera de la RAM, pc fijo tras un
+salto, sin mirar el stall, sin `ge_sucio`, `TEXFLUSH` u `ORIGIN` fuera de
+la tabla (este también lo ve `ge_verificar`: 770 distintos).
+`tests/test_bbox.c`: cada cuenta del censo en una lista con objetos que
+dibujan, saltados, que pasan sin dibujar (con y sin huesos), vacíos y
+llamadas sin caja. pspautotests 275/275; A/B en las 572 de
+`ge_cmd_puntero` (exacto y matemática rápida) y de `prof_bbox`: solo
+`io/file/rename`, `io/io/io`, `io/stat/stat`, `malloc/malloc` y savedata,
+que salen distintas también en un A/A (un interruptor que no hace nada) y
+no usan el GE; A/B con el renderizador de GX bajo qemu
+(`build_cli_gx.sh`) en las 110 de `gpu/`: misma huella del estado de GX
+(solo `gpu/complex` cambia de huellas, como siempre); con `ge_verificar`
+en las 110 de `gpu/`: 206.675 comandos comparados, 0 distintos;
+tests/guest 22/22;
+recarga con ASan: 572, solo `io/file/rename` (sola, bien: choca con los
+archivos que deja la propia prueba).
+
+Autotest (4 registros y un `.capturas.txt`; todas con `prof_pmc`,
+`prof_tirones`, `prof_ventana_juego` y `ventana 600`): sin
+(`ge_cmd_puntero` 0), con (todo por defecto), verif (`ge_verificar`: 0
+distintos en vértices, estado de GX y comandos) y censo (`prof_bbox` con
+`capturas 400`: las 12 huellas tienen que ser las de siempre).
+
 ### Para el siguiente chat (empezar aquí)
 
 Metodología acordada (detalle en `docs/HOJA_DE_RUTA.md`): primero medir
@@ -2097,28 +2198,36 @@ Metodología acordada (detalle en `docs/HOJA_DE_RUTA.md`): primero medir
   las medidas de la CPU (0.5.17.1), medidas por tiempo de juego, `prof_cpu`
   y `prof_bloques` (0.5.17.2), tarjetas VFPU parte a (0.5.18) y b
   (0.5.18.1), `cpu_enlace` y `cpu_syscall_slot` (0.5.19), la pila de
-  retornos simulada y `prof_vertices` (0.5.19.1) y 1.2c
-  `ge_pantalla_rapida` (0.5.20).
+  retornos simulada y `prof_vertices` (0.5.19.1), 1.2c
+  `ge_pantalla_rapida` (0.5.20) y el censo `prof_bbox` y `ge_cmd_puntero`
+  (0.5.21).
 - Herramientas para medir sin el Wii (banco de qemu con el código de
   devkitPPC, perfil por función, psq_l emulado, A/B) y para leer los
   registros del Wii (`ventanas.py`): `tools/banco/LEEME.md`. El entorno
   (devkitPPC, qemu, pspautotests, PPSSPP): `tools/setup_entorno.sh`.
-- **Siguiente (propuesto, falta que el usuario lo apruebe):** por lo
-  medido en la 0.5.20, en la pelea: CPU 34 %, leer vértices 22 %
-  (pantalla 7,5 %, transformar 5,7 %, huesos ~4 %, decodificar ~2,6 %),
-  ensamblar 10 %, enviar a GX 8 %, comandos 8 %. Candidatos: pantalla
-  otra vez (~150 ciclos: x e y como pareja con paired singles y menos
-  comparaciones), transformar (la división por w y la cadena de la
-  matriz), la parte b2 de la VFPU o la pila de retornos real (~0,5 %).
+- **Siguiente:** leer los registros de la 0.5.21 (`ventanas.py
+  sin=... con=... verif=... censo=...`; columnas nuevas de ciclos de
+  "comandos" por llamada y por comando) y, con las líneas `Censo de cajas`
+  de la pelea, decidir 1.3 `ge_bbox` (criterios en la sección de la
+  0.5.21). Después, 1.4 `ge_charolas` (juntar llamadas: lo que queda por
+  llamada es `setup_targets`/`lookup_texture`, ~900 instrucciones, y la
+  preparación de `ge_draw_prim`), y el paso 11 (diseño del IR, 2.3
+  `cpu_fusion`, 2.5 `mem_bat`). Medido en la 0.5.20, en la pelea: CPU 34 %,
+  leer vértices 22 % (pantalla ~150 ciclos por vértice, transformar ~110,
+  huesos ~76, decodificar ~54), ensamblar 10 %, enviar a GX 8 %, comandos
+  8 %. Otros candidatos: pantalla otra vez con paired singles (~3 %),
+  transformar (la división por w), un solo `GX_Begin` por llamada, la
+  parte b2 de la VFPU, la pila de retornos real (~0,5 %), y los datos de
+  matrices (huesos) por el camino de `ge_cmd_puntero`.
 - Autotest: como mucho 4 registros y un `.capturas.txt` (el usuario no
   puede mandar más de 5 archivos en un mensaje). Siguiente también: las peleas (leer vértices: `round_to_screen`, la división por
   w y tres conversiones a entero por la memoria, IPC 0,66; los índices CI8
   con dcbt) y, con lo que mida `prof_es`, las lecturas del disco. Juntar
   llamadas (`ge_charolas`, 1.4) sigue aparte. Otros candidatos medidos:
-  leer los comandos con un puntero (~56 de las ~80-100 instrucciones por
-  comando), saltarse `setup_targets`/`lookup_texture` cuando no cambien
-  (~900), un solo `GX_Begin` por llamada, el 4444 de 64x64 de DBZ, el
-  limitador de cuadros.
+  saltarse `setup_targets`/`lookup_texture` cuando no cambien (~900; va
+  con 1.4), un solo `GX_Begin` por llamada, el 4444 de 64x64 de DBZ, el
+  limitador de cuadros (leer los comandos con un puntero: hecho en la
+  0.5.21, `ge_cmd_puntero`).
 
 Pendiente de antes: la primera tanda del GE (skinning rápido, matrices al
 cambiar, color constante; ver el carrito) entra en los pasos 6-11 con su

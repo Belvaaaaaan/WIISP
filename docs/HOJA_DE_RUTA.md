@@ -59,7 +59,8 @@ volver a medir tras cada paso.
 8. 1.2 + 1.2b: decodificadores especializados, verificados vértice a
    vértice contra el genérico.
 9. 1.1: render-to-texture, con los 7 pasos de la hoja (resumidos en la Fase 1 de abajo).
-10. 1.4 (charolas) y 1.3 (caja, solo con los BBOX del juego).
+10. 1.4 (charolas) y 1.3 (caja, solo con los BBOX del juego). En la
+    0.5.21, el censo de 1.3 (`prof_bbox`) y `ge_cmd_puntero`.
 11. Decidir el diseño del IR y hacer 2.2 y 2.3 como IR, junto con 2.5
     (BAT). Las fases 3, 4 y 5 vienen después.
 
@@ -234,6 +235,18 @@ bit a bit (tests/test_vdec.c, también en los bordes) y comprobable en el
 Wii con `ge_verificar`. Banco de qemu: de 346,7 a 252,2 instrucciones por
 vértice (uv16 c4444 p16), unas 90 menos también con huesos.
 
+Hecha (v0.5.21): paso 10 empezado por 1.3. El GE ya emula BBOX y BJUMP
+(lo que el juego descarta con sus cajas ya se salta); antes de programar
+`ge_bbox`, el censo `prof_bbox` (solo mide: BBOX y su costo, lo que saltan
+los BJUMP, los objetos que pasan la caja y no dibujan nada, con y sin
+huesos, y las llamadas sin caja que no dibujan nada). Y, de las medidas,
+`ge_cmd_puntero`: los comandos de la lista leídos de la RAM con un puntero
+y los de estado (229 de 256, sin `case` en `execute`) aplicados en el
+propio bucle; idéntico (tests/test_listas.c, pspautotests A/B, A/B del
+estado de GX) y comprobable en el Wii con `ge_verificar`. Banco de qemu:
+leer y ejecutar los comandos de una llamada de 14 comandos, de 1469 a 679
+instrucciones. Detalle en docs/CONTINUAR.md.
+
 Primera tanda acordada (todas "más barato", verificables en el PC):
 0.1 `prof_espera`, **skinning rápido** (`ge_skin_rapido`), **matrices al
 cambiar** (`ge_mtx_cache`), **color constante** (`ge_color_const`), 2.1
@@ -252,8 +265,9 @@ cambiar** (`ge_mtx_cache`), **color constante** (`ge_color_const`), 2.1
   midiendo quién consume cada render target); 1.2 decodificadores de
   vértices por vtype (`ge_vdec_esp`); 1.2b psq_l y GQR para 8/16 bits
   (`ge_vdec_psq`); 1.3 caja envolvente, primero con los BBOX del juego
-  (`ge_bbox`; ojo: con huesos los vértices salen de la caja); 1.4 agrupar
-  llamadas con dirty flags (`ge_charolas`).
+  (`ge_bbox`; ojo: con huesos los vértices salen de la caja; censo
+  `prof_bbox`); 1.4 agrupar llamadas con dirty flags (`ge_charolas`);
+  comandos de la lista con un puntero (`ge_cmd_puntero`).
 - **Fase 2 — Intérprete cacheado:** 2.1 sin coste por instrucción
   (`cpu_sin_extra`); 2.2 predecodificación con computed goto, tarjetas de
   8 bytes (`cpu_predec`); 2.3 especializar y fusionar (`cpu_fusion`); 2.4a

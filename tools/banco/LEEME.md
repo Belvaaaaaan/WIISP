@@ -20,7 +20,12 @@ al repositorio), `gcc-powerpc-linux-gnu` y `qemu-user`. Las salidas van a
   REPETICIONES VTYPE ESCENA opcion=valor...`: escena 0 = VERTEXTYPE, BASE,
   VADDR y PRIM; 1 = más 10 comandos de textura con paleta; 2 = más 4 huesos
   y la matriz de mundo; 3 = con 8 huesos. `LUCES=1` enciende dos luces;
-  con `prof_estado=1` escribe el censo de estado.
+  con `prof_estado=1` escribe el censo de estado. Corre la lista con el
+  mismo bucle que `process_dl_queue_body` (con y sin `ge_cmd_puntero`).
+  Leer y ejecutar los comandos por llamada (bucle, `mem_valid`,
+  `mem_read32`, `execute` o `run_commands_ptr`), 0.5.21 sin / con
+  `ge_cmd_puntero`: escena 0 399 / 264, 1 1469 / 679, 2 9392 / 7107, 3
+  15856 / 12375.
 - `qprof.py`: instrucciones PowerPC por función (y por unidad) a partir de
   `qemu-ppc -d in_asm,exec,nochain -D grande.log` menos una corrida corta:
   `qprof.py grande.log corta.log UNIDADES`. `qtb.py` lo mismo por bloque
@@ -54,7 +59,8 @@ al repositorio), `gcc-powerpc-linux-gnu` y `qemu-user`. Las salidas van a
   (total y `batch_range`) en el banco del GE para los formatos de DBZ.
 - `ventanas.py sin=a.log con=b.log ...`: compara los registros del
   autotest del Wii por ventanas de juego (tiempo, velocidad, tirones, CPU
-  y GE, leer vértices y ciclos por unidad del PMC del GE).
+  y GE, leer vértices y ciclos por unidad del PMC del GE, también de
+  "comandos" por llamada y por comando).
 - `ab_opt.py`: pspautotests A/B con un interruptor a 0 y a 1
   (`ab_opt.py CLI PSPAUTOTESTS LISTA SALIDA opcion[,opcion] [hilos] [MR]`).
   `gpu/complex` y `malloc/malloc` cambian entre corridas (fechas, malloc).

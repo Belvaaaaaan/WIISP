@@ -540,6 +540,8 @@ int main(int argc, char **argv){
 	test_skin();
 	test_vdec();
 	test_censo();
+	test_bbox();   //Arreglo
+	test_listas();   //Arreglo
 	test_tirones();
 	test_registro();
 	test_gxemit();

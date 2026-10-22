@@ -43,6 +43,7 @@ enum {
 	OPT_PROF_BLOQUES,   //Arreglo
 	OPT_PROF_VENTANA_JUEGO,   //Arreglo
 	OPT_PROF_VERTICES,   //Arreglo
+	OPT_PROF_BBOX,   //Arreglo
 	/* Primera tanda del GE (resultado idéntico) */
 	OPT_GE_SKIN_RAPIDO,   /* skinning mezclando las matrices por peso */
 	OPT_GE_MTX_CACHE,     /* matrices combinadas solo cuando cambian */
@@ -60,6 +61,7 @@ enum {
 	OPT_GE_VDEC_ESP,      /* 1.2 decodificadores de vértices por vtype */
 	OPT_GE_VDEC_PSQ,      /* 1.2b conversión con psq_l y GQR */
 	OPT_GE_PANTALLA_RAPIDA,   //Arreglo
+	OPT_GE_CMD_PUNTERO,   //Arreglo
 	OPT_GE_VERIF,         /* comprobar los caminos rápidos del GE contra los de
 	                         referencia en el Wii (ge_vdec_esp, gx_envio_rapido,
 	                         ge_ensamblar_rapido, ge_vdec_psq): lento, solo

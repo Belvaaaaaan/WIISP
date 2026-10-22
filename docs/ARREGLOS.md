@@ -5,6 +5,47 @@ la 0.5.17.2; antes se marcaban con `//arreglo`). Aquí va, por versión, qué
 se arregló o cambió y una descripción breve. El detalle está en
 `docs/CONTINUAR.md`.
 
+## 0.5.21
+
+- `gpu/ge.c`: `ge_cmd_puntero` (encendido). El bucle de comandos de una
+  lista (`run_commands_ptr`) lee cada comando de la RAM con un puntero
+  (sin `mem_valid` ni `mem_read32`; fuera de la RAM, como siempre) y los
+  comandos que no tienen `case` propio en `execute` (229 de 256: los de
+  estado) se aplican en el mismo bucle: valor guardado, `ge_sucio`,
+  `cur_cmd` y la cuenta de comandos, sin llamar a `execute`. Los 27 con
+  `case` (y todos con `prof_estado`) siguen por `execute`. La tabla
+  `cmd_con_caso` está junto a `execute`: **si se añade un `case`, hay que
+  añadirlo también a la tabla** (`test_listas` comprueba que son 27).
+- `gpu/ge.c`: con `ge_verificar` y `ge_cmd_puntero`, cada comando sin
+  `case` pasa por `execute` y se compara con lo que habría hecho el bucle
+  (valor, `ge_sucio`, pc, direcciones, offset, CLUT, cuentas, estado de la
+  lista, ciclos) y lo leído con el puntero con `mem_read32`: línea
+  `[TIEMPOS] Verificacion de los comandos` y `[VERIF] comando`.
+- `gpu/ge.c`, `gpu/ge_vertex.c`, `hle/hle.c`, `gpu/ge.h`: censo
+  `prof_bbox` (apagado, solo mide) para decidir 1.3 `ge_bbox`: BBOX
+  (vértices de caja, tiempo, visibles, fuera, con 0 vértices, los que pasan
+  sin probar), BJUMP (tomados, y las llamadas y vértices que saltan), los
+  objetos que pasan la caja (hasta el destino del BJUMP) y cuántos no
+  dibujan nada (con y sin huesos, enteros fuera de pantalla), y las
+  llamadas fuera de objetos que no dibujan nada (el techo de saltarse
+  llamadas enteras). Tres líneas `[TIEMPOS] Censo de cajas`.
+- `gpu/ge.c`, `gpu/ge_internal.h`: `ge_test_run_list` y
+  `ge_test_cmd_con_caso` para las pruebas.
+- `core/opt.h`, `core/opt.c`: interruptores `ge_cmd_puntero` y `prof_bbox`.
+- `tests/test_bbox.c`: una lista con objetos que dibujan, que se saltan,
+  que pasan la caja sin dibujar (con y sin huesos), vacíos y llamadas sin
+  caja; cada cuenta del censo, y sin el censo lo mismo dibujado.
+- `tests/test_listas.c`: 600 listas al azar en la RAM (también pegadas a
+  su final), la VRAM y sus espejos, la scratchpad y alias sin caché o de
+  kernel, con JUMP, CALL/RET, BJUMP, ORIGIN y OFFSETADDR entre zonas: el
+  estado final con y sin `ge_cmd_puntero` (y con `ge_verificar`) tiene que
+  ser el mismo; y cada uno de los 229 comandos sin `case`, 8 veces.
+- `tools/banco/bench_cmd.c`: el banco de listas usa el mismo bucle que
+  `process_dl_queue_body` (con y sin `ge_cmd_puntero`).
+- `tools/banco/ventanas.py`: columnas de ciclos de "comandos" por llamada
+  y por comando.
+- `hle/hle.h`: versión 0.5.21.
+
 ## 0.5.20
 
 - `gpu/ge_vertex.c`: `ge_pantalla_rapida` (encendido). En el camino por

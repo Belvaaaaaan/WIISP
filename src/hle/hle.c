@@ -610,6 +610,9 @@ static void profile_ge_lines(const GeStats *g, const GeStats *b, u32 vblanks){
 		        (unsigned)(g->es_gx_verif - b->es_gx_verif), (unsigned)(g->es_gx_verif_bad - b->es_gx_verif_bad),
 		        (unsigned)(g->es_gx_verif_sin - b->es_gx_verif_sin), (unsigned)(g->es_tri_verif - b->es_tri_verif),
 		        (unsigned)(g->es_tri_verif_bad - b->es_tri_verif_bad));
+	if(opt_on[OPT_GE_VERIF] && opt_on[OPT_GE_CMD_PUNTERO])   //Arreglo
+		hle_log("[TIEMPOS] Verificacion de los comandos (ge_verificar): %u comandos sin caso propio leidos con el puntero y "
+		        "comparados con execute, %u distintos\n", (unsigned)(g->cp_verif - b->cp_verif), (unsigned)(g->cp_verif_bad - b->cp_verif_bad));
 	if(opt_on[OPT_PROF_ESTADO]){
 		static char cs[1536];
 		char *p = cs;
@@ -622,6 +625,18 @@ static void profile_ge_lines(const GeStats *g, const GeStats *b, u32 vblanks){
 			p = nl + 1;
 		}
 	}
+	if(opt_on[OPT_PROF_BBOX]){   //Arreglo
+		static char cb[1536];
+		char *p = cb;
+		ge_bbox_census_report(g, b, prof_hz, cb, sizeof(cb));
+		while(*p){
+			char *nl = strchr(p, '\n');
+			if(nl) *nl = 0;
+			hle_log("[TIEMPOS] %s\n", p);
+			if(!nl) break;
+			p = nl + 1;
+		}
+	}   //Arreglo
 }
 
 /* prof_pmc (0.2): ciclos del procesador por cubeta (con IPC, fallos de la

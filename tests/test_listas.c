@@ -1,0 +1,254 @@
+/**
+ * WIISP - tests/test_listas.c
+ *
+ * SPDX-License-Identifier: GPL-2.0-or-later
+**/
+//Arreglo
+
+#include <string.h>
+#include "gpu/ge_internal.h"
+#include "gpu/ge_math.h"
+#include "core/memory.h"
+#include "core/opt.h"
+#include "test.h"
+
+static u32 ls = 0x5EED2110u;
+static u32 lrnd(void){ ls ^= ls << 13; ls ^= ls >> 17; ls ^= ls << 5; return ls; }
+static u32 lrn(u32 n){ return lrnd() % n; }
+
+static void n_begin(void){}
+static void n_tri(const GeVertex *a, const GeVertex *b, const GeVertex *c){ (void)a; (void)b; (void)c; }
+static void n_two(const GeVertex *a, const GeVertex *b){ (void)a; (void)b; }
+static void n_point(const GeVertex *a){ (void)a; }
+static void n_flush(void){}
+static const GeHwRenderer null_hw = { n_begin, n_tri, n_two, n_two, n_two, n_point, n_flush };
+
+#define L_VERT 0x08700000u
+
+static const u32 zonas[] = {
+	0x08A00000u, 0x08B40000u, 0x09F00000u, 0x48A80000u, 0x88B80000u,
+	0x04000000u, 0x04100000u, 0x04220000u, 0x04440000u, 0x04660000u, 0x44080000u,
+	0x00010000u, 0x00012000u
+};
+static const u32 bordes[] = { 0x0A000000u, 0x04800000u, 0x00014000u };
+
+static const u8 evitar[] = { GE_PRIM, GE_BEZIER, GE_SPLINE, GE_BOUNDINGBOX, GE_JUMP, GE_BJUMP, GE_CALL, GE_RET,
+	                            GE_END, GE_SIGNAL, GE_FINISH, GE_TRANSFERSTART, GE_VAP, GE_BASE, GE_OFFSETADDR,
+	                            GE_ORIGIN, GE_VADDR, GE_IADDR, GE_VERTEXTYPE };
+
+static u32 lp;
+
+static void lcmd(u32 c, u32 a){ mem_write32(lp, (c << 24) | (a & 0xFFFFFF)); lp += 4; }
+
+static void base_de(u32 dest){
+	lcmd(GE_OFFSETADDR, 0);
+	lcmd(GE_BASE, ((dest & 0x0FFFFFFFu) >> 8) & 0x0F0000);
+}
+
+static int evitado(u32 c){
+	unsigned i;
+	for(i = 0; i < sizeof(evitar); i++) if(evitar[i] == c) return 1;
+	return c >= GE_VSCX && c <= GE_VSCV;
+}
+
+static void comandos(int n){
+	int i;
+	for(i = 0; i < n; i++){
+		u32 k = lrn(24), c;
+		if(k == 0){
+			u32 tc = lrn(4), col = lrn(8), nrm = lrn(4), pos = 1 + lrn(3), wt = lrn(3) ? 0 : 1 + lrn(3), nw = lrn(8);
+			lcmd(GE_VERTEXTYPE, tc | (col << 2) | (nrm << 5) | (pos << 7) | (wt << 9) | (nw << 14) | ((lrn(4) == 0) << 23));
+			lcmd(GE_BASE, (L_VERT >> 8) & 0x0F0000);
+			lcmd(GE_VADDR, (L_VERT + lrn(0x8000)) & 0xFFFFFC);
+			lcmd(GE_PRIM, (lrn(7) << 16) | lrn(7));
+		} else if(k == 1){
+			lcmd(GE_VERTEXTYPE, 0x180 | lrn(4));
+			lcmd(GE_BASE, (L_VERT >> 8) & 0x0F0000);
+			lcmd(GE_VADDR, (L_VERT + lrn(0x8000)) & 0xFFFFFC);
+			lcmd(GE_BOUNDINGBOX, lrn(9));
+		} else if(k == 2) lcmd(GE_ORIGIN, lrnd());
+		else if(k == 3) lcmd(GE_OFFSETADDR, lrnd());
+		else if(k == 4) lcmd(GE_NOP, lrnd());
+		else if(k == 5){
+			u32 which = lrn(5), numc[5] = { GE_WORLDMATRIXNUMBER, GE_VIEWMATRIXNUMBER, GE_PROJMATRIXNUMBER, GE_TGENMATRIXNUMBER,
+			                                 GE_BONEMATRIXNUMBER };
+			int j, m = 1 + (int)lrn(12);
+			lcmd(numc[which], lrn(which == 4 ? 96 : 16));
+			for(j = 0; j < m; j++) lcmd(numc[which] + 1, lrnd());
+		} else if(k == 6){
+			u32 skip = 1 + lrn(4), j;
+			u32 dest = lp + 4 * 5 + 4 * skip;
+			base_de(dest);
+			lcmd(GE_BOUNDINGBOX, 0);
+			lcmd(GE_BJUMP, dest & 0xFFFFFC);
+			lcmd(GE_NOP, 0);
+			for(j = 0; j < skip; j++) lcmd(lrn(2) ? GE_FINISH : GE_SIGNAL, lrnd());
+		} else {
+			do c = lrnd() & 0xFF; while(evitado(c));
+			lcmd(c, lrn(3) ? lrnd() : ge.cmd[c]);
+		}
+	}
+}
+
+typedef struct {
+	GeState g;
+	u32 st, pc, commands, tris, prims, verts, bb;
+} Foto;
+
+static u32 sucio_ini = GE_SUCIO_TODO;
+
+static void correr(const GeState *ini, u32 pc, u32 end, int puntero, Foto *f){
+	memcpy(&ge, ini, sizeof(ge));
+	ge_sucio = sucio_ini;
+	ge_vertex_reset();
+	memset(&ge_stats, 0, sizeof(ge_stats));
+	opt_on[OPT_GE_CMD_PUNTERO] = (u8)puntero;
+	f->st = (u32)ge_test_run_list(pc, end, &f->pc);
+	memcpy(&f->g, &ge, sizeof(ge));
+	f->commands = ge_stats.commands;
+	f->tris = ge_stats.tris;
+	f->prims = ge_stats.primitives;
+	f->verts = ge_stats.vertices;
+	f->bb = ge_stats.bb_sin_probar;
+}
+
+void test_listas(void){
+	const GeHwRenderer *saved_hw = ge_hw;
+	int saved_fast = ge_fast_math;
+	u8 saved_opt[OPT_N];
+	static GeState ini;
+	u32 ronda, distintas = 0, errores = 0, bordes_n = 0, cmds = 0, saltos = 0, verif = 0, verif_mal = 0;
+	u8 *v;
+	int i;
+
+	printf("Listas del GE: leer los comandos con un puntero (ge_cmd_puntero) contra mem_read32\n");
+	memcpy(saved_opt, opt_on, sizeof(saved_opt));
+	ge_hw = &null_hw;
+	ge_fast_math = 1;
+	opt_on[OPT_PROF_BBOX] = 0;
+	opt_on[OPT_PROF_ESTADO] = 0;
+	opt_on[OPT_GE_VERIF] = 0;
+	v = mem_ptr(L_VERT, 0x9000);
+	for(i = 0; i < 0x9000; i++) v[i] = (u8)lrnd();
+
+	for(ronda = 0; ronda < 600; ronda++){
+		u32 seg[5], pc0, end = 0, z;
+		int n = 1 + (int)lrn(4), s, borde = lrn(4) == 0;
+		Foto a, b;
+		for(s = 0; s < n; s++){
+			int k, rep;
+			u32 zi[5];
+			do {
+				zi[s] = lrn(sizeof(zonas) / sizeof(zonas[0]));
+				for(rep = 0, k = 0; k < s; k++) rep |= zi[k] == zi[s];
+			} while(rep);
+			z = zonas[zi[s]] + (zi[s] >= 11 ? lrn(0x400) : lrn(0x1000)) * 4;
+			seg[s] = z;
+		}
+		for(s = 0; s < n; s++){
+			lp = seg[s];
+			comandos(4 + (int)lrn(40));
+			if(s + 1 < n){
+				u32 dest = seg[s + 1] & 0x0FFFFFFFu;
+				if(lrn(3) == 0){
+					u32 sub = (0x08C00000u + lrn(0x1000) * 16), ret_lp;
+					base_de(sub);
+					lcmd(GE_CALL, sub & 0xFFFFFC);
+					ret_lp = lp;
+					lp = sub;
+					comandos(2 + (int)lrn(10));
+					lcmd(GE_RET, 0);
+					lp = ret_lp;
+				}
+				base_de(dest);
+				if(lrn(2)){ lcmd(GE_BOUNDINGBOX, 0); lcmd(GE_BJUMP, dest & 0xFFFFFC); }
+				else lcmd(GE_JUMP, dest & 0xFFFFFC);
+				saltos++;
+			}
+		}
+		end = 0x08D00000u + lrn(0x1000) * 4;
+		if(!borde){
+			base_de(end);
+			lcmd(GE_JUMP, end & 0xFFFFFC);
+		} else {
+			u32 b0 = bordes[lrn(sizeof(bordes) / sizeof(bordes[0]))];
+			u32 dest = b0 - 4 * (1 + lrn(6));
+			base_de(dest);
+			lcmd(GE_JUMP, dest & 0xFFFFFC);
+			lp = dest;
+			while(lp < b0) lcmd(GE_NOP, lrnd());
+			end = 0xFFFFFFF0u;
+			bordes_n++;
+		}
+		pc0 = seg[0];
+		for(i = 0; i < 256; i++) ini.cmd[i] = lrnd() & 0xFFFFFF;
+		ini.cmd[GE_VIEWPORTXSCALE] = 0x437000; ini.cmd[GE_VIEWPORTYSCALE] = 0xC30800;
+		ini.cmd[GE_VIEWPORTXCENTER] = 0x450000; ini.cmd[GE_VIEWPORTYCENTER] = 0x450000;
+		ini.cmd[GE_OFFSETX] = (2048 - 240) * 16; ini.cmd[GE_OFFSETY] = (2048 - 136) * 16;
+		ini.cmd[GE_SCISSOR1] = 0; ini.cmd[GE_SCISSOR2] = 479 | (271 << 10);
+		ini.cmd[GE_REGION1] = 0; ini.cmd[GE_REGION2] = 479 | (271 << 10);
+		for(i = 0; i < 12; i++){ ini.world[i] = (float)(int)lrn(5) - 2.0f; ini.view[i] = (float)(int)lrn(5) - 2.0f; ini.tgen[i] = 0.5f; }
+		for(i = 0; i < 16; i++) ini.proj[i] = (float)(int)lrn(5) - 2.0f;
+		for(i = 0; i < 96; i++) ini.bone[i / 12][i % 12] = (float)(int)lrn(5) - 2.0f;
+		ini.offset = 0;
+		ini.vaddr = L_VERT;
+		ini.iaddr = L_VERT;
+		ini.bbox_visible = (int)lrn(2);
+		correr(&ini, pc0, end, 0, &a);
+		opt_on[OPT_GE_VERIF] = (u8)(ronda & 1);
+		correr(&ini, pc0, end, 1, &b);
+		verif += ge_stats.cp_verif;
+		verif_mal += ge_stats.cp_verif_bad;
+		opt_on[OPT_GE_VERIF] = 0;
+		cmds += a.commands;
+		errores += a.st == 4;
+		if(memcmp(&a, &b, sizeof(a))){
+			if(distintas++ < 8)
+				printf("  ronda %u distinta: estado %u/%u, pc %08X/%08X, comandos %u/%u, triangulos %u/%u\n", (unsigned)ronda,
+				       (unsigned)a.st, (unsigned)b.st, (unsigned)a.pc, (unsigned)b.pc, (unsigned)a.commands,
+				       (unsigned)b.commands, (unsigned)a.tris, (unsigned)b.tris);
+		}
+	}
+	printf("  600 listas (%u saltos entre zonas, %u hasta el borde de la memoria, %u terminan con error), %u comandos: %u distintas\n",
+	       (unsigned)saltos, (unsigned)bordes_n, (unsigned)errores, (unsigned)cmds, (unsigned)distintas);
+	printf("  con ge_verificar: %u comandos comparados con execute, %u distintos\n", (unsigned)verif, (unsigned)verif_mal);
+	CHECK_EQ(distintas, 0u);
+	CHECK_EQ(verif_mal, 0u);
+	CHECK(verif > 5000);
+	CHECK(errores >= bordes_n);
+	CHECK(cmds > 20000);
+
+	{
+		u32 c, simples = 0, malos = 0, rep;
+		sucio_ini = 0;
+		for(c = 0; c < 256; c++){
+			if(ge_test_cmd_con_caso(c)) continue;
+			simples++;
+			for(rep = 0; rep < 8; rep++){
+				Foto a, b;
+				u32 sa, sb;
+				for(i = 0; i < 256; i++) ini.cmd[i] = lrnd() & 0xFFFFFF;
+				if(rep & 1) ini.cmd[c] = 0x123456;
+				lp = 0x08D40000u + lrn(0x400) * 4;
+				lcmd(c, rep & 1 ? 0x123456 : lrnd());
+				correr(&ini, lp - 4, lp, 0, &a);
+				sa = ge_sucio;
+				correr(&ini, lp - 4, lp, 1, &b);
+				sb = ge_sucio;
+				if(memcmp(&a, &b, sizeof(a)) || sa != sb){
+					if(malos++ < 8) printf("  comando 0x%02X distinto\n", (unsigned)c);
+				}
+			}
+		}
+		sucio_ini = GE_SUCIO_TODO;
+		printf("  %u comandos sin caso propio, 8 veces cada uno: %u distintos\n", (unsigned)simples, (unsigned)malos);
+		CHECK_EQ(simples, 229u);
+		CHECK_EQ(malos, 0u);
+	}
+
+	memcpy(opt_on, saved_opt, sizeof(saved_opt));
+	memset(&ge_stats, 0, sizeof(ge_stats));
+	ge_hw = saved_hw;
+	ge_fast_math = saved_fast;
+	ge_vertex_reset();
+}
