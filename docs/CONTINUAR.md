@@ -2053,6 +2053,32 @@ Autotest (4 registros y un `.capturas.txt`): sin (`ge_pantalla_rapida`
 a uno, comparado campo a campo; tiene que dar 0 distintos) y capturas
 (con `prof_vertices`, para ver el reparto nuevo de leer vértices).
 
+### Resultado de la 0.5.20 en el Wii (DBZ: sin / con / verif / capturas)
+
+- Capturas: las 12 iguales a las de la 0.5.17.2 a la 0.5.19.1.
+- `ge_verificar`: 22,17 millones de vértices, 20,0 millones de descartes,
+  9,15 millones de triángulos enviados a GX y 11.414 emisiones de estado
+  comparados: 0 distintos.
+- Peleas (las tres últimas ventanas): del 38,6 / 39,9 / 37,6 % al
+  40,2 / 41,2 / 38,9 % (+3,3 a +4,1 %); la escena de 99,1 a 96,8 s
+  reales. Leer vértices de 516-522 a 418-435 ciclos por vértice (−87 a
+  −98, lo que daba el banco) y del 26,8 % al 22,3 % del tiempo.
+- `prof_vertices` (ciclos por vértice, 0.5.19.1 → 0.5.20): pantalla
+  206-211 → 145-155, transformar 128-134 → 106-111 (el suelo de z ya no
+  está ahí), huesos 61-89, decodificar 47-67, sin cambios. Pantalla sigue
+  siendo la fase más grande (~90 instrucciones con IPC ~0,6: tres
+  `fctiwz` + `stfiwx` + `lwz` y diez `fcmpu` con su salto).
+- verif va a la mitad en las peleas (18,9-19,9 %, 162,9 s la escena):
+  es lo que cuesta comprobar. Las mismas instrucciones de la PSP y los
+  mismos segundos de CPU (8,5 s por ventana); el GE pasa de 12,6 a
+  40,5 s: leer 418 → 1292 ciclos por vértice (cada vértice dos veces y
+  comparado), ensamblar 208 → 664 por triángulo, enviar 352 → 1036 por
+  primitiva y estado 720 → 7876 por llamada (con `ge_verificar` el estado
+  de GX se emite siempre y se compara con libogc). Las ventanas de menús
+  no cambian (allí no hay vértices por lotes).
+- El peor tirón (771 ms a los 60,2 s de juego, 604 ms de CPU) es el
+  mismo en las cuatro: no tiene que ver.
+
 ### Para el siguiente chat (empezar aquí)
 
 Metodología acordada (detalle en `docs/HOJA_DE_RUTA.md`): primero medir
@@ -2075,12 +2101,13 @@ Metodología acordada (detalle en `docs/HOJA_DE_RUTA.md`): primero medir
   `ge_pantalla_rapida` (0.5.20).
 - Herramientas para medir sin el Wii (banco de qemu con el código de
   devkitPPC, perfil por función, psq_l emulado, A/B): `tools/banco/LEEME.md`.
-- **Siguiente: el resultado de la 0.5.20 en el Wii** (sin frente a con en
-  la pelea, `ge_verificar` a 0, el reparto de leer vértices con
-  `prof_vertices`). Después, por lo medido: transformar (la división por
-  w, 17 ciclos, y la cadena de la matriz), decodificar y huesos (el 7 %
-  de la pelea), la parte b2 de la VFPU o la pila de retornos real
-  (~0,5 %). Paired singles, aparcados.
+- **Siguiente (propuesto, falta que el usuario lo apruebe):** por lo
+  medido en la 0.5.20, en la pelea: CPU 34 %, leer vértices 22 %
+  (pantalla 7,5 %, transformar 5,7 %, huesos ~4 %, decodificar ~2,6 %),
+  ensamblar 10 %, enviar a GX 8 %, comandos 8 %. Candidatos: pantalla
+  otra vez (~150 ciclos: x e y como pareja con paired singles y menos
+  comparaciones), transformar (la división por w y la cadena de la
+  matriz), la parte b2 de la VFPU o la pila de retornos real (~0,5 %).
 - Autotest: como mucho 4 registros y un `.capturas.txt` (el usuario no
   puede mandar más de 5 archivos en un mensaje). Siguiente también: las peleas (leer vértices: `round_to_screen`, la división por
   w y tres conversiones a entero por la memoria, IPC 0,66; los índices CI8
