@@ -2386,8 +2386,8 @@ Verificación:
   pspautotests no se salta ninguna llamada (las cajas de `gpu/bounding`
   no llevan dibujos detrás): `ge_bbox` se comprueba con las pruebas de
   arriba y en el Wii con `ge_verificar`.
-- tests/guest 22/22; la recarga con ASan (572, tres veces seguidas) va en
-  el commit siguiente.
+- tests/guest 22/22; recarga con ASan (`tests/recarga.py`, las 572 tres
+  veces seguidas en el mismo proceso): 0 con problemas.
 
 Autotest (4 registros y un `.capturas.txt`; todas con `prof_pmc`,
 `prof_tirones`, `prof_ventana_juego` y `ventana 600`): sin (`ge_bbox`,
