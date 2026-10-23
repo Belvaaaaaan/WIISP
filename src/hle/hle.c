@@ -613,6 +613,30 @@ static void profile_ge_lines(const GeStats *g, const GeStats *b, u32 vblanks){
 	if(opt_on[OPT_GE_VERIF] && opt_on[OPT_GE_CMD_PUNTERO])   //Arreglo
 		hle_log("[TIEMPOS] Verificacion de los comandos (ge_verificar): %u comandos sin caso propio leidos con el puntero y "
 		        "comparados con execute, %u distintos\n", (unsigned)(g->cp_verif - b->cp_verif), (unsigned)(g->cp_verif_bad - b->cp_verif_bad));
+	if(opt_on[OPT_GE_VERIF] && opt_on[OPT_GE_CMD_PUNTERO] && opt_on[OPT_GE_CMD_MATRICES])   //Arreglo
+		hle_log("[TIEMPOS] Verificacion de las matrices (ge_verificar): %u datos y numeros de matriz por el atajo comparados con "
+		        "execute, %u distintos\n", (unsigned)(g->cm_verif - b->cm_verif), (unsigned)(g->cm_verif_bad - b->cm_verif_bad));   //Arreglo
+	if(opt_on[OPT_GE_VERIF] && opt_on[OPT_GE_BBOX_RAPIDO])   //Arreglo
+		hle_log("[TIEMPOS] Verificacion de las cajas (ge_verificar): %u BBOX rapidas comparadas con la prueba de siempre, %u distintas\n",
+		        (unsigned)(g->bbv_cajas - b->bbv_cajas), (unsigned)(g->bbv_malas - b->bbv_malas));   //Arreglo
+	if(opt_on[OPT_GE_BBOX])   //Arreglo
+		hle_log("[TIEMPOS] Cajas exactas (ge_bbox): %u cajas probadas, %u enteras fuera de un plano (%u detras de la camara); "
+		        "llamadas con una caja fuera: %u, saltadas %u (%u sin calcular lo que deja para continuar; %u vertices); no saltadas: "
+		        "formato o primitiva %u, matrices cambiadas %u, "
+		        "algun vertice fuera de la caja %u%s\n",
+		        (unsigned)(g->bx_cajas - b->bx_cajas), (unsigned)(g->bx_fuera - b->bx_fuera), (unsigned)(g->bx_detras - b->bx_detras),
+		        (unsigned)(g->bx_llamadas - b->bx_llamadas), (unsigned)(g->bx_saltadas - b->bx_saltadas),
+		        (unsigned)(g->bx_ligeras - b->bx_ligeras), (unsigned)(g->bx_vertices - b->bx_vertices), (unsigned)(g->bx_formato - b->bx_formato),
+		        (unsigned)(g->bx_matrices - b->bx_matrices), (unsigned)(g->bx_fuera_caja - b->bx_fuera_caja),
+		        opt_on[OPT_GE_VERIF] ? " (con ge_verificar se dibujan igual)" : "");   //Arreglo
+	if(opt_on[OPT_GE_VERIF] && opt_on[OPT_GE_BBOX])   //Arreglo
+		hle_log("[TIEMPOS] Verificacion de ge_bbox (ge_verificar): %u llamadas que se habrian saltado, dibujadas y comparadas, %u distintas\n",
+		        (unsigned)(g->bx_verif - b->bx_verif), (unsigned)(g->bx_verif_bad - b->bx_verif_bad));   //Arreglo
+	if(opt_on[OPT_PROF_COMANDOS]){   //Arreglo
+		char cl[512];   //Arreglo
+		ge_cmd_census_report(cl, sizeof(cl));   //Arreglo
+		hle_log("[TIEMPOS] %s\n", cl);   //Arreglo
+	}   //Arreglo
 	if(opt_on[OPT_PROF_ESTADO]){
 		static char cs[1536];
 		char *p = cs;

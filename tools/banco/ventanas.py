@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Compara registros del autotest del Wii (wiisp.log de cada corrida) por
-ventanas de juego: tiempo real, velocidad, tirones, reparto del GE y ciclos
-por unidad (PMC del GE).
+ventanas de juego: tiempo real, velocidad, tirones, reparto del GE, ciclos
+por unidad (PMC del GE) y llamadas que salta ge_bbox.
 Uso: ventanas.py NOMBRE=registro.log [NOMBRE=registro.log...]"""
 import re, sys
 
@@ -30,6 +30,8 @@ def parse(path):
         if m: w['c_cmd'] = int(m.group(1))
         m = re.search(r'comandos (\d+) ciclos por comando', l)
         if m: w['c_pcmd'] = int(m.group(1))
+        m = re.search(r'Cajas exactas \(ge_bbox\): .*?saltadas (\d+) \(\d+ sin calcular[^;]*; (\d+) vertices\)', l)
+        if m: w.update(bx_salt=int(m.group(1)), bx_vert=int(m.group(2)) / 1000.0)
     return wins
 
 runs = [(a.split('=', 1)[0], parse(a.split('=', 1)[1])) for a in sys.argv[1:]]
@@ -41,11 +43,12 @@ cols = [('real', 's reales', '{:7.1f}'), ('vel', '% velocidad', '{:7.1f}'), ('ti
         ('cpu', '% CPU', '{:7.1f}'), ('ge', '% GE', '{:7.1f}'), ('leer', '% leer vertices', '{:7.1f}'),
         ('c_leer', 'ciclos por vertice', '{:7d}'), ('c_ens', 'ciclos por triangulo (ensamblar)', '{:7d}'),
         ('c_env', 'ciclos por primitiva (enviar)', '{:7d}'), ('c_est', 'ciclos por llamada (estado)', '{:7d}'),
-        ('c_cmd', 'ciclos por llamada (comandos)', '{:7d}'), ('c_pcmd', 'ciclos por comando', '{:7d}')]
+        ('c_cmd', 'ciclos por llamada (comandos)', '{:7d}'), ('c_pcmd', 'ciclos por comando', '{:7d}'),
+        ('bx_salt', 'llamadas saltadas (ge_bbox)', '{:7d}'), ('bx_vert', 'miles de vertices saltados', '{:7.0f}')]
 print('ventana     ' + ''.join(f'{k[:7]:>7}' for k, _ in runs))
 for i in range(min(len(w) for _, w in runs)):
     w0 = runs[0][1][i]
     print(f"{w0['a']:>5}-{w0['b']:5}")
     for c, nombre, fmt in cols:
-        if all(c in w[i] for _, w in runs):
-            print('            ' + ''.join(fmt.format(w[i][c]) for _, w in runs) + f'  {nombre}')
+        if any(c in w[i] for _, w in runs):
+            print('            ' + ''.join(fmt.format(w[i][c]) if c in w[i] else '      -' for _, w in runs) + f'  {nombre}')

@@ -44,6 +44,7 @@ enum {
 	OPT_PROF_VENTANA_JUEGO,   //Arreglo
 	OPT_PROF_VERTICES,   //Arreglo
 	OPT_PROF_BBOX,   //Arreglo
+	OPT_PROF_COMANDOS,   //Arreglo
 	/* Primera tanda del GE (resultado idéntico) */
 	OPT_GE_SKIN_RAPIDO,   /* skinning mezclando las matrices por peso */
 	OPT_GE_MTX_CACHE,     /* matrices combinadas solo cuando cambian */
@@ -62,6 +63,7 @@ enum {
 	OPT_GE_VDEC_PSQ,      /* 1.2b conversión con psq_l y GQR */
 	OPT_GE_PANTALLA_RAPIDA,   //Arreglo
 	OPT_GE_CMD_PUNTERO,   //Arreglo
+	OPT_GE_CMD_MATRICES,   //Arreglo
 	OPT_GE_VERIF,         /* comprobar los caminos rápidos del GE contra los de
 	                         referencia en el Wii (ge_vdec_esp, gx_envio_rapido,
 	                         ge_ensamblar_rapido, ge_vdec_psq): lento, solo
@@ -73,6 +75,7 @@ enum {
 	OPT_GE_ENSAMBLAR,     /* ensamblar triángulos sin copiar vértices, con
 	                         los descartes de cada vértice ya calculados */
 	OPT_GE_BBOX,          /* 1.3 descarte por caja envolvente */
+	OPT_GE_BBOX_RAPIDO,   //Arreglo
 	OPT_GE_ESTADO_SUCIO,  /* 1.4, primera parte: el estado de una llamada de
 	                         dibujo (formato, transformación, rasterizador,
 	                         estado de GX y la preparación de cada

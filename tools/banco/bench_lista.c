@@ -56,8 +56,30 @@ int main(int argc, char **argv){
 	/* La lista: reps llamadas */
 	start = lp = 0x08A00000;
 	nb = esc == 3 ? 8 : 4;
+	if(esc >= 4){
+		u8 *c = mem_ptr(0x08980000, 48);
+		for(k = 0; k < 8; k++)
+			for(j = 0; j < 3; j++){
+				u32 v = (k >> j) & 1 ? 16384 : 0;
+				c[k * 6 + j * 2] = (u8)v;
+				c[k * 6 + j * 2 + 1] = (u8)(v >> 8);
+			}
+		if(esc == 5){ ge.proj[10] = -51.0f / 49.0f; ge.proj[14] = -100.0f / 49.0f; }
+	}
 	for(i = 0; i < reps; i++){
-		if(esc >= 2){
+		static u32 salto;
+		if(esc >= 4 && i % 4 == 0){
+			cmd(GE_WORLDMATRIXNUMBER, 0);
+			for(j = 0; j < 12; j++) cmd(GE_WORLDMATRIXDATA, f24(j == 11 ? (esc == 5 ? -55.0f : 0.0f) : j == 9 ? (esc == 6 ? 30.0f : 0.0f) + 0.001f * (float)(i % 64) : ge.world[j]));
+			cmd(GE_VERTEXTYPE, 0x100);
+			cmd(GE_BASE, 0x080000);
+			cmd(GE_VADDR, 0x980000);
+			cmd(GE_BOUNDINGBOX, 8);
+			cmd(GE_BASE, 0x080000);
+			salto = lp;
+			cmd(GE_BJUMP, 0);
+		}
+		if(esc >= 2 && esc <= 3){
 			for(k = 0; k < nb; k++){
 				cmd(GE_BONEMATRIXNUMBER, (u32)k * 12);
 				for(j = 0; j < 12; j++) cmd(GE_BONEMATRIXDATA, f24(ge.bone[k][j]));
@@ -75,11 +97,13 @@ int main(int argc, char **argv){
 		cmd(GE_BASE, 0x080000);
 		cmd(GE_VADDR, 0x900000 + (u32)(i % 16) * 0x400);
 		cmd(GE_PRIM, (GE_PRIM_TRIANGLE_STRIP << 16) | 20);
+		if(esc >= 4 && i % 4 == 3) mem_write32(salto, (GE_BJUMP << 24) | (lp & 0xFFFFFF));
 	}
 	end = lp;
 	bench_run_list(start, end);
 	if(opt_on[OPT_PROF_ESTADO]){ static char b[2048]; GeStats z; memset(&z, 0, sizeof(z)); ge_state_census_report(&ge_stats, &z, b, sizeof(b)); printf("%s\n", b); }
 	printf("estado de GX %u veces, %u sin emitir; triangulos %u, %u sin preparar\n", ge_stats.es_gx, ge_stats.es_gx_saltado, ge_stats.es_tri, ge_stats.es_tri_listo);
+	printf("cajas %u fuera %u; llamadas con caja %u saltadas %u (formato %u matrices %u fuera de la caja %u); triangulos fuera %u\n", ge_stats.bx_cajas, ge_stats.bx_fuera, ge_stats.bx_llamadas, ge_stats.bx_saltadas, ge_stats.bx_formato, ge_stats.bx_matrices, ge_stats.bx_fuera_caja, ge_stats.tris_outside);
 	printf("%u comandos, %u vertices, %u triangulos, %u primitivas\n", ge_stats.commands, ge_stats.vertices, ge_stats.tris, ge_stats.primitives);
 	return 0;
 }

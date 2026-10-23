@@ -245,6 +245,7 @@ static inline void ge_vertex_mark_outside(GeVertex *v){
 /* --- Geometría (ge_vertex.c) ------------------------------------------ */
 
 void ge_draw_prim(u32 prim, u32 count);
+int ge_prim_datos_sobran(u32 vaddr_tras);   //Arreglo
 void ge_draw_bezier(u32 arg);
 void ge_draw_spline(u32 arg);
 void ge_bounding_box(u32 count);
@@ -331,6 +332,8 @@ void ge_test_execute(u32 op);
 u32 ge_test_census_group(u32 cmd, u32 g);
 int ge_test_run_list(u32 pc, u32 end, u32 *fin);   //Arreglo
 int ge_test_cmd_con_caso(u32 cmd);   //Arreglo
+int ge_test_cmd_matriz(u32 cmd);   //Arreglo
+int ge_test_pico(u32 pc, u32 stall, u32 vaddr_tras);   //Arreglo
 
 /* Texels del nivel `level` de la textura actual (estado de ge_raster_begin)
    en RGBA de 8 bits (rojo en el byte bajo), fila a fila con `pitch` texels

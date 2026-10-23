@@ -90,6 +90,10 @@ typedef struct {
 	u32 sc_llamadas, sc_vertices, sc_nada, sc_nada_vertices, sc_nada_huesos, sc_nada_huesos_vertices, sc_fuera, sc_fuera_vertices;   //Arreglo
 	u64 sc_ticks, sc_nada_ticks, sc_fuera_ticks;   //Arreglo
 	u32 cp_verif, cp_verif_bad;   //Arreglo
+	u32 bbv_cajas, bbv_malas;   //Arreglo
+	u32 bx_cajas, bx_fuera, bx_detras, bx_llamadas, bx_formato, bx_matrices, bx_fuera_caja, bx_saltadas, bx_ligeras, bx_vertices;   //Arreglo
+	u32 bx_verif, bx_verif_bad;   //Arreglo
+	u32 cm_verif, cm_verif_bad;   //Arreglo
 } GeStats;
 void ge_get_stats(GeStats *out);
 
@@ -99,6 +103,7 @@ void ge_vtype_census(char *buf, size_t size);
 /* prof_estado: el censo de estado desde g0 hasta g en una línea por cada \n */
 void ge_state_census_report(const GeStats *g, const GeStats *g0, char *buf, size_t size);
 void ge_bbox_census_report(const GeStats *g, const GeStats *g0, u64 hz, char *buf, size_t size);   //Arreglo
+void ge_cmd_census_report(char *buf, size_t size);   //Arreglo
 /* ge_verificar: vértices y descartes comparados y distintos desde el último informe */
 void ge_vdec_verif_report(char *buf, size_t size);
 

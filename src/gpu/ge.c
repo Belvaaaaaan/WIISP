@@ -993,6 +993,26 @@ void ge_test_execute(u32 op){
 
 static u8 cmd_con_caso[256];   //Arreglo
 
+typedef struct {   //Arreglo
+	u8 num, dato, mask, size;
+	u32 grupo;
+	float *m;
+} MatDesc;
+
+static MatDesc mat_desc[11];   //Arreglo
+static u8 cmd_matriz[256];   //Arreglo
+static u32 cmd_hist[256];   //Arreglo
+
+static void mat_poner(int i, u8 num, u8 dato, u8 cmd, u8 mask, u8 size, u32 grupo, float *m){   //Arreglo
+	mat_desc[i].num = num;
+	mat_desc[i].dato = dato;
+	mat_desc[i].mask = mask;
+	mat_desc[i].size = size;
+	mat_desc[i].grupo = grupo;
+	mat_desc[i].m = m;
+	cmd_matriz[cmd] = (u8)i;
+}
+
 static void __attribute__((constructor)) cmd_casos_tabla(void){   //Arreglo
 	static const u8 casos[] = {
 		GE_VADDR, GE_IADDR, GE_PRIM, GE_BEZIER, GE_SPLINE, GE_BOUNDINGBOX, GE_JUMP, GE_BJUMP, GE_CALL, GE_RET, GE_END,
@@ -1002,9 +1022,56 @@ static void __attribute__((constructor)) cmd_casos_tabla(void){   //Arreglo
 	};
 	unsigned i;
 	for(i = 0; i < sizeof(casos); i++) cmd_con_caso[casos[i]] = 1;
+	mat_poner(1, GE_WORLDMATRIXNUMBER, 1, GE_WORLDMATRIXDATA, 0xF, 12, GE_SUCIO_T, ge.world);
+	mat_poner(2, GE_VIEWMATRIXNUMBER, 1, GE_VIEWMATRIXDATA, 0xF, 12, GE_SUCIO_T, ge.view);
+	mat_poner(3, GE_PROJMATRIXNUMBER, 1, GE_PROJMATRIXDATA, 0xF, 16, GE_SUCIO_T, ge.proj);
+	mat_poner(4, GE_TGENMATRIXNUMBER, 1, GE_TGENMATRIXDATA, 0xF, 12, GE_SUCIO_T | GE_SUCIO_R, ge.tgen);
+	mat_poner(5, GE_BONEMATRIXNUMBER, 1, GE_BONEMATRIXDATA, 0x7F, 96, 0, &ge.bone[0][0]);
+	mat_poner(6, 0, 0, GE_WORLDMATRIXNUMBER, 0xF, 0, 0, NULL);
+	mat_poner(7, 0, 0, GE_VIEWMATRIXNUMBER, 0xF, 0, 0, NULL);
+	mat_poner(8, 0, 0, GE_PROJMATRIXNUMBER, 0xF, 0, 0, NULL);
+	mat_poner(9, 0, 0, GE_TGENMATRIXNUMBER, 0xF, 0, 0, NULL);
+	mat_poner(10, 0, 0, GE_BONEMATRIXNUMBER, 0x7F, 0, 0, NULL);
 }
 
 int ge_test_cmd_con_caso(u32 cmd){ return cmd_con_caso[cmd & 0xFF]; }
+int ge_test_cmd_matriz(u32 cmd){ return cmd_matriz[cmd & 0xFF]; }   //Arreglo
+
+typedef struct {   //Arreglo
+	u32 num_nuevo, sucio, bits;
+	int idx;
+} MatRes;
+
+static inline void mat_calcular(const MatDesc *d, u32 arg, MatRes *r){   //Arreglo
+	r->sucio = ge_sucio;
+	r->idx = -1;
+	r->bits = arg << 8;
+	if(!d->dato){
+		r->num_nuevo = arg & d->mask;
+		return;
+	}
+	{
+		u32 num = ge.cmd[d->num] & 0xFFFFFF;
+		if((num & d->mask) < d->size){
+			u32 ob;
+			r->idx = (int)(num & d->mask);
+			memcpy(&ob, d->m + r->idx, 4);
+			if(d->grupo && ob != r->bits) r->sucio |= d->grupo;
+		}
+		r->num_nuevo = (num + 1) & 0xFFFFFF;
+	}
+}
+
+static inline void mat_aplicar(const MatDesc *d, u32 cmd, const MatRes *r){   //Arreglo
+	if(d->dato){
+		if(r->idx >= 0) memcpy(d->m + r->idx, &r->bits, 4);
+		ge.cmd[d->num] = r->num_nuevo;
+		ge.cmd[cmd] = 0;
+	} else ge.cmd[cmd] = r->num_nuevo;
+	ge_sucio = r->sucio;
+	ge.cur_cmd = cmd;
+	ge_stats.commands++;
+}
 
 static void __attribute__((noinline)) verificar_simple(DisplayList *l, u32 op, u32 leido){
 	u32 cmd = op >> 24, arg = op & 0x00FFFFFFu, pc = l->pc;
@@ -1023,9 +1090,41 @@ static void __attribute__((noinline)) verificar_simple(DisplayList *l, u32 op, u
 		              (unsigned)leido);
 }
 
+static void __attribute__((noinline)) verificar_matriz(DisplayList *l, u32 op){   //Arreglo
+	u32 cmd = op >> 24, arg = op & 0x00FFFFFFu, pc = l->pc;
+	const MatDesc *d = &mat_desc[cmd_matriz[cmd]];
+	u32 vaddr = ge.vaddr, iaddr = ge.iaddr, offset = ge.offset, cmds = ge_stats.commands, prims = ge_stats.primitives;
+	u32 clut = ge.clut_gen, st = (u32)gpu_state, mb = 0;
+	u64 ciclos = cycles_executed;
+	MatRes r;
+	int malo;
+	mat_calcular(d, arg, &r);
+	execute(l, op);
+	ge_stats.cm_verif++;
+	if(r.idx >= 0) memcpy(&mb, d->m + r.idx, 4);
+	malo = ge_sucio != r.sucio || ge.cur_cmd != cmd || l->pc != pc || ge.vaddr != vaddr || ge.iaddr != iaddr ||
+	       ge.offset != offset || ge_stats.commands != cmds + 1 || ge_stats.primitives != prims || ge.clut_gen != clut ||
+	       (u32)gpu_state != st || cycles_executed != ciclos || (r.idx >= 0 && mb != r.bits) ||
+	       (d->dato ? ge.cmd[d->num] != r.num_nuevo || ge.cmd[cmd] != 0 : ge.cmd[cmd] != r.num_nuevo);
+	if(malo && ge_stats.cm_verif_bad++ < 16)
+		hle_log_quiet("[VERIF] dato de matriz 0x%08X en 0x%08X distinto por el atajo\n", (unsigned)op, (unsigned)pc);
+}
+
+static void __attribute__((noinline)) comando_lento(DisplayList *l, u32 op, u32 pc){   //Arreglo
+	u32 cmd = op >> 24;
+	if(opt_on[OPT_PROF_COMANDOS]) cmd_hist[cmd]++;
+	if(opt_on[OPT_GE_VERIF] && !opt_on[OPT_PROF_ESTADO]){
+		if(!cmd_con_caso[cmd]){ verificar_simple(l, op, mem_read32(pc)); return; }
+		if(cmd_matriz[cmd] && opt_on[OPT_GE_CMD_MATRICES]){ verificar_matriz(l, op); return; }
+	}
+	execute(l, op);
+}
+
 static void __attribute__((noinline)) run_commands_ptr(DisplayList *l){
 	const u8 *ram = psp_mem.ram;
 	const u32 lim = psp_mem.ram_size - 4;
+	const int lento = opt_on[OPT_PROF_ESTADO] | opt_on[OPT_GE_VERIF] | opt_on[OPT_PROF_COMANDOS];   //Arreglo
+	const int matrices = opt_on[OPT_GE_CMD_MATRICES] && !lento;   //Arreglo
 	while(gpu_state == GPU_RUNNING){
 		u32 pc = l->pc, off = (pc & PSP_ADDR_MASK) - PSP_RAM_BASE, op, cmd, arg;
 		if(pc == l->stall){ gpu_state = GPU_STALL; break; }
@@ -1034,9 +1133,17 @@ static void __attribute__((noinline)) run_commands_ptr(DisplayList *l){
 		else { gpu_state = GPU_ERROR; break; }
 		cmd = op >> 24;
 		arg = op & 0x00FFFFFFu;
-		if(cmd_con_caso[cmd] | opt_on[OPT_PROF_ESTADO] | opt_on[OPT_GE_VERIF]){
-			if(opt_on[OPT_GE_VERIF] && !cmd_con_caso[cmd] && !opt_on[OPT_PROF_ESTADO]) verificar_simple(l, op, mem_read32(pc));
-			else execute(l, op);
+		if(cmd_con_caso[cmd] | lento){   //Arreglo
+			if(matrices && cmd_matriz[cmd]){   //Arreglo
+				const MatDesc *d = &mat_desc[cmd_matriz[cmd]];   //Arreglo
+				MatRes r;   //Arreglo
+				mat_calcular(d, arg, &r);   //Arreglo
+				mat_aplicar(d, cmd, &r);   //Arreglo
+				l->pc = pc + 4;   //Arreglo
+				continue;   //Arreglo
+			}   //Arreglo
+			if(lento) comando_lento(l, op, pc);   //Arreglo
+			else execute(l, op);   //Arreglo
 			l->pc += 4;
 			continue;
 		}
@@ -1048,14 +1155,105 @@ static void __attribute__((noinline)) run_commands_ptr(DisplayList *l){
 	}
 }   //Arreglo
 
+void ge_cmd_census_report(char *buf, size_t size){   //Arreglo
+	u32 total = 0, usado[256];
+	size_t len;
+	int i, k;
+	memset(usado, 0, sizeof(usado));
+	for(i = 0; i < 256; i++) total += cmd_hist[i];
+	len = (size_t)snprintf(buf, size, "Comandos por tipo (prof_comandos): %u ejecutados;", (unsigned)total);
+	for(k = 0; k < 16 && total && len + 24 < size; k++){
+		int mejor = -1;
+		for(i = 0; i < 256; i++) if(!usado[i] && cmd_hist[i] && (mejor < 0 || cmd_hist[i] > cmd_hist[mejor])) mejor = i;
+		if(mejor < 0) break;
+		usado[mejor] = 1;
+		len += (size_t)snprintf(buf + len, size - len, " %02X %.1f%%", (unsigned)mejor, 100.0 * (double)cmd_hist[mejor] / (double)total);
+	}
+	memset(cmd_hist, 0, sizeof(cmd_hist));
+}   //Arreglo
+
+typedef struct {   //Arreglo
+	u32 base, offset, vt, vaddr, iaddr;
+	int vaddr_ok, iaddr_ok;
+} Pico;
+
+static int pico_datos(u32 pc, Pico p, u32 stall, int *saltos){   //Arreglo
+	int i;
+	for(i = 0; i < 48; i++, pc += 4){
+		u32 off = (pc & PSP_ADDR_MASK) - PSP_RAM_BASE, op, cmd, arg, dir;
+		if(pc == stall || off > psp_mem.ram_size - 4) return 0;
+		op = rd_le32(psp_mem.ram + off);
+		cmd = op >> 24;
+		arg = op & 0x00FFFFFFu;
+		dir = (p.offset + (((p.base & 0x000F0000u) << 8) | arg)) & 0x0FFFFFFFu;
+		switch(cmd){
+		case GE_PRIM:
+			if(!(arg & 0xFFFF)) break;
+			if(((arg >> 16) & 7) == GE_PRIM_CONTINUE || !((p.vt >> 7) & 3) || !p.vaddr_ok || !mem_valid(p.vaddr, 1)) return 0;
+			if(((p.vt >> 11) & 3) && (!p.iaddr_ok || !mem_valid(p.iaddr, 1))) return 0;
+			return 1;
+		case GE_VADDR:
+			p.vaddr = dir;
+			p.vaddr_ok = 1;
+			break;
+		case GE_IADDR:
+			p.iaddr = dir;
+			p.iaddr_ok = 1;
+			break;
+		case GE_VERTEXTYPE:
+			p.vt = arg;
+			break;
+		case GE_BOUNDINGBOX:
+			p.vaddr_ok = p.iaddr_ok = 0;
+			break;
+		case GE_BASE:
+			p.base = arg;
+			break;
+		case GE_OFFSETADDR:
+			p.offset = arg << 8;
+			break;
+		case GE_ORIGIN:
+			p.offset = pc;
+			break;
+		case GE_JUMP: case GE_BJUMP:
+			dir = (p.offset + (((p.base & 0x000F0000u) << 8) | (arg & 0xFFFFFCu))) & 0x0FFFFFFFu;
+			if(--*saltos < 0) return 0;
+			if(cmd == GE_JUMP){ pc = dir - 4; break; }
+			if(!pico_datos(dir, p, stall, saltos)) return 0;
+			break;
+		case GE_BEZIER: case GE_SPLINE: case GE_CALL: case GE_RET: case GE_END: case GE_SIGNAL: case GE_FINISH:
+			return 0;
+		default:
+			if(cmd >= GE_VSCX && cmd <= GE_VSCV) return 0;
+			break;
+		}
+	}
+	return 0;
+}
+
+int ge_prim_datos_sobran(u32 vaddr_tras){   //Arreglo
+	Pico p;
+	int saltos;
+	if(!current_list) return 0;
+	saltos = current_list->stall ? 0 : 4;
+	p.base = ge.cmd[GE_BASE];
+	p.offset = ge.offset;
+	p.vt = ge.cmd[GE_VERTEXTYPE];
+	p.vaddr = vaddr_tras;
+	p.iaddr = ge.iaddr;
+	p.vaddr_ok = p.iaddr_ok = 1;
+	return pico_datos(current_list->pc + 4, p, current_list->stall, &saltos);
+}
+
 int ge_test_run_list(u32 pc, u32 end, u32 *fin){   //Arreglo
-	DisplayList l;
+	DisplayList l, *antes = current_list;
 	int st;
 	memset(&l, 0, sizeof(l));
 	l.pc = pc;
 	l.stall = end;
 	l.state = DL_RUNNING;
 	gpu_state = GPU_RUNNING;
+	current_list = &l;   //Arreglo
 	if(opt_on[OPT_GE_CMD_PUNTERO]) run_commands_ptr(&l);
 	else while(gpu_state == GPU_RUNNING){
 		if(l.pc == l.stall){ gpu_state = GPU_STALL; break; }
@@ -1065,8 +1263,21 @@ int ge_test_run_list(u32 pc, u32 end, u32 *fin){   //Arreglo
 	}
 	st = gpu_state;
 	gpu_state = GPU_DONE;
+	current_list = antes;   //Arreglo
 	if(fin) *fin = l.pc;
 	return st;
+}   //Arreglo
+
+int ge_test_pico(u32 pc, u32 stall, u32 vaddr_tras){   //Arreglo
+	DisplayList l, *antes = current_list;
+	int r;
+	memset(&l, 0, sizeof(l));
+	l.pc = pc;
+	l.stall = stall;
+	current_list = &l;
+	r = ge_prim_datos_sobran(vaddr_tras);
+	current_list = antes;
+	return r;
 }   //Arreglo
 
 /* Ejecuta la cola hasta que algo la pare. Las listas no corren mientras la

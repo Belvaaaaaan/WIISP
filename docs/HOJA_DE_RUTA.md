@@ -60,7 +60,9 @@ volver a medir tras cada paso.
    vértice contra el genérico.
 9. 1.1: render-to-texture, con los 7 pasos de la hoja (resumidos en la Fase 1 de abajo).
 10. 1.4 (charolas) y 1.3 (caja, solo con los BBOX del juego). En la
-    0.5.21, el censo de 1.3 (`prof_bbox`) y `ge_cmd_puntero`.
+    0.5.21, el censo de 1.3 (`prof_bbox`) y `ge_cmd_puntero`; en la
+    0.5.22, 1.3 a (`ge_bbox_rapido`), 1.3 b (`ge_bbox`) y
+    `ge_cmd_matrices`. Falta 1.4.
 11. Decidir el diseño del IR y hacer 2.2 y 2.3 como IR, junto con 2.5
     (BAT). Las fases 3, 4 y 5 vienen después.
 
@@ -247,6 +249,23 @@ estado de GX) y comprobable en el Wii con `ge_verificar`. Banco de qemu:
 leer y ejecutar los comandos de una llamada de 14 comandos, de 1469 a 679
 instrucciones. Detalle en docs/CONTINUAR.md.
 
+Hecha (v0.5.22): 1.3 a `ge_bbox_rapido`: la prueba de las BBOX (la que
+decide los BJUMP) con el mismo resultado bit a bit, más barata (matrices
+combinadas guardadas, solo la posición de cada vértice, el conteo cortado
+en cuanto cada plano tiene uno dentro); 1.3 b `ge_bbox`: si la caja de una
+BBOX que la prueba de siempre da por visible está entera fuera de un mismo
+plano de recorte (prueba exacta con margen), las llamadas siguientes con
+las mismas matrices y todos los vértices dentro de la caja no se calculan
+(cada triángulo suyo se descartaría), y lo que dejan a la siguiente
+llamada se calcula igual; y `ge_cmd_matrices`: los datos y números de
+matrices aplicados en el bucle de comandos. Idénticos (tests/test_bbox.c,
+tests/test_listas.c, pspautotests A/B) y comprobables en el Wii con
+`ge_verificar`. Medida nueva: `prof_comandos` (comandos por tipo). Banco
+de qemu: una caja de 8 vértices, ~1200 instrucciones menos; los objetos
+que la prueba de siempre deja pasar y no se ven, de 14256 a 7167
+instrucciones por llamada; leer y ejecutar los comandos de una llamada con
+4 huesos, de 7371 a 4686. Detalle en docs/CONTINUAR.md.
+
 Primera tanda acordada (todas "más barato", verificables en el PC):
 0.1 `prof_espera`, **skinning rápido** (`ge_skin_rapido`), **matrices al
 cambiar** (`ge_mtx_cache`), **color constante** (`ge_color_const`), 2.1
@@ -265,9 +284,12 @@ cambiar** (`ge_mtx_cache`), **color constante** (`ge_color_const`), 2.1
   midiendo quién consume cada render target); 1.2 decodificadores de
   vértices por vtype (`ge_vdec_esp`); 1.2b psq_l y GQR para 8/16 bits
   (`ge_vdec_psq`); 1.3 caja envolvente, primero con los BBOX del juego
-  (`ge_bbox`; ojo: con huesos los vértices salen de la caja; censo
-  `prof_bbox`); 1.4 agrupar llamadas con dirty flags (`ge_charolas`);
-  comandos de la lista con un puntero (`ge_cmd_puntero`).
+  (`ge_bbox_rapido`, la prueba de siempre más barata; `ge_bbox`, saltarse
+  las llamadas de cajas enteras fuera; ojo: con huesos los vértices salen
+  de la caja; censo `prof_bbox`); 1.4 agrupar llamadas con dirty flags
+  (`ge_charolas`); comandos de la lista con un puntero (`ge_cmd_puntero`)
+  y los datos de matrices en el bucle (`ge_cmd_matrices`; censo
+  `prof_comandos`).
 - **Fase 2 — Intérprete cacheado:** 2.1 sin coste por instrucción
   (`cpu_sin_extra`); 2.2 predecodificación con computed goto, tarjetas de
   8 bytes (`cpu_predec`); 2.3 especializar y fusionar (`cpu_fusion`); 2.4a

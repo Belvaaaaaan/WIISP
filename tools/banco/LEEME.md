@@ -19,17 +19,31 @@ al repositorio), `gcc-powerpc-linux-gnu` y `qemu-user`. Las salidas van a
   `ge_raster.c` compilados con devkitPPC. `qemu-ppc $SALIDA/bench_lista
   REPETICIONES VTYPE ESCENA opcion=valor...`: escena 0 = VERTEXTYPE, BASE,
   VADDR y PRIM; 1 = más 10 comandos de textura con paleta; 2 = más 4 huesos
-  y la matriz de mundo; 3 = con 8 huesos. `LUCES=1` enciende dos luces;
-  con `prof_estado=1` escribe el censo de estado. Corre la lista con el
-  mismo bucle que `process_dl_queue_body` (con y sin `ge_cmd_puntero`).
-  Leer y ejecutar los comandos por llamada (bucle, `mem_valid`,
-  `mem_read32`, `execute` o `run_commands_ptr`), 0.5.21 sin / con
-  `ge_cmd_puntero`: escena 0 399 / 264, 1 1469 / 679, 2 9392 / 7107, 3
-  15856 / 12375.
+  y la matriz de mundo; 3 = con 8 huesos; 4 = objetos de 4 llamadas con su
+  caja (BBOX de 8 vértices s16 y BJUMP, como sceGuBeginObject) y su matriz
+  de mundo, que se ven; 5 = los mismos más allá del plano lejano (la prueba
+  de siempre los deja pasar y no dibujan nada: los salta `ge_bbox`); 6 =
+  los mismos fuera de la pantalla por un lado (el BJUMP salta sus
+  llamadas). `LUCES=1` enciende dos luces; con `prof_estado=1` escribe el
+  censo de estado; al final, una línea con las cuentas de `ge_bbox`. Corre
+  la lista con el mismo bucle que `process_dl_queue_body` (con y sin
+  `ge_cmd_puntero`). Leer y ejecutar los comandos por llamada (bucle,
+  `mem_valid`, `mem_read32`, `execute` o `run_commands_ptr`), 0.5.21 sin /
+  con `ge_cmd_puntero`: escena 0 399 / 264, 1 1469 / 679, 2 9392 / 7107, 3
+  15856 / 12375. 0.5.22 (con `ge_cmd_puntero`): escena 0 256, 1 645, 2 y 3
+  sin / con `ge_cmd_matrices` 7371 / 4686 y 12535 / 7890. Escenas 4, 5 y
+  6 en la 0.5.22, instrucciones por llamada en total (sin el psq_l emulado
+  ni lo que hace el propio banco; `qprof.py` con 0 funciones), sin
+  `ge_bbox_rapido` ni `ge_bbox` / con `ge_bbox_rapido` / con los dos: 4:
+  20988 / 20686 / 20787 (la prueba exacta de una caja que se ve, ~400 por
+  caja: casi todo la segunda comparación de matrices); 5: 14256 / 13955 /
+  7167; 6: 1270 / 988 / 988. Una caja de 8 vértices, ~1200 instrucciones
+  menos con `ge_bbox_rapido` (la matriz de mundo cambia en cada objeto).
 - `qprof.py`: instrucciones PowerPC por función (y por unidad) a partir de
   `qemu-ppc -d in_asm,exec,nochain -D grande.log` menos una corrida corta:
-  `qprof.py grande.log corta.log UNIDADES`. `qtb.py` lo mismo por bloque
-  de una función.
+  `qprof.py grande.log corta.log UNIDADES [FUNCIONES]` (lista las 25 que
+  más gastan, o todas con 0; el total de la primera línea es siempre el de
+  todas). `qtb.py` lo mismo por bloque de una función.
 - `qlines.py`: lo mismo por bloque con la función y la línea de código
   (`addr2line`; el banco se compila con `-g`), para repartir una función
   entre lo que tiene en línea. `qcallers.py`: quién llama a una función

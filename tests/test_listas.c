@@ -117,7 +117,7 @@ void test_listas(void){
 	int saved_fast = ge_fast_math;
 	u8 saved_opt[OPT_N];
 	static GeState ini;
-	u32 ronda, distintas = 0, errores = 0, bordes_n = 0, cmds = 0, saltos = 0, verif = 0, verif_mal = 0;
+	u32 ronda, distintas = 0, errores = 0, bordes_n = 0, cmds = 0, saltos = 0, verif = 0, verif_mal = 0, mverif = 0, mverif_mal = 0;
 	u8 *v;
 	int i;
 
@@ -128,6 +128,7 @@ void test_listas(void){
 	opt_on[OPT_PROF_BBOX] = 0;
 	opt_on[OPT_PROF_ESTADO] = 0;
 	opt_on[OPT_GE_VERIF] = 0;
+	opt_on[OPT_GE_BBOX] = 0;
 	v = mem_ptr(L_VERT, 0x9000);
 	for(i = 0; i < 0x9000; i++) v[i] = (u8)lrnd();
 
@@ -199,6 +200,8 @@ void test_listas(void){
 		correr(&ini, pc0, end, 1, &b);
 		verif += ge_stats.cp_verif;
 		verif_mal += ge_stats.cp_verif_bad;
+		mverif += ge_stats.cm_verif;
+		mverif_mal += ge_stats.cm_verif_bad;
 		opt_on[OPT_GE_VERIF] = 0;
 		cmds += a.commands;
 		errores += a.st == 4;
@@ -211,10 +214,13 @@ void test_listas(void){
 	}
 	printf("  600 listas (%u saltos entre zonas, %u hasta el borde de la memoria, %u terminan con error), %u comandos: %u distintas\n",
 	       (unsigned)saltos, (unsigned)bordes_n, (unsigned)errores, (unsigned)cmds, (unsigned)distintas);
-	printf("  con ge_verificar: %u comandos comparados con execute, %u distintos\n", (unsigned)verif, (unsigned)verif_mal);
+	printf("  con ge_verificar: %u comandos comparados con execute, %u distintos; %u de matrices, %u distintos\n", (unsigned)verif,
+	       (unsigned)verif_mal, (unsigned)mverif, (unsigned)mverif_mal);
 	CHECK_EQ(distintas, 0u);
 	CHECK_EQ(verif_mal, 0u);
 	CHECK(verif > 5000);
+	CHECK_EQ(mverif_mal, 0u);
+	CHECK(mverif > 1000);
 	CHECK(errores >= bordes_n);
 	CHECK(cmds > 20000);
 
@@ -243,6 +249,37 @@ void test_listas(void){
 		sucio_ini = GE_SUCIO_TODO;
 		printf("  %u comandos sin caso propio, 8 veces cada uno: %u distintos\n", (unsigned)simples, (unsigned)malos);
 		CHECK_EQ(simples, 229u);
+		CHECK_EQ(malos, 0u);
+	}
+	{
+		u32 c, mats = 0, malos = 0, rep;
+		sucio_ini = 0;
+		for(c = 0; c < 256; c++){
+			if(!ge_test_cmd_matriz(c)) continue;
+			mats++;
+			for(rep = 0; rep < 64; rep++){
+				Foto a, b;
+				u32 sa, sb, k;
+				for(i = 0; i < 256; i++) ini.cmd[i] = lrnd() & 0xFFFFFF;
+				for(k = 0; k < 12; k++){ ini.world[k] = (float)(int)lrn(3); ini.view[k] = (float)(int)lrn(3); ini.tgen[k] = (float)(int)lrn(3); }
+				for(k = 0; k < 16; k++) ini.proj[k] = (float)(int)lrn(3);
+				for(k = 0; k < 96; k++) ini.bone[k / 12][k % 12] = (float)(int)lrn(3);
+				if(rep & 1) ini.cmd[c - 1] = lrn(rep & 2 ? 0x80 : 0x14);
+				lp = 0x08D40000u + lrn(0x400) * 4;
+				lcmd(c, rep & 4 ? ((u32)(int)lrn(3) == 0 ? 0 : 0x3F8000u) : lrnd());
+				opt_on[OPT_GE_CMD_MATRICES] = 1;
+				correr(&ini, lp - 4, lp, 0, &a);
+				sa = ge_sucio;
+				correr(&ini, lp - 4, lp, 1, &b);
+				sb = ge_sucio;
+				if(memcmp(&a, &b, sizeof(a)) || sa != sb){
+					if(malos++ < 8) printf("  matriz 0x%02X distinta\n", (unsigned)c);
+				}
+			}
+		}
+		sucio_ini = GE_SUCIO_TODO;
+		printf("  %u comandos de matrices por el atajo, 64 veces cada uno: %u distintos\n", (unsigned)mats, (unsigned)malos);
+		CHECK_EQ(mats, 10u);
 		CHECK_EQ(malos, 0u);
 	}
 

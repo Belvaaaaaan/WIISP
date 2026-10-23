@@ -2180,6 +2180,224 @@ Autotest (4 registros y un `.capturas.txt`; todas con `prof_pmc`,
 distintos en vértices, estado de GX y comandos) y censo (`prof_bbox` con
 `capturas 400`: las 12 huellas tienen que ser las de siempre).
 
+### Resultado de la 0.5.21 en el Wii (DBZ: sin / con / verif / censo)
+
+- Las 12 capturas de `censo`, las de siempre (9E8BC705 ... E9392291); las
+  cuatro corridas ejecutan las mismas 1343,1 M instrucciones de la PSP.
+- `ge_verificar`: 0 distintos en todo (vértices 9,6 M, descartes 8,6 M,
+  estado de GX 322.636 emisiones, envío a GX 4 M triángulos y 938.494
+  comandos por el camino nuevo en la pelea).
+- `ge_cmd_puntero`: comandos de 2791 a 2609 ciclos por llamada (−6,5 %), de
+  207 a 194 por comando; peleas de 40,5 / 41,6 % a 40,7 / 41,8 %; la escena
+  de 96,5 a 96,2 s. Mucho menos de lo estimado (~2 %): de los 7,05 M
+  comandos de la pelea solo 938 mil (13 %) son de los sin `case`; el 87 %
+  sigue por `execute` (por las cuentas, sobre todo datos de matrices).
+- Censo de cajas, en la pelea (por ventana de 600 vblanks):
+  - DBZ manda ~108.000 BBOX (~180 por vblank), de 8 vértices, ninguna con
+    huesos ni que pase sin probar; el 76-81 % caen fuera y el BJUMP salta
+    331-379 mil llamadas y 5,2-6,4 M vértices (más que lo que se dibuja).
+  - Probarlas cuesta 615-624 ms por ventana, ~2,5 % de la pelea: ~5,7 µs
+    (~4150 ciclos) por caja de 8 vértices. Son ~860 de los 2609 ciclos de
+    "comandos" de cada llamada.
+  - Objetos que pasan la caja y no dibujan nada: 2.373-3.164 por ventana,
+    todos enteros fuera de pantalla y ninguno con huesos: 17-49 mil
+    llamadas, 0,4-1,05 M vértices, 290-832 ms (1,2-3,4 %).
+  - Llamadas fuera de objetos (los personajes, con huesos) que no dibujan
+    nada: <1 %. Cajas propias no compensan.
+- Fallo latente encontrado al leer el código: `ge_bounding_box` ponía
+  `uv_prescale = 0` sin marcar sucio el grupo V; con `ge_estado_sucio`, una
+  llamada después de una BBOX con uv del modo 3 la habría usado mal (DBZ no
+  usa ese modo: la verificación dio 0).
+- Siguiente (aprobado por el usuario, 0.5.22): 1.3 a (BBOX más barata e
+  idéntica), 1.3 b (saltarse las llamadas de cajas enteras fuera, exacto),
+  el atajo de los datos de matrices, el histograma de comandos y el arreglo
+  de `uv_prescale`.
+
+### v0.5.22: cajas más baratas (`ge_bbox_rapido`), llamadas de cajas enteras fuera (`ge_bbox`) y datos de matrices en el bucle (`ge_cmd_matrices`)
+
+Lo acordado al leer los registros de la 0.5.21: 1.3 a (la prueba de las
+BBOX más barata e idéntica), 1.3 b (saltarse las llamadas de cajas enteras
+fuera, exacto), el atajo de los datos de matrices, el histograma de
+comandos y el arreglo de `uv_prescale`. Cada cosa con su interruptor, la
+misma imagen y comprobable en el Wii con `ge_verificar`.
+
+- **1.3 a, `ge_bbox_rapido`** (encendido). La prueba de las BBOX (la
+  aproximada de PPSSPP, la que decide los BJUMP) da el mismo resultado,
+  más barata:
+  - `vista * proyección` y `mundo * (vista * proyección)` se guardan
+    mientras no cambien las matrices (se comparan con `memcmp` en cada
+    BBOX);
+  - de cada vértice de la caja solo se lee la posición (sin índices, con un
+    puntero: s8, s16 o float con los NaN e infinitos limpiados como
+    siempre);
+  - el formato se guarda por tipo de vértice, y los pesos de morph solo se
+    cargan si hay morph;
+  - el conteo por planos para en cuanto cada plano tiene un vértice dentro
+    (el resultado solo depende de eso).
+  Las cuentas que deciden el resultado (`bb_mult4`, `bb_contar`) son las
+  mismas funciones en los dos caminos, con las `fma` escritas en el orden
+  en que devkitPPC compilaba la 0.5.21: en el Wii el resultado es el mismo
+  bit a bit (arnés de devkitPPC con 40.000 cajas al azar: la prueba de la
+  0.5.21, la de siempre y la rápida dan lo mismo). Con `ge_verificar`, cada
+  BBOX se prueba también por el camino de siempre: línea `[TIEMPOS]
+  Verificacion de las cajas`, tiene que dar 0 distintas.
+- **1.3 b, `ge_bbox`** (encendido). Después de cada BBOX de hasta 64
+  vértices sin huesos ni morph que la prueba de siempre da por visible (las
+  otras ya las salta el BJUMP: en DBZ, el 76-81 %), se mira si la caja
+  (ampliada 1/256 de su tamaño y 2^-20 de sus coordenadas) está entera
+  fuera de un mismo plano de recorte del GE (x, y o z fuera de ±w, o w
+  negativa: los planos de `ge_clip_flags`), con un margen de 2^-9 de la
+  magnitud de los términos de cada coordenada (el error de las cuentas del
+  GE en modo exacto es menor de 2^-11). Si lo está, las llamadas
+  siguientes con las mismas matrices de mundo, vista y proyección y todos
+  sus vértices dentro de la caja no se calculan: cada triángulo suyo
+  tendría los tres vértices fuera del mismo plano y el GE lo descartaría
+  con las reglas de siempre.
+  - Solo triángulos, tiras y abanicos, sin huesos, morph, índices ni modo
+    through; lo demás, como siempre.
+  - Lo que la llamada deja a la siguiente se calcula igual: direcciones,
+    primitiva, índice de la ventana, última uv y normal y, si la siguiente
+    primitiva puede continuarla (o no se sabe), los vértices de la ventana
+    (`data_`, con el decodificador de siempre).
+  - Para saberlo, `ge_prim_datos_sobran` mira la lista por delante (hasta
+    48 comandos y 4 saltos): sigue el tipo de vértice, las direcciones,
+    BASE, OFFSETADDR, ORIGIN, los JUMP y los dos lados de los BJUMP (los
+    saltos, solo en listas sin stall). Si la siguiente primitiva es nueva,
+    con posición y direcciones válidas, nadie lee la ventana: la llamada es
+    "ligera" (solo la última uv y normal). Un PRIM de 0 vértices, uno sin
+    posición o con una dirección mala no tocan la ventana: se sigue
+    mirando o se calcula.
+  - Con `ge_verificar`, las llamadas que se saltarían se dibujan igual y se
+    comprueba que no sale ninguna primitiva y que lo que dejan es lo
+    calculado: línea `[TIEMPOS] Verificacion de ge_bbox`.
+  - Línea `[TIEMPOS] Cajas exactas (ge_bbox)`: cajas probadas, enteras
+    fuera de un plano (de ellas detrás de la cámara), llamadas después de
+    una caja fuera, saltadas (ligeras y vértices) y por qué no se saltan
+    las demás (formato o primitiva, matrices cambiadas, algún vértice fuera
+    de la caja). `ventanas.py` saca las llamadas y los vértices saltados por
+    ventana.
+  - Qué se puede esperar: la prueba de PPSSPP sin depth clamp no mira los
+    planos cercano y lejano, y con w negativa puede dar "visible"; lo que
+    deja pasar y está detrás de la cámara o más allá del plano lejano lo
+    salta `ge_bbox`. Lo que sale de la pantalla en diagonal (cada esquina
+    fuera de un plano distinto) no se puede saltar así. En el censo de la
+    0.5.21, los objetos que pasan la caja y no dibujan nada eran 290-832 ms
+    por ventana (1,2-3,4 %), todos sin huesos: es el techo.
+- **`ge_cmd_matrices`** (encendido). En el bucle de comandos, los datos y
+  números de las matrices (mundo, vista, proyección, textura y huesos: 10
+  comandos) se aplican sin pasar por `execute`, con las mismas cuentas
+  (`mat_calcular` y `mat_aplicar`; la tabla `mat_desc` está junto a
+  `execute`). En la pelea de la 0.5.21, el 87 % de los comandos iban por
+  `execute`, sobre todo datos de matrices. Con `ge_verificar`, cada uno
+  pasa por `execute` y se compara: línea `[TIEMPOS] Verificacion de las
+  matrices`. Lo que decide el camino lento del bucle (`prof_estado`,
+  `ge_verificar`, `prof_comandos`) se lee una vez por lista.
+- **`prof_comandos`** (apagado, solo mide): cuántos comandos de cada tipo
+  ejecuta el bucle; línea `[TIEMPOS] Comandos por tipo` con los 16 más
+  frecuentes (número del comando en hexadecimal y %). Para elegir los
+  siguientes atajos del bucle.
+- **Arreglo de `uv_prescale`**: `ge_bounding_box` ya no lo pone a 0 (la
+  caja no lo usa); con `ge_estado_sucio`, una llamada con uv del modo 3
+  después de una BBOX se quedaba con la uv sin escalar. Sin interruptor.
+
+Banco de qemu (`bench_lista`, código de devkitPPC, instrucciones por
+llamada sin contar el psq_l emulado):
+- leer y ejecutar los comandos con y sin `ge_cmd_matrices`: escena 2 (4
+  huesos y mundo, 81 comandos) de 7371 a 4686 (−36 %), escena 3 (8 huesos)
+  de 12535 a 7890 (−37 %); las escenas 0 y 1 (sin matrices), 256 y 645
+  (0.5.21: 264 y 679: los interruptores se leen una vez por lista);
+- escena 4 (nueva: objetos de 4 llamadas con su caja, BBOX y BJUMP, y su
+  matriz de mundo; las cajas se ven): la llamada entera 20988 sin los dos
+  interruptores, 20686 con `ge_bbox_rapido` (~1200 menos por caja, con la
+  matriz de mundo distinta en cada objeto, como en DBZ) y 20787 con los
+  dos (la prueba exacta de una caja que se ve sale en el primer vértice:
+  ~400 por caja, casi todo la segunda comparación de las matrices);
+- escena 5 (nueva: los mismos objetos más allá del plano lejano, que la
+  prueba de siempre deja pasar): 14256, 13955 y 7167 con `ge_bbox` (las
+  llamadas no se calculan; la prueba exacta de una caja entera fuera
+  cuesta ~4600);
+- escena 6 (nueva: fuera de la pantalla por un lado; el BJUMP salta las
+  llamadas, como el 76-81 % de las cajas de DBZ): 1270, 988 y 988. La
+  prueba exacta solo corre en las cajas que la de siempre da por
+  visibles: probar también estas costaba 2290 por llamada (~5200 más por
+  caja; cambiado antes de entregar).
+- Estimación para la pelea: probar las cajas eran 615-624 ms por ventana
+  (~2,5 %) y `ge_bbox_rapido` le quita ~40 % (~1 %); `ge_bbox`, lo que
+  salte de los objetos que pasan la caja sin dibujar nada (techo 1,2-3,4
+  %); `ge_cmd_matrices`, parte de los "comandos" (8 %, sobre todo datos de
+  matrices).
+
+Verificación:
+- test (x86 con ASan y UBSan), test-ppc y devkitPPC: 165.894
+  comprobaciones sin fallos; huellas de test_vdec sin cambios (4D4A1D8B,
+  0657B177, B3A2BCD3); `gevert.sh` igual que la 0.5.21 (252,2 / 324,5 /
+  383,2 / 502,7 / 268,3).
+- `tests/test_bbox.c`:
+  - 8.000 BBOX al azar (todos los formatos, índices, huesos, morph, tramos
+    de más de 0x100, matrices raras, cambiando matrices entre medias) con
+    la prueba de siempre y la rápida: 0 distintas; con `ge_verificar`
+    4.000 comparadas, 0 distintas. En el arnés de devkitPPC, 40.000 cajas:
+    la prueba de la 0.5.21, la de siempre y la rápida dan lo mismo.
+  - 240 listas con objetos alrededor de la cámara (detrás, también grandes
+    que la prueba de siempre deja pasar; más allá del plano lejano; a
+    caballo de los bordes, también finos en la franja del borde; cajas con
+    las esquinas en cualquier orden o que no contienen sus vértices;
+    continuaciones, PRIM vacíos o sin posición entre medias, uv
+    arrastradas), dibujadas por el rasterizador por software en exacto y
+    MR, con y sin `ge_bbox` y con `ge_verificar`: 446 cajas enteras fuera
+    (112 detrás de la cámara), 382 llamadas saltadas, la VRAM entera
+    igual; con `ge_verificar` 382 comprobadas, 0 distintas.
+  - Una llamada saltada seguida de una continuación con ocho cosas entre
+    medias (nada, PRIM de 0 vértices, sin posición, con la dirección mala,
+    una llamada nueva, con índices buenos y malos): misma imagen y las
+    llamadas ligeras que tocan, en exacto y MR.
+  - 34 casos de lo que mira `ge_prim_datos_sobran`, con y sin stall.
+- `tests/test_listas.c`: 600 listas, 69.615 comandos, 0 distintas; con
+  `ge_verificar`, 17.838 comandos y 6.475 de matrices comparados con
+  `execute`, 0 distintos; los 10 comandos de matrices por el atajo, 64
+  veces cada uno, 0 distintos.
+- Mutaciones (cada una tiene que hacer fallar alguna prueba), todas
+  detectadas. En la prueba exacta: `bb_contiene` que siempre dice que sí,
+  el plano x con el signo cambiado, el plano x en 0,9 w, "detrás" con w <
+  5, las esquinas cortadas en la cuarta y sin comparar la matriz de mundo
+  antes de saltar. En `ge_prim_datos_sobran` (15): siempre ligera, PRIM
+  de 0 vértices tomado como nuevo, sin mirar la posición, la dirección,
+  los índices, la BBOX, el tope de saltos, el stall, el otro lado del
+  BJUMP, el tope de 48 comandos, ORIGIN, OFFSETADDR, CALL, VSC ni
+  CONTINUE. Sin efecto en estas pruebas: el margen de w con el signo
+  cambiado y "detrás" con w < 1 (con el plano cercano de las pruebas en w
+  = 1, lo que queda entre 0 y 1 está también entero fuera de él). Las de
+  PRIM de 0 vértices, el plano x en 0,9 w y "detrás" con w < 5 no las veía
+  ninguna prueba: de ahí las pruebas dirigidas, los objetos finos en los
+  bordes, las esquinas en cualquier orden y los objetos grandes detrás de
+  la cámara.
+- pspautotests 275/275. A/B en las 572 de cada interruptor (`ge_bbox`,
+  `ge_bbox_rapido`, `ge_cmd_matrices`; exacto y MR): solo `malloc` y
+  savedata, que cambian también entre corridas del mismo binario. A/B de
+  la 0.5.21 contra la 0.5.22 con todo encendido: lo mismo más
+  `gpu/complex` e `io/file` (escriben archivos con la hora del PC: el
+  mismo binario da otra RAM en cada corrida). A/B del renderizador de GX
+  bajo qemu (`build_cli_gx.sh`) en las 110 de `gpu/` con los tres
+  interruptores: misma huella del estado de GX (solo `gpu/complex`, como
+  siempre). Con `ge_verificar` en las 110 de `gpu/` (y el informe forzado
+  también en las que duran menos de medio segundo, en una copia aparte):
+  116 cajas, 33.178 datos de matrices y 348.649 comandos comparados, 0
+  distintos y ninguna línea `[VERIF]`, en exacto y MR. En las
+  pspautotests no se salta ninguna llamada (las cajas de `gpu/bounding`
+  no llevan dibujos detrás): `ge_bbox` se comprueba con las pruebas de
+  arriba y en el Wii con `ge_verificar`.
+- tests/guest 22/22; la recarga con ASan (572, tres veces seguidas) va en
+  el commit siguiente.
+
+Autotest (4 registros y un `.capturas.txt`; todas con `prof_pmc`,
+`prof_tirones`, `prof_ventana_juego` y `ventana 600`): sin (`ge_bbox`,
+`ge_bbox_rapido` y `ge_cmd_matrices` a 0, como la 0.5.21), con (los tres a
+1), verif (`ge_verificar`: 0 distintos en cajas, `ge_bbox`, matrices,
+comandos, vértices y estado de GX) y censo (`prof_bbox` y `prof_comandos`
+con `capturas 400`: las 12 huellas tienen que ser las de siempre; los ms
+de las BBOX y de los objetos que pasan la caja sin dibujar, para comparar
+con la 0.5.21, y el histograma de comandos).
+
 ### Para el siguiente chat (empezar aquí)
 
 Metodología acordada (detalle en `docs/HOJA_DE_RUTA.md`): primero medir
@@ -2199,26 +2417,32 @@ Metodología acordada (detalle en `docs/HOJA_DE_RUTA.md`): primero medir
   y `prof_bloques` (0.5.17.2), tarjetas VFPU parte a (0.5.18) y b
   (0.5.18.1), `cpu_enlace` y `cpu_syscall_slot` (0.5.19), la pila de
   retornos simulada y `prof_vertices` (0.5.19.1), 1.2c
-  `ge_pantalla_rapida` (0.5.20) y el censo `prof_bbox` y `ge_cmd_puntero`
-  (0.5.21).
+  `ge_pantalla_rapida` (0.5.20), el censo `prof_bbox` y `ge_cmd_puntero`
+  (0.5.21) y 1.3 a `ge_bbox_rapido`, 1.3 b `ge_bbox`, `ge_cmd_matrices` y
+  el censo `prof_comandos` (0.5.22).
 - Herramientas para medir sin el Wii (banco de qemu con el código de
   devkitPPC, perfil por función, psq_l emulado, A/B) y para leer los
   registros del Wii (`ventanas.py`): `tools/banco/LEEME.md`. El entorno
   (devkitPPC, qemu, pspautotests, PPSSPP): `tools/setup_entorno.sh`.
-- **Siguiente:** leer los registros de la 0.5.21 (`ventanas.py
-  sin=... con=... verif=... censo=...`; columnas nuevas de ciclos de
-  "comandos" por llamada y por comando) y, con las líneas `Censo de cajas`
-  de la pelea, decidir 1.3 `ge_bbox` (criterios en la sección de la
-  0.5.21). Después, 1.4 `ge_charolas` (juntar llamadas: lo que queda por
-  llamada es `setup_targets`/`lookup_texture`, ~900 instrucciones, y la
-  preparación de `ge_draw_prim`), y el paso 11 (diseño del IR, 2.3
-  `cpu_fusion`, 2.5 `mem_bat`). Medido en la 0.5.20, en la pelea: CPU 34 %,
-  leer vértices 22 % (pantalla ~150 ciclos por vértice, transformar ~110,
-  huesos ~76, decodificar ~54), ensamblar 10 %, enviar a GX 8 %, comandos
-  8 %. Otros candidatos: pantalla otra vez con paired singles (~3 %),
-  transformar (la división por w), un solo `GX_Begin` por llamada, la
-  parte b2 de la VFPU, la pila de retornos real (~0,5 %), y los datos de
-  matrices (huesos) por el camino de `ge_cmd_puntero`.
+- **Siguiente:** leer los registros de la 0.5.22 (`ventanas.py sin=...
+  con=... verif=... censo=...`): velocidad y ciclos de "comandos" por
+  llamada sin y con, y las columnas nuevas de `ge_bbox` (llamadas y miles
+  de vértices saltados por ventana); en verif, 0 distintos en todas las
+  líneas de verificación (cajas, `ge_bbox`, matrices, comandos, vértices y
+  estado de GX); en censo, las 12 capturas de siempre, los ms de las BBOX
+  y de los objetos que pasan la caja sin dibujar (en la 0.5.21: 615-624 y
+  290-832 ms por ventana) y `Comandos por tipo` (lo que sigue por
+  `execute`). Después, 1.4 `ge_charolas` (juntar llamadas: lo que queda
+  por llamada es `setup_targets`/`lookup_texture`, ~900 instrucciones, y
+  la preparación de `ge_draw_prim`), y el paso 11 (diseño del IR, 2.3
+  `cpu_fusion`, 2.5 `mem_bat`). Medido en la 0.5.20, en la pelea: CPU
+  34 %, leer vértices 22 % (pantalla ~150 ciclos por vértice, transformar
+  ~110, huesos ~76, decodificar ~54), ensamblar 10 %, enviar a GX 8 %,
+  comandos 8 %. Otros candidatos: pantalla otra vez con paired singles
+  (~3 %), transformar (la división por w), un solo `GX_Begin` por llamada,
+  la parte b2 de la VFPU, la pila de retornos real (~0,5 %) y, en
+  `ge_bbox`, no comparar otra vez las matrices en la prueba exacta (~350
+  instrucciones por caja que se ve).
 - Autotest: como mucho 4 registros y un `.capturas.txt` (el usuario no
   puede mandar más de 5 archivos en un mensaje). Siguiente también: las peleas (leer vértices: `round_to_screen`, la división por
   w y tres conversiones a entero por la memoria, IPC 0,66; los índices CI8

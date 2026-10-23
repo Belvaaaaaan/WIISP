@@ -5,6 +5,82 @@ la 0.5.17.2; antes se marcaban con `//arreglo`). Aquí va, por versión, qué
 se arregló o cambió y una descripción breve. El detalle está en
 `docs/CONTINUAR.md`.
 
+## 0.5.22
+
+- `gpu/ge_vertex.c`: `ge_bbox_rapido` (encendido, 1.3 a). La prueba de las
+  BBOX (la aproximada de PPSSPP) se queda con su resultado de siempre pero
+  más barata: `view * proj` y `mundo * vp` guardadas mientras no cambien,
+  solo la posición al decodificar (con un puntero si no hay índices) y el
+  formato guardado por tipo de vértice; los pesos de morph solo con morph.
+  Las cuentas que deciden el resultado están en funciones compartidas con
+  la prueba de siempre (`bb_mult4`, `bb_contar`), con las `fma` escritas en
+  el orden en que devkitPPC compilaba la 0.5.21, y el conteo para en cuanto
+  cada plano tiene un vértice dentro (el resultado solo depende de que
+  alguno lo esté). Con `ge_verificar`, cada BBOX se prueba también por el
+  camino de siempre y se compara.
+- `gpu/ge_vertex.c`, `gpu/ge.c`: `ge_bbox` (encendido, 1.3 b). Si la caja
+  de una BBOX que la prueba de siempre da por visible (las otras ya las
+  salta el BJUMP: no se prueban otra vez) está, ampliada un poco, entera
+  fuera de un mismo plano de recorte del GE o entera detrás de la cámara,
+  con un margen de 2^-9 de la magnitud de los términos (el error del GE en
+  modo exacto es menor de 2^-11), las llamadas siguientes con las mismas
+  matrices cuyos vértices caen todos dentro de la caja no se calculan:
+  cada triángulo suyo se descartaría por las reglas de siempre. Solo
+  triángulos, tiras y abanicos sin huesos, morph, índices ni modo through.
+  Queda lo que la llamada deja a la siguiente: direcciones, primitiva,
+  índice de la ventana, última uv y normal y, si la siguiente primitiva
+  puede continuarla (o no se sabe), los vértices de la ventana (`data_`),
+  calculados como siempre. Para saberlo se mira la lista por delante
+  (`ge_prim_datos_sobran`: tipo de vértice, direcciones y saltos; en
+  listas con stall, sin seguir saltos). Con `ge_verificar`, las llamadas
+  que se saltarían se dibujan igual y se comprueba que no salió ninguna
+  primitiva y que lo que dejan es lo calculado. Línea `[TIEMPOS] Cajas
+  exactas`.
+- `gpu/ge_vertex.c`: `ge_bounding_box` ya no pone `uv_prescale = 0` (la
+  decodificación no lo usa): con `ge_estado_sucio`, una llamada con uv del
+  modo 3 después de una BBOX se quedaba con la uv sin escalar. Sin
+  interruptor (arreglo).
+- `gpu/ge.c`: `ge_cmd_matrices` (encendido). En el bucle de comandos, los
+  datos y números de las matrices (mundo, vista, proyección, textura y
+  huesos) se aplican sin pasar por `execute`, con las mismas cuentas
+  (`mat_calcular`/`mat_aplicar`). Con `ge_verificar`, cada uno pasa por
+  `execute` y se compara. Lo que decide el camino lento (`prof_estado`,
+  `ge_verificar`, `prof_comandos`) se lee una vez por lista.
+- `gpu/ge.c`, `hle/hle.c`: `prof_comandos` (apagado, solo mide): cuántos
+  comandos de cada tipo ejecuta el bucle de comandos; línea
+  `[TIEMPOS] Comandos por tipo` con los 16 más frecuentes.
+- `core/opt.h`, `core/opt.c`: `ge_bbox` (antes reservado) y los nuevos
+  `ge_bbox_rapido`, `ge_cmd_matrices` y `prof_comandos`.
+- `tests/test_bbox.c`: 8.000 BBOX al azar (todos los formatos, índices,
+  huesos, morph, tramos de más de 0x100, matrices raras) con la prueba de
+  siempre y la rápida, en secuencias que cambian matrices entre medias;
+  240 listas con objetos alrededor de la cámara (detrás, también grandes
+  que la prueba de siempre deja pasar, más allá del plano lejano, a
+  caballo de los bordes, también finos en la franja del borde, cajas con
+  las esquinas en cualquier orden, cajas que no contienen sus vértices,
+  continuaciones, PRIM vacíos o sin posición antes de una continuación y
+  uv arrastradas) dibujadas por el rasterizador por software en modo
+  exacto y rápido, con y sin `ge_bbox` y con `ge_verificar`: la VRAM
+  entera tiene que salir igual. Una llamada saltada seguida de una
+  continuación con ocho cosas distintas entre medias (nada, un PRIM de 0
+  vértices, uno sin posición, uno con la dirección mala, una llamada
+  nueva, con índices buenos y malos): misma imagen y las llamadas
+  "ligeras" que tocan. 34 casos de lo que mira `ge_prim_datos_sobran`
+  (con y sin stall: saltos, BJUMP por los dos lados, el tope de 48
+  comandos y de 4 saltos, BASE, OFFSETADDR, ORIGIN, BBOX, índices).
+- `tests/test_listas.c`: los 10 comandos de matrices por el atajo y su
+  verificación; sin `ge_bbox` (es la prueba del bucle de comandos).
+- `gpu/ge.c`, `gpu/ge_internal.h`: `ge_test_pico` para las pruebas.
+- `tools/banco/ventanas.py`: columnas de llamadas y vértices que salta
+  `ge_bbox` por ventana (con `-` en las corridas que no lo tienen).
+- `tools/banco/bench_lista.c`: escenas 4 (objetos con caja visibles), 5
+  (objetos más allá del plano lejano que pasan la caja) y 6 (objetos fuera
+  de la pantalla por un lado: el BJUMP los salta); los huesos de las
+  escenas 2 y 3 ya no se cargan en las otras.
+- `tools/banco/qprof.py`: cuarto argumento opcional, cuántas funciones
+  listar (0: todas).
+- `hle/hle.h`, `dist/apps/wiisp/meta.xml`: versión 0.5.22.
+
 ## 0.5.21
 
 - `gpu/ge.c`: `ge_cmd_puntero` (encendido). El bucle de comandos de una

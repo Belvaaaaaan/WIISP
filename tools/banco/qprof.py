@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Perfil de instrucciones PowerPC desde qemu -d in_asm,exec,nochain:
-instrucciones por función, restando una corrida corta (arranque)."""
+instrucciones por función, restando una corrida corta (arranque).
+Uso: qprof.py grande.log corta.log UNIDADES [FUNCIONES] (25; 0: todas)"""
 import sys, re, collections
 def prof(path):
     size = {}; name = {}; cnt = collections.Counter()
@@ -21,9 +22,10 @@ def prof(path):
     for pc, n in cnt.items(): per[name.get(pc, '?')] += n * size.get(pc, 0)
     return per
 a = prof(sys.argv[1]); b = prof(sys.argv[2]); units = float(sys.argv[3])
+cuantas = int(sys.argv[4]) if len(sys.argv) > 4 else 25
 d = collections.Counter({k: a[k] - b.get(k, 0) for k in a})
 tot = sum(v for v in d.values() if v > 0)
 print(f'total {tot/units:.0f} instrucciones por unidad')
-for k, v in d.most_common(25):
+for k, v in d.most_common(cuantas or None):
     if v <= 0: break
     print(f'{v/units:8.1f}  {100*v/tot:5.1f}%  {k}')

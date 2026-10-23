@@ -2238,6 +2238,8 @@ static struct {
 } cs;
 
 /* Pruebas: lo que una llamada deja a la siguiente, como al arrancar */
+static void bb_reset(void);   //Arreglo
+
 void ge_vertex_reset(void){
 	last_uv[0] = last_uv[1] = 0.0f;
 	last_normal[0] = last_normal[1] = last_normal[2] = 0.0f;
@@ -2250,6 +2252,7 @@ void ge_vertex_reset(void){
 	cs.valid = 0;
 	es.f_ok = es.v_ok = es.t_ok = 0;
 	ge_sucio = GE_SUCIO_TODO;
+	bb_reset();   //Arreglo
 }
 
 void ge_test_decode_vertex(u32 vt, const u8 *p, float *pos, float *nrm){
@@ -2414,11 +2417,134 @@ static void __attribute__((noinline)) estado_t_verif(const VFormat *f){
 	ge_estado_verif_note(1, memcmp(&old, &ts, sizeof(ts)) || old_n != ts_nlights);
 }
 
+static struct {   //Arreglo
+	int valida;
+	float lo[3], hi[3];
+	int lo8[3], hi8[3], lo16[3], hi16[3];
+	float world[12], view[12], proj[16];
+} bbx;
+
+static int bb_contiene(const VFormat *f, const u8 *p, u32 n){   //Arreglo
+	const u8 *q = p + f->off_pos;
+	u32 i, size = f->size;
+	switch(f->pos){
+	case 1:
+		for(i = 0; i < n; i++, q += size){
+			int x = (s8)q[0], y = (s8)q[1], z = (s8)q[2];
+			if(x < bbx.lo8[0] || x > bbx.hi8[0] || y < bbx.lo8[1] || y > bbx.hi8[1] || z < bbx.lo8[2] || z > bbx.hi8[2]) return 0;
+		}
+		return 1;
+	case 2:
+		for(i = 0; i < n; i++, q += size){
+			int x = (s16)rd_le16(q), y = (s16)rd_le16(q + 2), z = (s16)rd_le16(q + 4);
+			if(x < bbx.lo16[0] || x > bbx.hi16[0] || y < bbx.lo16[1] || y > bbx.hi16[1] || z < bbx.lo16[2] || z > bbx.hi16[2]) return 0;
+		}
+		return 1;
+	case 3:
+		for(i = 0; i < n; i++, q += size){
+			float x = clean_nan_inf(f32_from(rd_le32(q))), y = clean_nan_inf(f32_from(rd_le32(q + 4)));
+			float z = clean_nan_inf(f32_from(rd_le32(q + 8)));
+			if(!(x >= bbx.lo[0] && x <= bbx.hi[0] && y >= bbx.lo[1] && y <= bbx.hi[1] && z >= bbx.lo[2] && z <= bbx.hi[2])) return 0;
+		}
+		return 1;
+	default:
+		return 0;
+	}
+}
+
+static int bb_saltable(u32 prim, u32 count, const VFormat *f, u32 vaddr){   //Arreglo
+	u32 off;
+	ge_stats.bx_llamadas++;
+	if((prim != GE_PRIM_TRIANGLES && prim != GE_PRIM_TRIANGLE_STRIP && prim != GE_PRIM_TRIANGLE_FAN) || f->through || f->wt ||
+	   f->nmorph > 1 || f->idx || (vaddr & (f->biggest - 1)) || !cull_xy){
+		ge_stats.bx_formato++;
+		return 0;
+	}
+	if(memcmp(bbx.world, ge.world, sizeof(bbx.world)) || memcmp(bbx.view, ge.view, sizeof(bbx.view)) ||
+	   memcmp(bbx.proj, ge.proj, sizeof(bbx.proj))){
+		ge_stats.bx_matrices++;
+		bbx.valida = 0;
+		return 0;
+	}
+	off = (vaddr & PSP_ADDR_MASK) - PSP_RAM_BASE;
+	if(off >= psp_mem.ram_size || (u64)count * f->size > psp_mem.ram_size - off || !bb_contiene(f, psp_mem.ram + off, count)){
+		ge_stats.bx_fuera_caja++;
+		return 0;
+	}
+	return 1;
+}
+
+static struct {   //Arreglo
+	GeClipVertex v[3];
+	int slot[3], n, indice;
+	u32 prim, vaddr, prims;
+	float uv[2], nrm[3];
+} bb_fin;
+
+static void bb_final(const VFormat *f, u32 prim, u32 count, u32 vaddr, int ligero){   //Arreglo
+	VSource vr;
+	u32 idx[3], i;
+	int k, j;
+	bb_fin.n = 0;
+	bb_fin.indice = prim == GE_PRIM_TRIANGLES ? (int)(count % 3) : (int)count;
+	bb_fin.prim = prim;
+	bb_fin.vaddr = vaddr + count * f->size;
+	if(ligero){
+		DecVertex d;
+		decode_vertex(f, psp_mem.ram + (((vaddr + (count - 1) * f->size) & PSP_ADDR_MASK) - PSP_RAM_BASE), &d);
+		if(f->tc) memcpy(bb_fin.uv, d.uv, sizeof(bb_fin.uv));
+		else memcpy(bb_fin.uv, last_uv, sizeof(bb_fin.uv));
+		if(f->nrm) memcpy(bb_fin.nrm, d.nrm, sizeof(bb_fin.nrm));
+		else memcpy(bb_fin.nrm, last_normal, sizeof(bb_fin.nrm));
+		return;
+	}
+	if(prim == GE_PRIM_TRIANGLE_FAN){
+		u32 last = count - 1;
+		idx[bb_fin.n] = 0; bb_fin.slot[bb_fin.n++] = 0;
+		if(count >= 3){ idx[bb_fin.n] = last - 1; bb_fin.slot[bb_fin.n++] = 2 - (int)((last - 1) % 2); }
+		if(count >= 2){ idx[bb_fin.n] = last; bb_fin.slot[bb_fin.n++] = 2 - (int)(last % 2); }
+	} else {
+		for(i = count > 3 ? count - 3 : 0; i < count; i++){ idx[bb_fin.n] = i; bb_fin.slot[bb_fin.n++] = (int)(i % 3); }
+	}
+	vsource_init(&vr, f, vaddr, 0, (int)count);
+	for(k = 0; k < bb_fin.n; k = j){
+		for(j = k + 1; j < bb_fin.n && idx[j] == idx[j - 1] + 1; j++){}
+		if(!batch_range(&vr, idx[k], j - k, &bb_fin.v[k])){
+			int m;
+			for(m = k; m < j; m++) read_raw(&vr, idx[m], &bb_fin.v[m]);
+		}
+	}
+	memcpy(bb_fin.uv, last_uv, sizeof(bb_fin.uv));
+	memcpy(bb_fin.nrm, last_normal, sizeof(bb_fin.nrm));
+}
+
+static void bb_aplicar(void){   //Arreglo
+	int k;
+	for(k = 0; k < bb_fin.n; k++) copy_cv(&data_[bb_fin.slot[k]], &bb_fin.v[k]);
+	data_index_ = bb_fin.indice;
+	prev_prim_ = bb_fin.prim;
+	ge.vaddr = bb_fin.vaddr;
+	memcpy(last_uv, bb_fin.uv, sizeof(bb_fin.uv));
+	memcpy(last_normal, bb_fin.nrm, sizeof(bb_fin.nrm));
+}
+
+static void __attribute__((noinline)) bb_verificar(void){   //Arreglo
+	int k, malo = ge_stats.primitives != bb_fin.prims || data_index_ != bb_fin.indice || prev_prim_ != bb_fin.prim ||
+	              ge.vaddr != bb_fin.vaddr || memcmp(last_uv, bb_fin.uv, sizeof(bb_fin.uv)) ||
+	              memcmp(last_normal, bb_fin.nrm, sizeof(bb_fin.nrm));
+	for(k = 0; k < bb_fin.n; k++) malo |= memcmp(&data_[bb_fin.slot[k]], &bb_fin.v[k], sizeof(GeClipVertex)) != 0;
+	ge_stats.bx_verif++;
+	if(malo && ge_stats.bx_verif_bad++ < 16)
+		hle_log_quiet("[VERIF] ge_bbox: llamada que se habria saltado distinta (primitivas %u/%u, indice %d/%d, prim %u/%u, vaddr %08X/%08X)\n",
+		              (unsigned)ge_stats.primitives, (unsigned)bb_fin.prims, data_index_, bb_fin.indice, (unsigned)prev_prim_,
+		              (unsigned)bb_fin.prim, (unsigned)ge.vaddr, (unsigned)bb_fin.vaddr);
+}
+
 void ge_draw_prim(u32 prim, u32 count){
 	VFormat f;
 	VSource vr;
 	u32 vaddr = ge.vaddr, iaddr = ge.iaddr, vt = ge.cmd[GE_VERTEXTYPE];
-	int sucio = opt_on[OPT_GE_ESTADO_SUCIO];
+	int sucio = opt_on[OPT_GE_ESTADO_SUCIO], bbv = 0;   //Arreglo
 
 	if(count == 0) return;
 	if(sucio || opt_on[OPT_PROF_ESTADO]) estado_entorno();
@@ -2451,6 +2577,25 @@ void ge_draw_prim(u32 prim, u32 count){
 		if(opt_on[OPT_PROF_ESTADO]) census_vt(&f, v_clean, t_clean);
 		phase = prof_ge_enter(GEF_LEER);
 		if(prof_vtx_on) prof_vtx_phase = VXF_PREPARAR;   //Arreglo
+		if(bbx.valida && opt_on[OPT_GE_BBOX] && bb_saltable(prim, count, &f, vaddr)){   //Arreglo
+			float uv[2], nrm[3];   //Arreglo
+			int ligero = ge_prim_datos_sobran(vaddr + count * f.size);   //Arreglo
+			memcpy(uv, last_uv, sizeof(uv));   //Arreglo
+			memcpy(nrm, last_normal, sizeof(nrm));   //Arreglo
+			bb_final(&f, prim, count, vaddr, ligero);   //Arreglo
+			if(!verif){   //Arreglo
+				bb_aplicar();   //Arreglo
+				ge_stats.bx_saltadas++;   //Arreglo
+				ge_stats.bx_ligeras += (u32)ligero;   //Arreglo
+				ge_stats.bx_vertices += count;   //Arreglo
+				prof_ge_leave(phase);   //Arreglo
+				return;   //Arreglo
+			}   //Arreglo
+			memcpy(last_uv, uv, sizeof(uv));   //Arreglo
+			memcpy(last_normal, nrm, sizeof(nrm));   //Arreglo
+			bb_fin.prims = ge_stats.primitives;   //Arreglo
+			bbv = 1;   //Arreglo
+		}   //Arreglo
 		vsource_init(&vr, &f, vaddr, iaddr, (int)count);
 		vsource_batch(&vr, (int)count);
 		prof_ge_leave(phase);
@@ -2467,21 +2612,67 @@ void ge_draw_prim(u32 prim, u32 count){
 	/* El GE avanza las direcciones tras dibujar */
 	if(f.idx) ge.iaddr = iaddr + count * idx_size[f.idx];
 	else ge.vaddr = vaddr + count * f.size;
+	if(bbv) bb_verificar();   //Arreglo
 }
 
 /* --- Bounding box (para BJUMP) --------------------------------------------- */
 
-/* La prueba aproximada de PPSSPP (DrawEngineCommon::TestBoundingBox) */
-static int test_bounding_box(const VFormat *f, u32 vaddr, u32 iaddr, int count){
-	float world[16], view[16], vp[16], wvp[16];
-	float fox, foy, left, top, right, bottom;
-	int inside[6] = { 0, 0, 0, 0, 0, 0 }, i, k, r, c, check;
+typedef struct {   //Arreglo
+	float xs, xc, ys, yc, left, top, right, bottom;
+	int fuera;
+} BbParams;
+
+static void bb_params(BbParams *bp){   //Arreglo
 	int sx1 = (int)(ge.cmd[GE_SCISSOR1] & 0x3FF), sy1 = (int)((ge.cmd[GE_SCISSOR1] >> 10) & 0x3FF);
 	int sx2 = (int)(ge.cmd[GE_SCISSOR2] & 0x3FF), sy2 = (int)((ge.cmd[GE_SCISSOR2] >> 10) & 0x3FF);
 	int rx1 = (int)(ge.cmd[GE_REGION1] & 0x3FF), ry1 = (int)((ge.cmd[GE_REGION1] >> 10) & 0x3FF);
 	int rx2 = (int)(ge.cmd[GE_REGION2] & 0x3FF), ry2 = (int)((ge.cmd[GE_REGION2] >> 10) & 0x3FF);
-	float xs = ge_f24(ge.cmd[GE_VIEWPORTXSCALE]), xc = ge_f24(ge.cmd[GE_VIEWPORTXCENTER]);
-	float ys = ge_f24(ge.cmd[GE_VIEWPORTYSCALE]), yc = ge_f24(ge.cmd[GE_VIEWPORTYCENTER]);
+	float fox = (float)(ge.cmd[GE_OFFSETX] & 0xFFFF) / 16.0f, foy = (float)(ge.cmd[GE_OFFSETY] & 0xFFFF) / 16.0f;
+	bp->xs = ge_f24(ge.cmd[GE_VIEWPORTXSCALE]);
+	bp->xc = ge_f24(ge.cmd[GE_VIEWPORTXCENTER]);
+	bp->ys = ge_f24(ge.cmd[GE_VIEWPORTYSCALE]);
+	bp->yc = ge_f24(ge.cmd[GE_VIEWPORTYCENTER]);
+	bp->left = fox + (float)((rx1 > sx1 ? rx1 : sx1) - 1);
+	bp->top = foy + (float)((ry1 > sy1 ? ry1 : sy1) - 1);
+	bp->right = fox + (float)((rx2 < sx2 ? rx2 : sx2) + 1);
+	bp->bottom = foy + (float)((ry2 < sy2 ? ry2 : sy2) + 1);
+	bp->fuera = bp->right >= 4096.0f || bp->bottom >= 4096.0f || bp->left < 1.0f || bp->top < 1.0f;
+}
+
+static void __attribute__((noinline)) bb_mult4(const float *a, const float *b, float *o){   //Arreglo
+	int r, c;
+	for(r = 0; r < 4; r++){
+		const float a0 = a[r * 4], a1 = a[r * 4 + 1], a2 = a[r * 4 + 2], a3 = a[r * 4 + 3];
+#pragma GCC unroll 4
+		for(c = 0; c < 4; c++)
+			o[r * 4 + c] = GE_FMADD(a3, b[12 + c], GE_FMADD(a2, b[8 + c], GE_FMADD(a1, b[4 + c], GE_FMADD(a0, b[c], 0.0f))));
+	}
+}
+
+static u32 __attribute__((noinline)) bb_contar(const float (*pos)[3], int n, const float *wvp, const BbParams *bp, u32 dentro, u32 todos){   //Arreglo
+	int i, k;
+	for(i = 0; i < n && (dentro & todos) != todos; i++){
+		float p[4], w, dx, dy;
+		for(k = 0; k < 4; k++) p[k] = ge_dot3_fused(pos[i][0], wvp[k], pos[i][1], wvp[4 + k], pos[i][2], wvp[8 + k]) + wvp[12 + k];
+		w = p[3];
+		dx = GE_FMADD(p[0], bp->xs, bp->xc * w);
+		dy = GE_FMADD(p[1], bp->ys, bp->yc * w);
+		dentro |= (u32)(dx >= bp->left * w) | (u32)(dx <= bp->right * w) << 1 | (u32)(dy >= bp->top * w) << 2 |
+		          (u32)(dy <= bp->bottom * w) << 3 | (u32)(p[2] >= -p[3]) << 4 | (u32)(p[2] <= p[3]) << 5;
+	}
+	return dentro;
+}
+
+static inline u32 bb_todos(void){   //Arreglo
+	return (ge.cmd[GE_DEPTHCLAMPENABLE] & 1) ? 0x3Fu : 0x0Fu;
+}
+
+/* La prueba aproximada de PPSSPP (DrawEngineCommon::TestBoundingBox) */
+static int test_bounding_box(const VFormat *f, u32 vaddr, u32 iaddr, int count){
+	float world[16], view[16], vp[16], wvp[16], pos[16][3];   //Arreglo
+	int i;   //Arreglo
+	u32 dentro = 0, todos = bb_todos();   //Arreglo
+	BbParams bp;   //Arreglo
 	VSource src;
 	VFormat nt = *f;
 
@@ -2489,26 +2680,10 @@ static int test_bounding_box(const VFormat *f, u32 vaddr, u32 iaddr, int count){
 
 	to4x4(ge.world, world);
 	to4x4(ge.view, view);
-	for(r = 0; r < 4; r++)
-		for(c = 0; c < 4; c++){
-			vp[r * 4 + c] = 0.0f;
-			for(k = 0; k < 4; k++) vp[r * 4 + c] += view[r * 4 + k] * ge.proj[k * 4 + c];
-		}
-	for(r = 0; r < 4; r++)
-		for(c = 0; c < 4; c++){
-			wvp[r * 4 + c] = 0.0f;
-			for(k = 0; k < 4; k++) wvp[r * 4 + c] += world[r * 4 + k] * vp[k * 4 + c];
-		}
-
-	/* No se sabe por qué arriba e izquierda van un píxel desplazados */
-	fox = (float)(ge.cmd[GE_OFFSETX] & 0xFFFF) / 16.0f;
-	foy = (float)(ge.cmd[GE_OFFSETY] & 0xFFFF) / 16.0f;
-	left = fox + (float)((rx1 > sx1 ? rx1 : sx1) - 1);
-	top = foy + (float)((ry1 > sy1 ? ry1 : sy1) - 1);
-	right = fox + (float)((rx2 < sx2 ? rx2 : sx2) + 1);
-	bottom = foy + (float)((ry2 < sy2 ? ry2 : sy2) + 1);
-	/* Si la caja sale del espacio de 4096, todo pasa */
-	if(right >= 4096.0f || bottom >= 4096.0f || left < 1.0f || top < 1.0f){ ge_stats.bb_sin_probar++; return 1; }   //Arreglo
+	bb_mult4(view, ge.proj, vp);   //Arreglo
+	bb_mult4(world, vp, wvp);   //Arreglo
+	bb_params(&bp);   //Arreglo
+	if(bp.fuera){ ge_stats.bb_sin_probar++; return 1; }   //Arreglo
 
 	nt.through = 0;
 	memset(&src, 0, sizeof(src));
@@ -2516,31 +2691,280 @@ static int test_bounding_box(const VFormat *f, u32 vaddr, u32 iaddr, int count){
 	src.iaddr = iaddr;
 	for(i = 0; i < count; i++){
 		DecVertex d;
-		float p[4], w, dx, dy;
 		u32 idx = f->idx ? index_at(&src, i) : (u32)i;
 		decode_vertex(&nt, mem_ptr_r(vaddr + idx * f->size, f->size), &d);
-		for(k = 0; k < 4; k++) p[k] = d.pos[0] * wvp[k] + d.pos[1] * wvp[4 + k] + d.pos[2] * wvp[8 + k] + wvp[12 + k];
-		if(p[2] >= -p[3]) inside[4]++;
-		if(p[2] <= p[3]) inside[5]++;
-		w = p[3];
-		dx = p[0] * xs + xc * w;
-		dy = p[1] * ys + yc * w;
-		if(dx >= left * w) inside[0]++;
-		if(dx <= right * w) inside[1]++;
-		if(dy >= top * w) inside[2]++;
-		if(dy <= bottom * w) inside[3]++;
+		memcpy(pos[i & 15], d.pos, sizeof(d.pos));   //Arreglo
+		if((i & 15) == 15 || i == count - 1) dentro = bb_contar((const float (*)[3])pos, (i & 15) + 1, wvp, &bp, dentro, todos);   //Arreglo
 	}
-	check = (ge.cmd[GE_DEPTHCLAMPENABLE] & 1) ? 6 : 4;
-	for(i = 0; i < check; i++) if(inside[i] == 0) return 0;
-	return 1;
+	return (dentro & todos) == todos;   //Arreglo
 }
+
+static struct {   //Arreglo
+	int vp_ok, wvp_ok;
+	float view[12], proj[16], world[12];
+	float vp[16], wvp[16];
+} bbm;
+
+static const float *bb_wvp_rapida(void){   //Arreglo
+	float m4[16];
+	if(!bbm.vp_ok || memcmp(bbm.view, ge.view, sizeof(bbm.view)) || memcmp(bbm.proj, ge.proj, sizeof(bbm.proj))){
+		to4x4(ge.view, m4);
+		bb_mult4(m4, ge.proj, bbm.vp);
+		memcpy(bbm.view, ge.view, sizeof(bbm.view));
+		memcpy(bbm.proj, ge.proj, sizeof(bbm.proj));
+		bbm.vp_ok = 1;
+		bbm.wvp_ok = 0;
+	}
+	if(!bbm.wvp_ok || memcmp(bbm.world, ge.world, sizeof(bbm.world))){
+		to4x4(ge.world, m4);
+		bb_mult4(m4, bbm.vp, bbm.wvp);
+		memcpy(bbm.world, ge.world, sizeof(bbm.world));
+		bbm.wvp_ok = 1;
+	}
+	return bbm.wvp;
+}
+
+static inline void bb_pos(const VFormat *f, const u8 *p, float *o){   //Arreglo
+	int i;
+	o[0] = o[1] = o[2] = 0.0f;
+	if(!p) return;
+	for(i = 0; i < 3; i++){
+		o[i] = raw_comp(p + f->off_pos, f->pos, i);
+		if(f->pos == 3) o[i] = clean_nan_inf(o[i]);
+	}
+}
+
+static void bb_posiciones(const VFormat *f, u32 vaddr, u32 iaddr, int first, int count, float (*pos)[3]){   //Arreglo
+	VSource src;
+	VFormat nt = *f;
+	int i, simple = !f->wt && f->nmorph == 1;
+	if(simple && !f->idx){
+		u32 off = ((vaddr + (u32)first * f->size) & PSP_ADDR_MASK) - PSP_RAM_BASE;
+		if(off < psp_mem.ram_size && (u64)f->size * (u32)count <= psp_mem.ram_size - off){
+			const u8 *p = psp_mem.ram + off + f->off_pos;
+			for(i = 0; i < count; i++, p += f->size){
+				if(f->pos == 2){
+					pos[i][0] = (float)(s16)rd_le16(p) * (1.0f / 32768.0f);
+					pos[i][1] = (float)(s16)rd_le16(p + 2) * (1.0f / 32768.0f);
+					pos[i][2] = (float)(s16)rd_le16(p + 4) * (1.0f / 32768.0f);
+				} else if(f->pos == 3){
+					pos[i][0] = clean_nan_inf(f32_from(rd_le32(p)));
+					pos[i][1] = clean_nan_inf(f32_from(rd_le32(p + 4)));
+					pos[i][2] = clean_nan_inf(f32_from(rd_le32(p + 8)));
+				} else if(f->pos == 1){
+					pos[i][0] = (float)(s8)p[0] * (1.0f / 128.0f);
+					pos[i][1] = (float)(s8)p[1] * (1.0f / 128.0f);
+					pos[i][2] = (float)(s8)p[2] * (1.0f / 128.0f);
+				} else pos[i][0] = pos[i][1] = pos[i][2] = 0.0f;
+			}
+			return;
+		}
+	}
+	nt.through = 0;
+	memset(&src, 0, sizeof(src));
+	src.f = f;
+	src.iaddr = iaddr;
+	for(i = 0; i < count; i++){
+		u32 idx = f->idx ? index_at(&src, first + i) : (u32)(first + i);
+		const u8 *p = mem_ptr_r(vaddr + idx * f->size, f->size);
+		if(simple) bb_pos(f, p, pos[i]);
+		else {
+			DecVertex d;
+			decode_vertex(&nt, p, &d);
+			memcpy(pos[i], d.pos, sizeof(d.pos));
+		}
+	}
+}
+
+static int test_bounding_box_rapido(const VFormat *f, u32 vaddr, u32 iaddr, int count, float (*todas)[3], int *pos_ok){   //Arreglo
+	float pos[16][3];
+	int i, n;
+	u32 dentro = 0, todos = bb_todos();
+	BbParams bp;
+	const float *wvp;
+	if(count > 1024){ ge_stats.bb_sin_probar++; return 1; }
+	wvp = bb_wvp_rapida();
+	bb_params(&bp);
+	if(bp.fuera){ ge_stats.bb_sin_probar++; return 1; }
+	if(todas){
+		bb_posiciones(f, vaddr, iaddr, 0, count, todas);
+		dentro = bb_contar((const float (*)[3])todas, count, wvp, &bp, dentro, todos);
+		*pos_ok = 1;
+		return (dentro & todos) == todos;
+	}
+	for(i = 0; i < count && (dentro & todos) != todos; i += n){
+		n = count - i < 16 ? count - i : 16;
+		bb_posiciones(f, vaddr, iaddr, i, n, pos);
+		dentro = bb_contar((const float (*)[3])pos, n, wvp, &bp, dentro, todos);
+	}
+	return (dentro & todos) == todos;
+}
+
+static int bb_techo(float c, int minimo, int maximo){   //Arreglo
+	float t;
+	if(c <= (float)minimo) return minimo;
+	if(c > (float)maximo) return maximo + 1;
+	t = ge_floorf(c);
+	return (int)t + (t < c);
+}
+
+static int bb_suelo(float c, int minimo, int maximo){   //Arreglo
+	if(c >= (float)maximo) return maximo;
+	if(c < (float)minimo) return minimo - 1;
+	return (int)ge_floorf(c);
+}
+
+static void bb_exacta(const VFormat *f, const float (*pos)[3], int n){   //Arreglo
+	float lo[3], hi[3], c[8][4], s[4] = { 0.0f, 0.0f, 0.0f, 0.0f }, tw, tx, ty, tz, m4[16], vp[16], wl[16];
+	const float *wvp;
+	int i, j, k, r, plano[7];
+	ge_stats.bx_cajas++;
+	if(f->wt || f->nmorph > 1 || n < 1) return;
+	if(opt_on[OPT_GE_BBOX_RAPIDO]) wvp = bb_wvp_rapida();
+	else {
+		to4x4(ge.view, m4);
+		bb_mult4(m4, ge.proj, vp);
+		to4x4(ge.world, m4);
+		bb_mult4(m4, vp, wl);
+		wvp = wl;
+	}
+	{
+		float c0[4];
+		for(k = 0; k < 4; k++) c0[k] = pos[0][0] * wvp[k] + pos[0][1] * wvp[4 + k] + pos[0][2] * wvp[8 + k] + wvp[12 + k];
+		if(!(c0[0] > c0[3] || -c0[0] > c0[3] || c0[1] > c0[3] || -c0[1] > c0[3] || c0[2] > c0[3] || -c0[2] > c0[3] || c0[3] < 0.0f))
+			return;
+	}
+	for(k = 0; k < 3; k++) lo[k] = hi[k] = pos[0][k];
+	for(i = 1; i < n; i++)
+		for(k = 0; k < 3; k++){
+			if(pos[i][k] < lo[k]) lo[k] = pos[i][k];
+			if(pos[i][k] > hi[k]) hi[k] = pos[i][k];
+		}
+	for(k = 0; k < 3; k++){
+		float d = (hi[k] - lo[k]) * (1.0f / 256.0f) + (__builtin_fabsf(lo[k]) + __builtin_fabsf(hi[k])) * (1.0f / 1048576.0f);
+		lo[k] -= d;
+		hi[k] += d;
+		if(!isfinite(lo[k]) || !isfinite(hi[k])) return;
+	}
+	{
+		float ex[2][4], ey[2][4], ez[2][4], mayor = 0.0f;
+		u32 todos = 0x7F;
+		for(k = 0; k < 4; k++){
+			ex[0][k] = lo[0] * wvp[k]; ex[1][k] = hi[0] * wvp[k];
+			ey[0][k] = lo[1] * wvp[4 + k]; ey[1][k] = hi[1] * wvp[4 + k];
+			ez[0][k] = lo[2] * wvp[8 + k] + wvp[12 + k]; ez[1][k] = hi[2] * wvp[8 + k] + wvp[12 + k];
+		}
+		for(j = 0; j < 8; j++){
+			const float *px = ex[j & 1], *py = ey[(j >> 1) & 1], *pz = ez[(j >> 2) & 1];
+			for(k = 0; k < 4; k++){
+				c[j][k] = px[k] + py[k] + pz[k];
+				if(__builtin_fabsf(c[j][k]) > mayor) mayor = __builtin_fabsf(c[j][k]);
+			}
+			todos &= (u32)(c[j][0] > c[j][3]) | (u32)(-c[j][0] > c[j][3]) << 1 | (u32)(c[j][1] > c[j][3]) << 2 |
+			         (u32)(-c[j][1] > c[j][3]) << 3 | (u32)(c[j][2] > c[j][3]) << 4 | (u32)(-c[j][2] > c[j][3]) << 5 |
+			         (u32)(c[j][3] < 0.0f) << 6;
+			if(!todos) return;
+		}
+		if(!todos || !(mayor < 1e30f)) return;
+	}
+	{
+		float av[16], aw[16], a[16];
+		to4x4(ge.view, m4);
+		for(i = 0; i < 16; i++) m4[i] = __builtin_fabsf(m4[i]);
+		for(r = 0; r < 4; r++)
+			for(k = 0; k < 4; k++){
+				av[r * 4 + k] = 0.0f;
+				for(i = 0; i < 4; i++) av[r * 4 + k] += m4[r * 4 + i] * __builtin_fabsf(ge.proj[i * 4 + k]);
+			}
+		to4x4(ge.world, aw);
+		for(i = 0; i < 16; i++) aw[i] = __builtin_fabsf(aw[i]);
+		for(r = 0; r < 4; r++)
+			for(k = 0; k < 4; k++){
+				a[r * 4 + k] = 0.0f;
+				for(i = 0; i < 4; i++) a[r * 4 + k] += aw[r * 4 + i] * av[i * 4 + k];
+			}
+		for(j = 0; j < 8; j++){
+			float x = __builtin_fabsf((j & 1) ? hi[0] : lo[0]), y = __builtin_fabsf((j & 2) ? hi[1] : lo[1]);
+			float z = __builtin_fabsf((j & 4) ? hi[2] : lo[2]);
+			for(k = 0; k < 4; k++){
+				float m = x * a[k] + y * a[4 + k] + z * a[8 + k] + a[12 + k];
+				if(!isfinite(m)) return;
+				if(m > s[k]) s[k] = m;
+			}
+		}
+	}
+	tw = s[3] * (1.0f / 512.0f);
+	tx = (s[0] + s[3]) * (1.0f / 512.0f);
+	ty = (s[1] + s[3]) * (1.0f / 512.0f);
+	tz = (s[2] + s[3]) * (1.0f / 512.0f);
+	for(k = 0; k < 7; k++) plano[k] = 1;
+	for(j = 0; j < 8; j++){
+		plano[0] &= c[j][0] - c[j][3] > tx;
+		plano[1] &= -c[j][0] - c[j][3] > tx;
+		plano[2] &= c[j][1] - c[j][3] > ty;
+		plano[3] &= -c[j][1] - c[j][3] > ty;
+		plano[4] &= c[j][2] - c[j][3] > tz;
+		plano[5] &= -c[j][2] - c[j][3] > tz;
+		plano[6] &= c[j][3] < -tw;
+	}
+	for(k = 0; k < 7 && !plano[k]; k++){}
+	if(k == 7) return;
+	ge_stats.bx_fuera++;
+	if(plano[6]) ge_stats.bx_detras++;
+	for(i = 0; i < 3; i++){
+		bbx.lo[i] = lo[i];
+		bbx.hi[i] = hi[i];
+		bbx.lo8[i] = bb_techo(lo[i] * 128.0f, -128, 127);
+		bbx.hi8[i] = bb_suelo(hi[i] * 128.0f, -128, 127);
+		bbx.lo16[i] = bb_techo(lo[i] * 32768.0f, -32768, 32767);
+		bbx.hi16[i] = bb_suelo(hi[i] * 32768.0f, -32768, 32767);
+	}
+	memcpy(bbx.world, ge.world, sizeof(bbx.world));
+	memcpy(bbx.view, ge.view, sizeof(bbx.view));
+	memcpy(bbx.proj, ge.proj, sizeof(bbx.proj));
+	bbx.valida = 1;
+}
+
+static int bb_probar(const VFormat *f, u32 vaddr, u32 iaddr, int count, float (*todas)[3], int *pos_ok){   //Arreglo
+	int r, ref;
+	u32 sin;
+	if(!opt_on[OPT_GE_BBOX_RAPIDO]){
+		r = test_bounding_box(f, vaddr, iaddr, count);
+		if(todas){
+			bb_posiciones(f, vaddr, iaddr, 0, count, todas);
+			*pos_ok = 1;
+		}
+		return r;
+	}
+	r = test_bounding_box_rapido(f, vaddr, iaddr, count, todas, pos_ok);
+	if(!opt_on[OPT_GE_VERIF]) return r;
+	sin = ge_stats.bb_sin_probar;
+	ref = test_bounding_box(f, vaddr, iaddr, count);
+	ge_stats.bb_sin_probar = sin;
+	ge_stats.bbv_cajas++;
+	if(ref != r && ge_stats.bbv_malas++ < 16)
+		hle_log_quiet("[VERIF] BBOX de %d vertices en 0x%08X (tipo 0x%06X): %d con la prueba de siempre, %d con la rapida\n", count,
+		              (unsigned)vaddr, (unsigned)f->vtype, ref, r);
+	return r;
+}
+
+static struct { int ok; u32 vt; VFormat f; } bbf;   //Arreglo
 
 void ge_bounding_box(u32 count){
 	VFormat f;
-	u32 vaddr = ge.vaddr, iaddr = ge.iaddr, bytes;
-	vformat_setup(&f, ge.cmd[GE_VERTEXTYPE]);
-	load_morph_weights();
-	uv_prescale = 0;
+	u32 vaddr = ge.vaddr, iaddr = ge.iaddr, bytes, vt = ge.cmd[GE_VERTEXTYPE];   //Arreglo
+	float todas[64][3];   //Arreglo
+	float (*pt)[3] = opt_on[OPT_GE_BBOX] && count <= 64 ? todas : NULL;   //Arreglo
+	int pos_ok = 0, r;   //Arreglo
+	bbx.valida = 0;   //Arreglo
+	if(opt_on[OPT_GE_BBOX_RAPIDO]){   //Arreglo
+		if(!bbf.ok || bbf.vt != vt){ vformat_setup(&bbf.f, vt); bbf.vt = vt; bbf.ok = 1; }   //Arreglo
+		f = bbf.f;   //Arreglo
+		if(f.nmorph > 1) load_morph_weights();   //Arreglo
+	} else {   //Arreglo
+		vformat_setup(&f, vt);   //Arreglo
+		load_morph_weights();
+	}   //Arreglo
 	bytes = (f.idx ? 1 : f.size) * count;
 	if(!mem_valid(vaddr, bytes) || (f.idx && !mem_valid(iaddr, count * idx_size[f.idx]))){
 		ge.bbox_visible = 1;
@@ -2548,12 +2972,20 @@ void ge_bounding_box(u32 count){
 		return;
 	}
 	/* El GE solo mira un tramo de 0x100 */
-	if(count > 0x200) ge.bbox_visible = test_bounding_box(&f, vaddr + (count - 0x200) * f.size, iaddr, 0x100);
-	else if(count > 0x100) ge.bbox_visible = test_bounding_box(&f, vaddr, iaddr, (int)count - 0x100);
-	else ge.bbox_visible = test_bounding_box(&f, vaddr, iaddr, (int)count);
+	if(count > 0x200) r = bb_probar(&f, vaddr + (count - 0x200) * f.size, iaddr, 0x100, NULL, &pos_ok);   //Arreglo
+	else if(count > 0x100) r = bb_probar(&f, vaddr, iaddr, (int)count - 0x100, NULL, &pos_ok);   //Arreglo
+	else r = bb_probar(&f, vaddr, iaddr, (int)count, pt, &pos_ok);   //Arreglo
+	ge.bbox_visible = r;   //Arreglo
+	if(pt && pos_ok && r) bb_exacta(&f, (const float (*)[3])todas, (int)count);   //Arreglo
 
 	if(f.idx) ge.iaddr = iaddr + count * idx_size[f.idx];
 	else ge.vaddr = vaddr + bytes;
+}
+
+static void bb_reset(void){   //Arreglo
+	bbx.valida = 0;
+	bbm.vp_ok = bbm.wvp_ok = 0;
+	bbf.ok = 0;
 }
 
 /* --- Vértices inmediatos (comandos 0xF0-0xF9) ------------------------------- */
