@@ -2398,6 +2398,218 @@ con `capturas 400`: las 12 huellas tienen que ser las de siempre; los ms
 de las BBOX y de los objetos que pasan la caja sin dibujar, para comparar
 con la 0.5.21, y el histograma de comandos).
 
+### v0.5.23: cajas fuera de la pantalla (`ge_bbox_pantalla`), la caja de cada llamada (`ge_bbox_llamada`) y censo de los huesos (`prof_huesos`)
+
+Lo acordado al leer los registros de la 0.5.22. `ge_bbox` solo saltó 3
+llamadas: los objetos que pasan la caja sin dibujar nada (290-840 ms por
+ventana) no están fuera de un plano ±w, los descarta el scissor. El punto
+1, de lleno: rescatar esos objetos sin cambiar ni un píxel. Y el censo de
+los huesos (`BONEMATRIXDATA` era el 57 % de los comandos). Ponytail y
+Graphify, para más adelante.
+
+Análisis (qué dibuja el GE de una caja, en el código del emulador):
+- Todas las primitivas (triángulos, rectángulos, líneas y puntos, por
+  software y por GX) pasan por `range_of`. Una se descarta por la
+  izquierda si `(max x | 15) < sc_x1`, es decir, si todo vértice tiene
+  `x = floor(sx·16) − OFFSETX < SCISSOR1·16`. Por la derecha, si
+  `x ≥ 16·(min(SCISSOR2, REGION2) + 1)`. Igual en y. El umbral en
+  pantalla es exacto: `L = (16·SCISSOR1 + OFFSETX)/16`.
+- Con w > 0, `sx < L` equivale a `xs·x + (xc − L)·w < 0`: es lineal en
+  coordenadas de recorte. Sobre una caja (afín) el máximo está en las
+  esquinas y, si se corta por un plano, en los cruces de las aristas con
+  él.
+- Qué parte de la caja puede llegar a dibujarse:
+  - Sin recorte de profundidad, un triángulo con algún vértice de w ≤ 0
+    se descarta: cuenta Q = caja ∩ {w ≥ −τ}.
+  - Con recorte (DEPTHCLAMPENABLE), lo que está detrás del plano cercano
+    se recorta, y los vértices nuevos caen en el plano: cuenta
+    Q = caja ∩ {z + w ≥ −τ}. Pero ahí un vértice con w < 0 y z + w ≥ 0
+    se dibuja dado la vuelta, así que w tiene que ser claramente positiva
+    en Q (`minw > s3/256`); si no, no se salta.
+- Márgenes:
+  - 2^-9 de la magnitud de los términos (`|xs|·s0 + |xc − L|·s3`);
+  - 2^-11 de `|xs|·s0 + |xc|·s3`, por el redondeo del float24 en
+    pantalla, que con el centro en 2048 es de ~1/32 de píxel;
+  - `τ = (s2 + s3)/256` con recorte, `s3/256` sin él.
+  Las mutaciones dicen que el margen tiene entre 32 y 128 veces de holgura
+  sobre el error del emulador: con `mg/128` ya falla la prueba de los
+  bordes, con `mg/32` no.
+- Lo que ya hacía la prueba de siempre: comprueba los cuatro bordes del
+  scissor con ±1 px, linealmente y sin mirar el signo de w. Una caja
+  entera fuera con w > 0 ya la salta el BJUMP. Lo que queda por rescatar
+  son las cajas que cruzan el plano de la cámara o el cercano, y las
+  llamadas fuera dentro de cajas que se ven. De ahí las dos partes.
+
+Lo hecho:
+- **1.3 c, `ge_bbox_pantalla`** (encendido). La prueba exacta de
+  `ge_bbox` (`bb_fuera`) mira también la pantalla con el programa lineal
+  de arriba. Fuera de la pantalla, la caja se salta igual que una entera
+  fuera de un plano.
+  - La caja guarda los 10 comandos de la pantalla (escala y centro x/y,
+    SCISSOR1/2, REGION2, OFFSETX/Y, DEPTHCLAMPENABLE) y se deja de saltar
+    si cambia alguno.
+  - Para que una caja que se ve no cueste, sale enseguida (es exacto: con
+    márgenes ≥ 2^9 veces el redondeo, la prueba entera daría NO):
+    - con el primer vértice de la BBOX dentro de los 6 planos, con w > 0
+      y en la pantalla (sin márgenes);
+    - con alguna esquina así;
+    - sin márgenes, ningún plano con las 8 esquinas fuera y, en cada
+      borde, una esquina de Q al lado de dentro.
+    Solo si no sale se calculan |M| (perezoso), los márgenes, los planos
+    con margen y el programa lineal con las aristas.
+  - "Dentro" (las 8 esquinas dentro) solo se calcula con `prof_bbox`,
+    para el censo. Las llamadas que se saltan son las mismas con censo y
+    sin él.
+- **1.3 d, `ge_bbox_llamada`** (encendido). Tras una caja que no está
+  entera fuera, o si cambian sus matrices o su pantalla, cada llamada se
+  prueba con su propia caja. Solo triángulos, tiras y abanicos sin
+  huesos, morph, índices ni through, con los vértices en la RAM.
+  - Primero su primer vértice: si se ve, se dibuja sin más.
+  - Si no, la caja de sus posiciones (s8, s16 o float con NaN e infinitos
+    limpiados como al decodificar) con la misma prueba.
+  - Fuera, se salta como en `ge_bbox`: lo que deja a la siguiente llamada
+    se calcula igual.
+- **`ge_sucio` con dos grupos más:**
+  - B: mundo, vista o proyección cambiadas; marcado donde ya se marca T,
+    en `execute` y en el atajo de `ge_cmd_matrices`.
+  - P: los 10 comandos de la pantalla.
+  - `GE_SUCIO_TODO` pasa de 7 a 31.
+  La prueba de cada llamada no compara las matrices (40 floats) ni la
+  pantalla si el bit está limpio. La prueba de siempre, la que decide el
+  BJUMP, sigue con `memcmp`, así que lo que hace el BJUMP no depende del
+  bit. Con `ge_verificar` se compara siempre y se cuenta si el bit decía
+  "limpio" con algo cambiado (línea `[TIEMPOS] Verificacion de ge_bbox`,
+  "matrices y pantalla guardadas ... distintas de las de ahora"; tiene
+  que dar 0). Las pruebas que escriben `ge.cmd` o las matrices a mano
+  tienen que marcar `ge_sucio` (como ya hacían para `ge_estado_sucio`).
+- **`prof_huesos`** (apagado, solo mide). En el camino lento del bucle de
+  comandos, como `prof_comandos` (con él, `ge_cmd_matrices` no se usa):
+  - datos de matrices de huesos, y cuántos traen el valor que ya había;
+  - matrices completas (12 datos seguidos desde un múltiplo de 12), y
+    cuántas iguales a la anterior;
+  - rachas de 0x2A/0x2B seguidos (media, y cuántas de 12 o más);
+  - llamadas con huesos (y datos por llamada).
+  Línea `[TIEMPOS] Huesos (prof_huesos)`. Es para decidir si vale la pena
+  un atajo para las rachas (pocos valores iguales: el coste es leerlas;
+  muchos: no rehacer lo que dependa de ellas).
+- **Censo de cajas:** cuarta línea, los objetos que no dibujan nada por la
+  clase de su caja (sin prueba exacta, fuera, dentro, dudosa, dudosa que
+  cruza el plano de la cámara) y los ms de probar la caja de cada llamada.
+- **Arreglo de `ge_setup_recip`:** con `abs_det ≥ 2^48` leía la tabla con
+  un índice negativo (lo encontró UBSan con posiciones de pantalla
+  enormes). En los demás casos da lo mismo: comprobado en 150 millones de
+  valores.
+
+Fallo latente apuntado, sin arreglar porque cambiaría resultados y hay que
+saber primero qué hace la PSP: un vértice con la posición de pantalla NaN
+no se marca como fuera de rango en `round_to_screen` (las comparaciones
+con NaN dan falso), y `floor_to_int(NaN)` da un entero cualquiera. Pasa
+con w = 0 y x = 0, o con matrices con NaN o infinitos de los comandos. Las
+pruebas de cajas no saltan esas llamadas: sus cajas no son finitas o dan
+NO.
+
+Banco de qemu (`bench_lista`, código de devkitPPC, instrucciones por
+llamada sin el psq_l emulado; 4 llamadas de 20 vértices por objeto). Cada
+celda dice: solo `ge_bbox` / con `ge_bbox_pantalla` / con
+`ge_bbox_llamada` / con los dos.
+
+| Escena | Qué hay | Instrucciones por llamada |
+|---|---|---|
+| 4 | Cajas y llamadas que se ven | 29262 / 29198 / 29457 / 29520 |
+| 5 | Más allá del plano lejano | 8316 / 8088 / 7896 / 8088 |
+| 6 | Fuera por un lado: las salta el BJUMP | 1838 en las cuatro |
+| 7 (nueva) | Cajas finas que cruzan la cámara, fuera de la pantalla, con recorte | 144723 / 8374 / 145799 / 8374 |
+| 8 (nueva) | Caja grande que se ve, con las llamadas fuera de la pantalla y dentro de ±w | 22165 / 22602 / 22850 / 11088 |
+| 9 (nueva) | La misma, con las llamadas dentro y la caja de cada una por fuera | 29203 / 29640 / 29399 / 30382 |
+
+Coste aproximado de cada prueba:
+- caja que se ve por su primer vértice: unas −64 por llamada (sale antes
+  de la segunda comparación de matrices);
+- prueba de una llamada que se ve por su primer vértice: unas 260;
+- caja "dudosa" grande: unas 1750 por caja;
+- llamada que se ve sin que se vea su primer vértice: caja de sus 20
+  vértices + prueba, unas 1500.
+`gevert.sh` sin cambios (252,2 / 324,5 / 383,2 / 502,7 / 268,3).
+
+Verificación (a mitad y al final):
+- `test` (x86 con ASan y UBSan), `test-ppc` y devkitPPC: 166.181
+  comprobaciones sin fallos; huellas de test_vdec sin cambios (4D4A1D8B,
+  0657B177, B3A2BCD3).
+- `tests/test_bbox.c`, las pruebas nuevas, todas comparando la VRAM entera
+  y las cuentas de primitivas sin los interruptores, con ellos y con
+  `ge_verificar` (0 distintas en todas):
+  - 1.200 listas al azar alrededor de la pantalla y de la cámara (viewport
+    ×1-×3 con signo, centros y offsets al azar, scissor y región,
+    perspectiva y ortográfica, con y sin recorte, las 4 combinaciones):
+    2.522 llamadas saltadas, 1.877 por su caja;
+  - un vértice a −3..+10 px (en 1/16) de cada borde, también con la caja
+    puesta por la traslación del mundo;
+  - umbral exacto, con el centro del viewport junto al borde (margen
+    < 1/32 px): a 1/32 px fuera se salta el 100 %, por dentro nunca;
+    cambiando entre la caja y la llamada el offset, el scissor, el centro,
+    la escala o el recorte de profundidad;
+  - 800 cajas finas en diagonal que pasan por la cámara;
+  - cajas que cruzan el plano cercano y solo se ven por detrás de él, con
+    la z de pantalla ancha (sin recorte se dibujan), también quitando el
+    recorte entre la caja y la llamada;
+  - proyecciones con w negativa delante del plano cercano (lo de detrás
+    de la cámara cortado por el plano cae en la pantalla): 894 de 900
+    dibujan y no se salta ninguna;
+  - el censo de cajas con los dos interruptores.
+  `tests/test_listas.c`: el censo de los huesos con cuentas exactas.
+- Mutaciones (51, con un arnés que recompila solo el archivo mutado):
+  - **Detectadas:** el umbral ±1/16 en cada borde, el signo de los bordes,
+    el offset, el programa lineal sin aristas o sin las de z, Q con o sin
+    el plano cercano equivocado, `minw` (sin él o sin los cruces), no
+    mirar la pantalla al saltar o no guardar el recorte o la escala x, la
+    caja de cada llamada (s8, s16, float), las esquinas o `s` sin
+    traslación, |M| sin valor absoluto o sin rehacer, la caja más
+    pequeña, saltar con las matrices cambiadas, las cachés B y P
+    ignoradas o sin marcar (mundo por `execute` y por el atajo; offset,
+    scissor, escala, recorte), el camino lento sin mundo, Q' sin recorte,
+    las salidas tempranas sin la pantalla, y `mg` a 0 o a 1/128.
+  - **No detectadas, con su porqué:**
+    - conservadoras: el scissor sin la región o al revés, no ampliar la
+      caja;
+    - márgenes de redondeo: τ = 0, `mg/8` y `mg/32` (la holgura de
+      arriba), |M| con signo en el camino lento;
+    - inalcanzables tras las salidas tempranas: el margen del plano
+      lejano y la comprobación final del margen;
+    - redundantes: el bit de w < 0 de la máscara sin margen (con w < 0
+      siempre se cumple `c > w` o `−c > w`) y la guarda de 1e30 (la de
+      `s` la cubre; se quitó).
+  - La clase "antes del plano cercano" era código muerto (los planos con
+    el margen de 2^-9 la atrapan antes): quitada.
+- pspautotests 275/275; tests/guest 22/22.
+- A/B en las 572 (exacto y MR) de `ge_bbox_pantalla`, de
+  `ge_bbox_llamada` y de los dos: solo `malloc` y savedata, que cambian
+  igual con el mismo binario y las mismas opciones (comprobado tres
+  veces).
+- A/B del renderizador de GX bajo qemu en las 110 de `gpu/` (exacto y MR):
+  solo `gpu/complex`, como siempre.
+- La 0.5.22 contra la 0.5.23 con todo encendido (dos `wiisp-cli-gx`):
+  555 programas, 0 distintos.
+- `ge_verificar` en las 110 de `gpu/`, en exacto y MR: 0 líneas `[VERIF]`
+  y 0 distintos en cajas, `ge_bbox`, matrices, comandos y cachés.
+- Recarga con ASan (`tests/recarga.py`, las 572 tres veces seguidas en el
+  mismo proceso): 0 con problemas.
+
+Autotest (4 registros y un `.capturas.txt`; todas con `prof_pmc`,
+`prof_tirones`, `prof_ventana_juego` y `ventana 600`):
+- sin: `ge_bbox_pantalla` y `ge_bbox_llamada` a 0, como la 0.5.22;
+- con: los dos a 1;
+- verif: con `ge_verificar`;
+- censo: `prof_bbox`, `prof_comandos` y `prof_huesos`, con
+  `capturas 400`.
+
+Qué mirar:
+- con frente a sin (`ventanas.py`): velocidad, y las columnas de cajas
+  fuera de la pantalla y de llamadas probadas y saltadas por su caja;
+- verif: 0 distintos en todo, también en "matrices y pantalla guardadas";
+- censo: las 12 capturas de siempre; cuánto de los 290-840 ms de objetos
+  que no dibujan nada queda y de qué clase; los ms de probar la caja de
+  cada llamada; la línea de los huesos.
+
 ### Para el siguiente chat (empezar aquí)
 
 Metodología acordada (detalle en `docs/HOJA_DE_RUTA.md`): primero medir
@@ -2418,21 +2630,26 @@ Metodología acordada (detalle en `docs/HOJA_DE_RUTA.md`): primero medir
   (0.5.18.1), `cpu_enlace` y `cpu_syscall_slot` (0.5.19), la pila de
   retornos simulada y `prof_vertices` (0.5.19.1), 1.2c
   `ge_pantalla_rapida` (0.5.20), el censo `prof_bbox` y `ge_cmd_puntero`
-  (0.5.21) y 1.3 a `ge_bbox_rapido`, 1.3 b `ge_bbox`, `ge_cmd_matrices` y
-  el censo `prof_comandos` (0.5.22).
+  (0.5.21), 1.3 a `ge_bbox_rapido`, 1.3 b `ge_bbox`, `ge_cmd_matrices` y
+  el censo `prof_comandos` (0.5.22) y 1.3 c `ge_bbox_pantalla`, 1.3 d
+  `ge_bbox_llamada` y el censo `prof_huesos` (0.5.23).
 - Herramientas para medir sin el Wii (banco de qemu con el código de
   devkitPPC, perfil por función, psq_l emulado, A/B) y para leer los
   registros del Wii (`ventanas.py`): `tools/banco/LEEME.md`. El entorno
   (devkitPPC, qemu, pspautotests, PPSSPP): `tools/setup_entorno.sh`.
-- **Siguiente:** leer los registros de la 0.5.22 (`ventanas.py sin=...
-  con=... verif=... censo=...`): velocidad y ciclos de "comandos" por
-  llamada sin y con, y las columnas nuevas de `ge_bbox` (llamadas y miles
-  de vértices saltados por ventana); en verif, 0 distintos en todas las
-  líneas de verificación (cajas, `ge_bbox`, matrices, comandos, vértices y
-  estado de GX); en censo, las 12 capturas de siempre, los ms de las BBOX
-  y de los objetos que pasan la caja sin dibujar (en la 0.5.21: 615-624 y
-  290-832 ms por ventana) y `Comandos por tipo` (lo que sigue por
-  `execute`). Después, 1.4 `ge_charolas` (juntar llamadas: lo que queda
+- **Siguiente:** leer los registros de la 0.5.23 (`ventanas.py sin=...
+  con=... verif=... censo=...`):
+  - con frente a sin: velocidad, cajas fuera de la pantalla y llamadas
+    probadas y saltadas por su caja;
+  - verif: 0 distintos en todas las líneas, también "matrices y pantalla
+    guardadas";
+  - censo: las 12 capturas, cuánto queda de los objetos que no dibujan
+    nada y de qué clase (en la 0.5.22, 290-840 ms por ventana), los ms de
+    probar la caja de cada llamada y la línea de los huesos (decide si
+    vale un atajo para las rachas de 0x2B).
+  Si la prueba de cada llamada cuesta más de lo que salta, se apaga
+  `ge_bbox_llamada` (su interruptor) o se limita a las cajas dudosas
+  grandes. Después, 1.4 `ge_charolas` (juntar llamadas: lo que queda
   por llamada es `setup_targets`/`lookup_texture`, ~900 instrucciones, y
   la preparación de `ge_draw_prim`), y el paso 11 (diseño del IR, 2.3
   `cpu_fusion`, 2.5 `mem_bat`). Medido en la 0.5.20, en la pelea: CPU

@@ -5,6 +5,105 @@ la 0.5.17.2; antes se marcaban con `//arreglo`). Aquí va, por versión, qué
 se arregló o cambió y una descripción breve. El detalle está en
 `docs/CONTINUAR.md`.
 
+## 0.5.23
+
+- `gpu/ge_vertex.c`: `ge_bbox_pantalla` (encendido, 1.3 c). La prueba
+  exacta de las cajas de `ge_bbox` mira también la pantalla. Si la caja de
+  una BBOX que la prueba de siempre da por visible está entera fuera del
+  scissor (y de la región) por un mismo lado, sus llamadas se saltan como
+  en `ge_bbox`. Solo cuenta la parte de la caja que el GE puede dibujar:
+  con recorte de profundidad, la de delante del plano cercano; sin él, la
+  de w ≥ 0. Es un programa lineal sobre la caja: el borde en coordenadas
+  de recorte (`xs·x + (xc − L)·w`, con L el primer 1/16 de píxel que
+  dibuja `range_of`) en las 8 esquinas y en los cruces de las 12 aristas
+  con el plano que limita esa parte.
+  - Margen de 2^-9 de la magnitud de los términos, más 2^-11 de la del
+    centro del viewport (el redondeo del float24 en pantalla).
+  - Con recorte de profundidad, si w no es claramente positiva en esa
+    parte, no se salta (lo de detrás de la cámara se dibujaría dado la
+    vuelta).
+  - La caja guarda la pantalla (los 10 comandos: escala y centro del
+    viewport en x e y, scissor, región, offset y recorte de profundidad) y
+    deja de saltar si cambia.
+  - Salen enseguida, sin márgenes ni programa lineal:
+    - las cajas cuyo primer vértice se ve;
+    - las que tienen alguna esquina dentro;
+    - las que, sin márgenes, no pueden estar fuera de ningún plano y
+      tienen esquinas a los cuatro lados de los bordes.
+  - Con `ge_bbox_pantalla` y `ge_bbox_llamada` apagados, `ge_bbox` es el
+    de la 0.5.22.
+- `gpu/ge_vertex.c`: `ge_bbox_llamada` (encendido, 1.3 d). Después de una
+  caja que no está entera fuera, o si cambian sus matrices o su pantalla,
+  cada llamada se prueba con su propia caja. Solo triángulos, tiras y
+  abanicos sin huesos, morph, índices ni through.
+  - Primero su primer vértice: si se ve, se dibuja sin más.
+  - Si no, la caja de sus posiciones, con la misma prueba (planos y, con
+    `ge_bbox_pantalla`, pantalla).
+  - Si está fuera, se salta como en `ge_bbox`.
+- `gpu/ge.c`, `gpu/ge_internal.h`: `ge_sucio` con dos grupos más para
+  estas pruebas:
+  - B: mundo, vista o proyección cambiadas; se marca donde ya se marca T.
+  - P: los 10 comandos de la pantalla.
+  Con ellos, la prueba de cada llamada no vuelve a comparar las matrices
+  ni la pantalla si no han cambiado. La prueba de siempre (la que decide
+  el BJUMP) las sigue comparando con `memcmp`. Con `ge_verificar` se
+  compara siempre y se cuenta si lo guardado no coincide con lo de ahora
+  (línea `[TIEMPOS] Verificacion de ge_bbox`; tiene que dar 0).
+- `gpu/ge_math.c`: `ge_setup_recip`, con `abs_det` de 2^48 o más, leía
+  fuera de la tabla con un índice negativo. Pasaba con posiciones de
+  pantalla enormes (un NaN da INT_MAX). En todos los demás casos el
+  resultado es el mismo (comprobado en 150 millones de valores). Sin
+  interruptor (arreglo).
+- `gpu/ge.c`, `hle/hle.c`: `prof_huesos` (apagado, solo mide). Cuenta:
+  - los datos de matrices de huesos (0x2B), y cuántos traen el valor que
+    ya había;
+  - las matrices completas, y cuántas iguales;
+  - las rachas de 0x2A/0x2B seguidos (media, y cuántas de 12 o más);
+  - las llamadas con huesos.
+  Línea `[TIEMPOS] Huesos`. Va por el camino lento del bucle de comandos,
+  como `prof_comandos`.
+- `gpu/ge.c`: el censo de cajas (`prof_bbox`) reparte los objetos que
+  pasan la caja sin dibujar nada por la clase de su caja: sin prueba
+  exacta, fuera, dentro, dudosa o dudosa que cruza el plano de la cámara.
+  Da también lo que cuesta probar la caja de cada llamada. Un objeto con
+  llamadas saltadas cuenta como fuera. Con `prof_bbox`, la caja se
+  clasifica entera (también "dentro"); sin él, la que se ve por su primer
+  vértice no sigue. Las llamadas que se saltan son las mismas con y sin
+  censo.
+- `hle/hle.c`: la línea `[TIEMPOS] Cajas exactas` añade:
+  - las cajas fuera de la pantalla, vistas por su primer vértice, dentro
+    (solo con `prof_bbox`), dudosas y las que cruzan el plano de la
+    cámara;
+  - las llamadas probadas por su caja (y vistas por su primer vértice),
+    fuera, saltadas y sus vértices.
+- `core/opt.h`, `core/opt.c`: `ge_bbox_pantalla`, `ge_bbox_llamada` y
+  `prof_huesos`.
+- `tests/test_bbox.c`: pruebas nuevas, todas en modo exacto y rápido, con
+  la VRAM y las cuentas iguales con y sin los interruptores y con
+  `ge_verificar`:
+  - listas al azar alrededor de la pantalla y de la cámara (viewport de
+    ×1 a ×3 con signo, centros y offsets al azar, scissor y región,
+    perspectiva y ortográfica, con y sin recorte de profundidad);
+  - un vértice a pocos 1/16 de píxel de cada borde, también con la caja
+    colocada por la traslación del mundo;
+  - umbral exacto: viewport pequeño con el centro junto al borde (margen
+    de menos de 1/32 de píxel), cambiando entre la caja y la llamada el
+    offset, el scissor, el centro, la escala o el recorte;
+  - cajas finas en diagonal que pasan por la cámara;
+  - cajas que cruzan el plano cercano y solo se ven por detrás de él, con
+    la z de pantalla ancha, también quitando el recorte entre la caja y la
+    llamada;
+  - proyecciones con w negativa delante del plano cercano;
+  - el censo de cajas con los dos interruptores.
+- `tests/test_listas.c`: el censo de los huesos.
+- `tools/banco/bench_lista.c`: escenas 7 (cajas finas que cruzan la
+  cámara, fuera de la pantalla), 8 (caja grande que se ve con las
+  llamadas fuera) y 9 (la misma con las llamadas dentro). Las tres con el
+  viewport al doble, y la 7 con recorte de profundidad.
+- `tools/banco/ventanas.py`: columnas de cajas fuera de la pantalla y de
+  llamadas probadas, saltadas y vértices por su caja.
+- `hle/hle.h`, `dist/apps/wiisp/meta.xml`: versión 0.5.23.
+
 ## 0.5.22
 
 - `gpu/ge_vertex.c`: `ge_bbox_rapido` (encendido, 1.3 a). La prueba de las

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Compara registros del autotest del Wii (wiisp.log de cada corrida) por
 ventanas de juego: tiempo real, velocidad, tirones, reparto del GE, ciclos
-por unidad (PMC del GE) y llamadas que salta ge_bbox.
+por unidad (PMC del GE) y llamadas que salta ge_bbox (también por su caja).
 Uso: ventanas.py NOMBRE=registro.log [NOMBRE=registro.log...]"""
 import re, sys
 
@@ -32,6 +32,8 @@ def parse(path):
         if m: w['c_pcmd'] = int(m.group(1))
         m = re.search(r'Cajas exactas \(ge_bbox\): .*?saltadas (\d+) \(\d+ sin calcular[^;]*; (\d+) vertices\)', l)
         if m: w.update(bx_salt=int(m.group(1)), bx_vert=int(m.group(2)) / 1000.0)
+        m = re.search(r'cajas fuera de la pantalla (\d+),.*?por su caja \(ge_bbox_llamada\): (\d+) llamadas probadas.*?saltadas (\d+) con (\d+) vertices', l)
+        if m: w.update(bx_pant=int(m.group(1)), bx_ll_prob=int(m.group(2)), bx_ll_salt=int(m.group(3)), bx_ll_vert=int(m.group(4)) / 1000.0)
     return wins
 
 runs = [(a.split('=', 1)[0], parse(a.split('=', 1)[1])) for a in sys.argv[1:]]
@@ -44,7 +46,9 @@ cols = [('real', 's reales', '{:7.1f}'), ('vel', '% velocidad', '{:7.1f}'), ('ti
         ('c_leer', 'ciclos por vertice', '{:7d}'), ('c_ens', 'ciclos por triangulo (ensamblar)', '{:7d}'),
         ('c_env', 'ciclos por primitiva (enviar)', '{:7d}'), ('c_est', 'ciclos por llamada (estado)', '{:7d}'),
         ('c_cmd', 'ciclos por llamada (comandos)', '{:7d}'), ('c_pcmd', 'ciclos por comando', '{:7d}'),
-        ('bx_salt', 'llamadas saltadas (ge_bbox)', '{:7d}'), ('bx_vert', 'miles de vertices saltados', '{:7.0f}')]
+        ('bx_salt', 'llamadas saltadas (ge_bbox)', '{:7d}'), ('bx_vert', 'miles de vertices saltados', '{:7.0f}'),
+        ('bx_pant', 'cajas fuera de la pantalla', '{:7d}'), ('bx_ll_prob', 'llamadas probadas por su caja', '{:7d}'),
+        ('bx_ll_salt', 'saltadas por su caja', '{:7d}'), ('bx_ll_vert', 'miles de vertices (por su caja)', '{:7.0f}')]
 print('ventana     ' + ''.join(f'{k[:7]:>7}' for k, _ in runs))
 for i in range(min(len(w) for _, w in runs)):
     w0 = runs[0][1][i]

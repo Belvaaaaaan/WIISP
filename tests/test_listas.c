@@ -283,6 +283,54 @@ void test_listas(void){
 		CHECK_EQ(malos, 0u);
 	}
 
+	{   //Arreglo
+		static const u32 m[12] = { 0x3F8000u, 0, 0, 0, 0x3F8000u, 0, 0, 0, 0x3F8000u, 0x3F0000u, 0x3E8000u, 0 };
+		u32 k, j, datos[2];
+		printf("Censo de los huesos (prof_huesos)\n");
+		for(k = 0; k < 2; k++){
+			ge_vertex_reset();
+			memset(ge.bone, 0, sizeof(ge.bone));
+			ge.cmd[GE_VERTEXTYPE] = 0;
+			opt_on[OPT_GE_CMD_PUNTERO] = 1;
+			opt_on[OPT_GE_CMD_MATRICES] = 1;
+			opt_on[OPT_PROF_HUESOS] = (u8)(k == 0);
+			memset(&ge_stats, 0, sizeof(ge_stats));
+			lp = 0x08D40000u;
+			for(i = 0; i < 2; i++){
+				lcmd(GE_BONEMATRIXNUMBER, 0);
+				for(j = 0; j < 24; j++) lcmd(GE_BONEMATRIXDATA, m[j % 12]);
+				lcmd(GE_NOP, 0);
+			}
+			lcmd(GE_BONEMATRIXNUMBER, 30);
+			for(j = 0; j < 5; j++) lcmd(GE_BONEMATRIXDATA, m[j]);
+			lcmd(GE_VERTEXTYPE, (3u << 7) | (2u << 9) | (1u << 14));
+			lcmd(GE_BASE, (L_VERT >> 8) & 0x0F0000);
+			lcmd(GE_VADDR, L_VERT & 0xFFFFFC);
+			lcmd(GE_PRIM, (GE_PRIM_TRIANGLES << 16) | 0);
+			lcmd(GE_PRIM, (GE_PRIM_TRIANGLES << 16) | 3);
+			lcmd(GE_NOP, 0);
+			ge_test_run_list(0x08D40000u, lp, NULL);
+			datos[k] = ge_stats.hu_datos;
+			if(k) break;
+			printf("  %u datos (%u iguales), %u matrices completas (%u iguales), %u rachas (%u datos, %u de 12 o mas), %u llamadas con huesos\n",
+			       (unsigned)ge_stats.hu_datos, (unsigned)ge_stats.hu_iguales, (unsigned)ge_stats.hu_mat, (unsigned)ge_stats.hu_mat_iguales,
+			       (unsigned)ge_stats.hu_rachas, (unsigned)ge_stats.hu_racha_datos, (unsigned)ge_stats.hu_rachas_largas,
+			       (unsigned)ge_stats.hu_llamadas);
+			CHECK_EQ(ge_stats.hu_datos, 53u);
+			CHECK_EQ(ge_stats.hu_iguales, 41u);
+			CHECK_EQ(ge_stats.hu_mat, 4u);
+			CHECK_EQ(ge_stats.hu_mat_iguales, 2u);
+			CHECK_EQ(ge_stats.hu_rachas, 3u);
+			CHECK_EQ(ge_stats.hu_racha_datos, 53u);
+			CHECK_EQ(ge_stats.hu_rachas_largas, 2u);
+			CHECK_EQ(ge_stats.hu_llamadas, 1u);
+			CHECK_EQ(ge.bone[2][6], 1.0f);
+			CHECK_EQ(ge.bone[1][9], 0.5f);
+		}
+		CHECK_EQ(datos[1], 0u);
+		opt_on[OPT_PROF_HUESOS] = 0;
+	}
+
 	memcpy(opt_on, saved_opt, sizeof(saved_opt));
 	memset(&ge_stats, 0, sizeof(ge_stats));
 	ge_hw = saved_hw;

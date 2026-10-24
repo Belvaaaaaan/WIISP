@@ -45,6 +45,7 @@ enum {
 	OPT_PROF_VERTICES,   //Arreglo
 	OPT_PROF_BBOX,   //Arreglo
 	OPT_PROF_COMANDOS,   //Arreglo
+	OPT_PROF_HUESOS,   //Arreglo
 	/* Primera tanda del GE (resultado idéntico) */
 	OPT_GE_SKIN_RAPIDO,   /* skinning mezclando las matrices por peso */
 	OPT_GE_MTX_CACHE,     /* matrices combinadas solo cuando cambian */
@@ -76,6 +77,8 @@ enum {
 	                         los descartes de cada vértice ya calculados */
 	OPT_GE_BBOX,          /* 1.3 descarte por caja envolvente */
 	OPT_GE_BBOX_RAPIDO,   //Arreglo
+	OPT_GE_BBOX_PANTALLA,   //Arreglo
+	OPT_GE_BBOX_LLAMADA,   //Arreglo
 	OPT_GE_ESTADO_SUCIO,  /* 1.4, primera parte: el estado de una llamada de
 	                         dibujo (formato, transformación, rasterizador,
 	                         estado de GX y la preparación de cada

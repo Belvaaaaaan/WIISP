@@ -62,7 +62,8 @@ volver a medir tras cada paso.
 10. 1.4 (charolas) y 1.3 (caja, solo con los BBOX del juego). En la
     0.5.21, el censo de 1.3 (`prof_bbox`) y `ge_cmd_puntero`; en la
     0.5.22, 1.3 a (`ge_bbox_rapido`), 1.3 b (`ge_bbox`) y
-    `ge_cmd_matrices`. Falta 1.4.
+    `ge_cmd_matrices`; en la 0.5.23, 1.3 c (`ge_bbox_pantalla`), 1.3 d
+    (`ge_bbox_llamada`) y el censo `prof_huesos`. Falta 1.4.
 11. Decidir el diseño del IR y hacer 2.2 y 2.3 como IR, junto con 2.5
     (BAT). Las fases 3, 4 y 5 vienen después.
 
@@ -266,6 +267,27 @@ que la prueba de siempre deja pasar y no se ven, de 14256 a 7167
 instrucciones por llamada; leer y ejecutar los comandos de una llamada con
 4 huesos, de 7371 a 4686. Detalle en docs/CONTINUAR.md.
 
+Hecha (v0.5.23): 1.3 c `ge_bbox_pantalla`: la prueba exacta de la caja
+mira también la pantalla. Es un programa lineal sobre la parte de la caja
+que el GE puede dibujar (delante del plano cercano con recorte de
+profundidad, w ≥ 0 sin él), con el umbral exacto de `range_of` y márgenes
+de 2^-9 y 2^-11. Rescata las cajas que la prueba de siempre deja pasar
+porque cruzan el plano de la cámara o el cercano. 1.3 d `ge_bbox_llamada`:
+tras una caja que no está entera fuera, cada llamada se prueba con su
+propia caja (primero su primer vértice). La prueba de cada llamada no
+compara las matrices ni la pantalla si no cambiaron (grupos B y P de
+`ge_sucio`; la del BJUMP sigue con `memcmp`). Medida nueva: `prof_huesos`
+(datos de huesos repetidos, matrices iguales, rachas de 0x2A/0x2B). Arreglo
+de `ge_setup_recip` (índice negativo con `abs_det ≥ 2^48`). Idénticos
+(tests/test_bbox.c con seis pruebas nuevas, 51 mutaciones, pspautotests
+A/B, A/B del estado de GX, la 0.5.22 contra la 0.5.23) y comprobables en
+el Wii con `ge_verificar`. Banco de qemu: cajas finas que cruzan la cámara
+fuera de la pantalla, de 144723 a 8374 instrucciones por llamada; llamadas
+fuera dentro de una caja que se ve, de 22165 a 11088; las que se ven,
++260 por llamada. Pendiente, sin arreglar: un vértice con la pantalla en
+NaN no se marca como fuera de rango (`round_to_screen`). Detalle en
+docs/CONTINUAR.md.
+
 Primera tanda acordada (todas "más barato", verificables en el PC):
 0.1 `prof_espera`, **skinning rápido** (`ge_skin_rapido`), **matrices al
 cambiar** (`ge_mtx_cache`), **color constante** (`ge_color_const`), 2.1
@@ -285,8 +307,10 @@ cambiar** (`ge_mtx_cache`), **color constante** (`ge_color_const`), 2.1
   vértices por vtype (`ge_vdec_esp`); 1.2b psq_l y GQR para 8/16 bits
   (`ge_vdec_psq`); 1.3 caja envolvente, primero con los BBOX del juego
   (`ge_bbox_rapido`, la prueba de siempre más barata; `ge_bbox`, saltarse
-  las llamadas de cajas enteras fuera; ojo: con huesos los vértices salen
-  de la caja; censo `prof_bbox`); 1.4 agrupar llamadas con dirty flags
+  las llamadas de cajas enteras fuera; `ge_bbox_pantalla`, también fuera
+  de la pantalla; `ge_bbox_llamada`, la caja de cada llamada; ojo: con
+  huesos los vértices salen de la caja; censos `prof_bbox` y
+  `prof_huesos`); 1.4 agrupar llamadas con dirty flags
   (`ge_charolas`); comandos de la lista con un puntero (`ge_cmd_puntero`)
   y los datos de matrices en el bucle (`ge_cmd_matrices`; censo
   `prof_comandos`).

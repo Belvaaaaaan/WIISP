@@ -431,6 +431,13 @@ static void __attribute__((constructor)) estado_tabla(void){
 	grupo_marca(GE_TEXADDR0, GE_TEXBUFWIDTH0 + 7, GE_SUCIO_R);
 	grupo_marca(GE_TEXSIZE0, GE_TEXSIZE0 + 7, GE_SUCIO_R);
 	grupo_marca(GE_DITH0, GE_DITH0 + 3, GE_SUCIO_R);
+	grupo_marca(GE_VIEWPORTXSCALE, GE_VIEWPORTYSCALE, GE_SUCIO_P);   //Arreglo
+	grupo_marca(GE_VIEWPORTXCENTER, GE_VIEWPORTYCENTER, GE_SUCIO_P);   //Arreglo
+	grupo_marca(GE_OFFSETX, GE_OFFSETY, GE_SUCIO_P);   //Arreglo
+	estado_grupo[GE_SCISSOR1] |= GE_SUCIO_P;   //Arreglo
+	estado_grupo[GE_SCISSOR2] |= GE_SUCIO_P;   //Arreglo
+	estado_grupo[GE_REGION2] |= GE_SUCIO_P;   //Arreglo
+	estado_grupo[GE_DEPTHCLAMPENABLE] |= GE_SUCIO_P;   //Arreglo
 }
 
 /* Pruebas: cambia los grupos de un comando (para meter fallos a propósito) */
@@ -492,6 +499,7 @@ static struct {   //Arreglo
 	u32 ini, fin, llamadas, vertices;
 	int pila, abierto, huesos, dibujo, fuera;
 	u64 ticks;
+	int clase;   //Arreglo
 } bb_obj;
 static int bb_tras_caja;
 
@@ -512,6 +520,8 @@ static void bb_cerrar(void){
 	ge_stats.ob_nada_vertices += bb_obj.vertices;
 	ge_stats.ob_nada_ticks += bb_obj.ticks;
 	ge_stats.ob_fuera += bb_obj.fuera;
+	ge_stats.ob_nada_clase[bb_obj.clase]++;   //Arreglo
+	ge_stats.ob_nada_clase_vertices[bb_obj.clase] += bb_obj.vertices;   //Arreglo
 	if(bb_obj.huesos){
 		ge_stats.ob_nada_huesos++;
 		ge_stats.ob_nada_huesos_vertices += bb_obj.vertices;
@@ -570,16 +580,17 @@ static void __attribute__((noinline)) censo_bbox_salto(DisplayList *l, u32 targe
 	bb_obj.ini = l->pc + 4;
 	bb_obj.fin = target;
 	bb_obj.pila = l->stackptr;
+	bb_obj.clase = (unsigned)ge_bbox_clase < 5 ? ge_bbox_clase : 0;   //Arreglo
 }
 
 static void __attribute__((noinline)) censo_bbox_prim(DisplayList *l, u32 arg){
-	u32 n = arg & 0xFFFF, t0 = ge_stats.tris, p0 = ge_stats.primitives, o0 = ge_stats.tris_outside;
+	u32 n = arg & 0xFFFF, t0 = ge_stats.tris, p0 = ge_stats.primitives, o0 = ge_stats.tris_outside, s0 = ge_stats.bx_saltadas;   //Arreglo
 	int huesos = bb_con_huesos(ge.cmd[GE_VERTEXTYPE]), nada, fuera, dentro;
 	u64 c0 = bb_reloj(), dt;
 	ge_draw_prim((arg >> 16) & 7, n);
 	dt = bb_reloj() - c0;
 	nada = ge_stats.primitives == p0;
-	fuera = nada && ge_stats.tris != t0 && ge_stats.tris - t0 == ge_stats.tris_outside - o0;
+	fuera = nada && (ge_stats.bx_saltadas != s0 || (ge_stats.tris != t0 && ge_stats.tris - t0 == ge_stats.tris_outside - o0));   //Arreglo
 	dentro = bb_obj.abierto && l == bb_obj.l &&
 	         (l->stackptr > bb_obj.pila || (l->stackptr == bb_obj.pila && l->pc >= bb_obj.ini && l->pc < bb_obj.fin));
 	if(bb_obj.abierto && !dentro) bb_cerrar();
@@ -621,7 +632,9 @@ void ge_bbox_census_report(const GeStats *g, const GeStats *g0, u64 hz, char *bu
 	         "Censo de cajas: objetos que pasan la caja %u (%u sin llamadas) con %u llamadas y %u vertices (%.1f ms); sin dibujar nada %u objetos "
 	         "(%u enteros fuera de pantalla), %u llamadas y %u vertices (%.1f ms); de ellos con huesos %u objetos y %u vertices\n"
 	         "Censo de cajas: llamadas fuera de objetos %u con %u vertices (%.1f ms); sin dibujar nada %u llamadas y %u vertices "
-	         "(%.1f ms), con huesos %u llamadas y %u vertices; enteras fuera de pantalla %u llamadas y %u vertices (%.1f ms)",
+	         "(%.1f ms), con huesos %u llamadas y %u vertices; enteras fuera de pantalla %u llamadas y %u vertices (%.1f ms)\n"
+	         "Censo de cajas: objetos sin dibujar nada por su caja: sin prueba exacta %u (%u vertices), fuera %u (%u), dentro %u (%u), "
+	         "dudosa %u (%u), dudosa que cruza el plano de la camara %u (%u); probar la caja de cada llamada %.1f ms",   //Arreglo
 	         (unsigned)D(bb_cmds), (unsigned)D(bb_vertices), bb_ms(D(bb_ticks), hz), (unsigned)D(bb_huesos),
 	         (unsigned)D(bb_visibles), (unsigned)(D(bb_cmds) - D(bb_visibles) - D(bb_count0)), (unsigned)D(bb_count0),
 	         (unsigned)D(bb_sin_probar), (unsigned)D(bj_total), (unsigned)D(bj_sin_caja), (unsigned)D(bj_tomados),
@@ -633,7 +646,11 @@ void ge_bbox_census_report(const GeStats *g, const GeStats *g0, u64 hz, char *bu
 	         (unsigned)D(sc_llamadas), (unsigned)D(sc_vertices), bb_ms(D(sc_ticks), hz), (unsigned)D(sc_nada),
 	         (unsigned)D(sc_nada_vertices), bb_ms(D(sc_nada_ticks), hz), (unsigned)D(sc_nada_huesos),
 	         (unsigned)D(sc_nada_huesos_vertices), (unsigned)D(sc_fuera), (unsigned)D(sc_fuera_vertices),
-	         bb_ms(D(sc_fuera_ticks), hz));
+	         bb_ms(D(sc_fuera_ticks), hz),
+	         (unsigned)D(ob_nada_clase[0]), (unsigned)D(ob_nada_clase_vertices[0]), (unsigned)D(ob_nada_clase[1]),   //Arreglo
+	         (unsigned)D(ob_nada_clase_vertices[1]), (unsigned)D(ob_nada_clase[2]), (unsigned)D(ob_nada_clase_vertices[2]),   //Arreglo
+	         (unsigned)D(ob_nada_clase[3]), (unsigned)D(ob_nada_clase_vertices[3]), (unsigned)D(ob_nada_clase[4]),   //Arreglo
+	         (unsigned)D(ob_nada_clase_vertices[4]), bb_ms(D(bx_ll_ticks), hz));   //Arreglo
 #undef D
 }   //Arreglo
 
@@ -962,9 +979,9 @@ static void execute(DisplayList *l, u32 op){
 	case GE_PROJMATRIXNUMBER:  matrix_num(cmd, GE_PROJMATRIXDATA, arg, 0xF); break;
 	case GE_TGENMATRIXNUMBER:  matrix_num(cmd, GE_TGENMATRIXDATA, arg, 0xF); break;
 	case GE_BONEMATRIXNUMBER:  matrix_num(cmd, GE_BONEMATRIXDATA, arg, 0x7F); break;
-	case GE_WORLDMATRIXDATA: matrix_data(GE_WORLDMATRIXNUMBER, cmd, ge.world, 12, 0xF, arg, GE_SUCIO_T); break;
-	case GE_VIEWMATRIXDATA:  matrix_data(GE_VIEWMATRIXNUMBER, cmd, ge.view, 12, 0xF, arg, GE_SUCIO_T); break;
-	case GE_PROJMATRIXDATA:  matrix_data(GE_PROJMATRIXNUMBER, cmd, ge.proj, 16, 0xF, arg, GE_SUCIO_T); break;
+	case GE_WORLDMATRIXDATA: matrix_data(GE_WORLDMATRIXNUMBER, cmd, ge.world, 12, 0xF, arg, GE_SUCIO_T | GE_SUCIO_B); break;   //Arreglo
+	case GE_VIEWMATRIXDATA:  matrix_data(GE_VIEWMATRIXNUMBER, cmd, ge.view, 12, 0xF, arg, GE_SUCIO_T | GE_SUCIO_B); break;   //Arreglo
+	case GE_PROJMATRIXDATA:  matrix_data(GE_PROJMATRIXNUMBER, cmd, ge.proj, 16, 0xF, arg, GE_SUCIO_T | GE_SUCIO_B); break;   //Arreglo
 	case GE_TGENMATRIXDATA:  matrix_data(GE_TGENMATRIXNUMBER, cmd, ge.tgen, 12, 0xF, arg, GE_SUCIO_T | GE_SUCIO_R); break;
 	case GE_BONEMATRIXDATA:  matrix_data(GE_BONEMATRIXNUMBER, cmd, &ge.bone[0][0], 96, 0x7F, arg, 0); break;
 	case GE_LOADCLUT:
@@ -1022,9 +1039,9 @@ static void __attribute__((constructor)) cmd_casos_tabla(void){   //Arreglo
 	};
 	unsigned i;
 	for(i = 0; i < sizeof(casos); i++) cmd_con_caso[casos[i]] = 1;
-	mat_poner(1, GE_WORLDMATRIXNUMBER, 1, GE_WORLDMATRIXDATA, 0xF, 12, GE_SUCIO_T, ge.world);
-	mat_poner(2, GE_VIEWMATRIXNUMBER, 1, GE_VIEWMATRIXDATA, 0xF, 12, GE_SUCIO_T, ge.view);
-	mat_poner(3, GE_PROJMATRIXNUMBER, 1, GE_PROJMATRIXDATA, 0xF, 16, GE_SUCIO_T, ge.proj);
+	mat_poner(1, GE_WORLDMATRIXNUMBER, 1, GE_WORLDMATRIXDATA, 0xF, 12, GE_SUCIO_T | GE_SUCIO_B, ge.world);   //Arreglo
+	mat_poner(2, GE_VIEWMATRIXNUMBER, 1, GE_VIEWMATRIXDATA, 0xF, 12, GE_SUCIO_T | GE_SUCIO_B, ge.view);   //Arreglo
+	mat_poner(3, GE_PROJMATRIXNUMBER, 1, GE_PROJMATRIXDATA, 0xF, 16, GE_SUCIO_T | GE_SUCIO_B, ge.proj);   //Arreglo
 	mat_poner(4, GE_TGENMATRIXNUMBER, 1, GE_TGENMATRIXDATA, 0xF, 12, GE_SUCIO_T | GE_SUCIO_R, ge.tgen);
 	mat_poner(5, GE_BONEMATRIXNUMBER, 1, GE_BONEMATRIXDATA, 0x7F, 96, 0, &ge.bone[0][0]);
 	mat_poner(6, 0, 0, GE_WORLDMATRIXNUMBER, 0xF, 0, 0, NULL);
@@ -1110,9 +1127,49 @@ static void __attribute__((noinline)) verificar_matriz(DisplayList *l, u32 op){ 
 		hle_log_quiet("[VERIF] dato de matriz 0x%08X en 0x%08X distinto por el atajo\n", (unsigned)op, (unsigned)pc);
 }
 
+static struct {   //Arreglo
+	int en_racha, mat_igual;
+	u32 racha, mat_n;
+} hu;
+
+static void __attribute__((noinline)) censo_huesos(u32 op){   //Arreglo
+	u32 cmd = op >> 24, arg = op & 0x00FFFFFFu;
+	if(cmd == GE_BONEMATRIXNUMBER || cmd == GE_BONEMATRIXDATA){
+		if(!hu.en_racha){
+			hu.en_racha = 1;
+			hu.racha = 0;
+			ge_stats.hu_rachas++;
+		}
+		if(cmd == GE_BONEMATRIXDATA){
+			u32 num = ge.cmd[GE_BONEMATRIXNUMBER] & 0x7F;
+			ge_stats.hu_datos++;
+			hu.racha++;
+			if(num < 96){
+				float v = ge_f24(arg);
+				int igual = !memcmp(&ge.bone[0][0] + num, &v, sizeof(v));
+				ge_stats.hu_iguales += (u32)igual;
+				if(num % 12 == 0){ hu.mat_n = 0; hu.mat_igual = 1; }
+				hu.mat_igual &= igual;
+				if(++hu.mat_n == 12 && num % 12 == 11){
+					ge_stats.hu_mat++;
+					ge_stats.hu_mat_iguales += (u32)hu.mat_igual;
+				}
+			}
+		}
+		return;
+	}
+	if(hu.en_racha){
+		hu.en_racha = 0;
+		ge_stats.hu_racha_datos += hu.racha;
+		ge_stats.hu_rachas_largas += hu.racha >= 12;
+	}
+	if(cmd == GE_PRIM && (arg & 0xFFFF) && ((ge.cmd[GE_VERTEXTYPE] >> 9) & 3)) ge_stats.hu_llamadas++;
+}
+
 static void __attribute__((noinline)) comando_lento(DisplayList *l, u32 op, u32 pc){   //Arreglo
 	u32 cmd = op >> 24;
 	if(opt_on[OPT_PROF_COMANDOS]) cmd_hist[cmd]++;
+	if(opt_on[OPT_PROF_HUESOS]) censo_huesos(op);   //Arreglo
 	if(opt_on[OPT_GE_VERIF] && !opt_on[OPT_PROF_ESTADO]){
 		if(!cmd_con_caso[cmd]){ verificar_simple(l, op, mem_read32(pc)); return; }
 		if(cmd_matriz[cmd] && opt_on[OPT_GE_CMD_MATRICES]){ verificar_matriz(l, op); return; }
@@ -1123,7 +1180,7 @@ static void __attribute__((noinline)) comando_lento(DisplayList *l, u32 op, u32 
 static void __attribute__((noinline)) run_commands_ptr(DisplayList *l){
 	const u8 *ram = psp_mem.ram;
 	const u32 lim = psp_mem.ram_size - 4;
-	const int lento = opt_on[OPT_PROF_ESTADO] | opt_on[OPT_GE_VERIF] | opt_on[OPT_PROF_COMANDOS];   //Arreglo
+	const int lento = opt_on[OPT_PROF_ESTADO] | opt_on[OPT_GE_VERIF] | opt_on[OPT_PROF_COMANDOS] | opt_on[OPT_PROF_HUESOS];   //Arreglo
 	const int matrices = opt_on[OPT_GE_CMD_MATRICES] && !lento;   //Arreglo
 	while(gpu_state == GPU_RUNNING){
 		u32 pc = l->pc, off = (pc & PSP_ADDR_MASK) - PSP_RAM_BASE, op, cmd, arg;

@@ -110,7 +110,7 @@ extern GeStats ge_stats;
    con algún comando que cambió de valor desde que se calcularon por última
    vez (V formato de vértice, uv y morph; T transformación y luces; R
    píxel, muestreo y tijera del rasterizador) */
-enum { GE_SUCIO_V = 1, GE_SUCIO_T = 2, GE_SUCIO_R = 4, GE_SUCIO_TODO = 7 };
+enum { GE_SUCIO_V = 1, GE_SUCIO_T = 2, GE_SUCIO_R = 4, GE_SUCIO_B = 8, GE_SUCIO_P = 16, GE_SUCIO_TODO = 31 };   //Arreglo
 extern u32 ge_sucio;
 /* ge_estado_sucio con ge_verificar: lo guardado comparado con lo recalculado
    (0 formato, 1 transformación, 2 rasterizador) */
@@ -246,6 +246,7 @@ static inline void ge_vertex_mark_outside(GeVertex *v){
 
 void ge_draw_prim(u32 prim, u32 count);
 int ge_prim_datos_sobran(u32 vaddr_tras);   //Arreglo
+extern int ge_bbox_clase;   //Arreglo
 void ge_draw_bezier(u32 arg);
 void ge_draw_spline(u32 arg);
 void ge_bounding_box(u32 count);

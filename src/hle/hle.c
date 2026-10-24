@@ -621,17 +621,38 @@ static void profile_ge_lines(const GeStats *g, const GeStats *b, u32 vblanks){
 		        (unsigned)(g->bbv_cajas - b->bbv_cajas), (unsigned)(g->bbv_malas - b->bbv_malas));   //Arreglo
 	if(opt_on[OPT_GE_BBOX])   //Arreglo
 		hle_log("[TIEMPOS] Cajas exactas (ge_bbox): %u cajas probadas, %u enteras fuera de un plano (%u detras de la camara); "
-		        "llamadas con una caja fuera: %u, saltadas %u (%u sin calcular lo que deja para continuar; %u vertices); no saltadas: "
-		        "formato o primitiva %u, matrices cambiadas %u, "
-		        "algun vertice fuera de la caja %u%s\n",
+		        "llamadas tras una caja fuera o dudosa: %u, saltadas %u (%u sin calcular lo que deja para continuar; %u vertices); no saltadas: "
+		        "formato o primitiva %u, matrices o pantalla cambiadas %u, "
+		        "algun vertice fuera de la caja %u; cajas fuera de la pantalla %u, vistas por su primer vertice %u, dentro %u, dudosas %u "
+		        "(%u cruzan el plano de la camara); por su caja (ge_bbox_llamada): %u llamadas probadas (%u vistas por su primer vertice), "
+		        "%u fuera (%u por la pantalla), saltadas %u con %u vertices%s\n",   //Arreglo
 		        (unsigned)(g->bx_cajas - b->bx_cajas), (unsigned)(g->bx_fuera - b->bx_fuera), (unsigned)(g->bx_detras - b->bx_detras),
 		        (unsigned)(g->bx_llamadas - b->bx_llamadas), (unsigned)(g->bx_saltadas - b->bx_saltadas),
 		        (unsigned)(g->bx_ligeras - b->bx_ligeras), (unsigned)(g->bx_vertices - b->bx_vertices), (unsigned)(g->bx_formato - b->bx_formato),
 		        (unsigned)(g->bx_matrices - b->bx_matrices), (unsigned)(g->bx_fuera_caja - b->bx_fuera_caja),
+		        (unsigned)(g->bx_pantalla - b->bx_pantalla), (unsigned)(g->bx_vistas - b->bx_vistas), (unsigned)(g->bx_dentro - b->bx_dentro),   //Arreglo
+		        (unsigned)(g->bx_dudosas - b->bx_dudosas), (unsigned)(g->bx_cruzan - b->bx_cruzan),   //Arreglo
+		        (unsigned)(g->bx_ll_probadas - b->bx_ll_probadas), (unsigned)(g->bx_ll_vista - b->bx_ll_vista),   //Arreglo
+		        (unsigned)(g->bx_ll_fuera - b->bx_ll_fuera),   //Arreglo
+		        (unsigned)(g->bx_ll_pantalla - b->bx_ll_pantalla), (unsigned)(g->bx_ll_saltadas - b->bx_ll_saltadas),   //Arreglo
+		        (unsigned)(g->bx_ll_vertices - b->bx_ll_vertices),   //Arreglo
 		        opt_on[OPT_GE_VERIF] ? " (con ge_verificar se dibujan igual)" : "");   //Arreglo
 	if(opt_on[OPT_GE_VERIF] && opt_on[OPT_GE_BBOX])   //Arreglo
-		hle_log("[TIEMPOS] Verificacion de ge_bbox (ge_verificar): %u llamadas que se habrian saltado, dibujadas y comparadas, %u distintas\n",
-		        (unsigned)(g->bx_verif - b->bx_verif), (unsigned)(g->bx_verif_bad - b->bx_verif_bad));   //Arreglo
+		hle_log("[TIEMPOS] Verificacion de ge_bbox (ge_verificar): %u llamadas que se habrian saltado, dibujadas y comparadas, %u distintas; "
+		        "matrices y pantalla guardadas para las cajas distintas de las de ahora: %u\n",   //Arreglo
+		        (unsigned)(g->bx_verif - b->bx_verif), (unsigned)(g->bx_verif_bad - b->bx_verif_bad),
+		        (unsigned)(g->bx_cache_mal - b->bx_cache_mal));   //Arreglo
+	if(opt_on[OPT_PROF_HUESOS]){   //Arreglo
+		u32 hd = g->hu_datos - b->hu_datos, hm = g->hu_mat - b->hu_mat, hr = g->hu_rachas - b->hu_rachas;   //Arreglo
+		u32 hl = g->hu_llamadas - b->hu_llamadas;   //Arreglo
+		hle_log("[TIEMPOS] Huesos (prof_huesos): %u datos de matrices de huesos (%u iguales al que ya habia, %.1f%%), %u matrices "
+		        "completas (%u iguales, %.1f%%), %u rachas de numeros y datos de huesos seguidos (%.1f datos de media, %u de 12 o mas), "
+		        "%u llamadas con huesos (%.1f datos por llamada)\n", (unsigned)hd, (unsigned)(g->hu_iguales - b->hu_iguales),
+		        hd ? 100.0 * (double)(g->hu_iguales - b->hu_iguales) / (double)hd : 0.0, (unsigned)hm,
+		        (unsigned)(g->hu_mat_iguales - b->hu_mat_iguales), hm ? 100.0 * (double)(g->hu_mat_iguales - b->hu_mat_iguales) / (double)hm : 0.0,
+		        (unsigned)hr, hr ? (double)(g->hu_racha_datos - b->hu_racha_datos) / (double)hr : 0.0,
+		        (unsigned)(g->hu_rachas_largas - b->hu_rachas_largas), (unsigned)hl, hl ? (double)hd / (double)hl : 0.0);   //Arreglo
+	}   //Arreglo
 	if(opt_on[OPT_PROF_COMANDOS]){   //Arreglo
 		char cl[512];   //Arreglo
 		ge_cmd_census_report(cl, sizeof(cl));   //Arreglo
@@ -650,7 +671,7 @@ static void profile_ge_lines(const GeStats *g, const GeStats *b, u32 vblanks){
 		}
 	}
 	if(opt_on[OPT_PROF_BBOX]){   //Arreglo
-		static char cb[1536];
+		static char cb[2048];   //Arreglo
 		char *p = cb;
 		ge_bbox_census_report(g, b, prof_hz, cb, sizeof(cb));
 		while(*p){

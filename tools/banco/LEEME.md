@@ -24,7 +24,13 @@ al repositorio), `gcc-powerpc-linux-gnu` y `qemu-user`. Las salidas van a
   de mundo, que se ven; 5 = los mismos más allá del plano lejano (la prueba
   de siempre los deja pasar y no dibujan nada: los salta `ge_bbox`); 6 =
   los mismos fuera de la pantalla por un lado (el BJUMP salta sus
-  llamadas). `LUCES=1` enciende dos luces; con `prof_estado=1` escribe el
+  llamadas). Con el viewport al doble (los planos de ±w fuera del
+  scissor; 8 y 9 con sus propios vértices de tipo 0x11A): 7 = cajas finas
+  en diagonal que cruzan la cámara, fuera de la pantalla, con recorte de
+  profundidad (las salta `ge_bbox_pantalla`); 8 = una caja grande que se
+  ve con las llamadas fuera de la pantalla y dentro de ±w (las salta
+  `ge_bbox_llamada`); 9 = la misma con las llamadas dentro (lo que cuesta
+  probar la caja de cada llamada). `LUCES=1` enciende dos luces; con `prof_estado=1` escribe el
   censo de estado; al final, una línea con las cuentas de `ge_bbox`. Corre
   la lista con el mismo bucle que `process_dl_queue_body` (con y sin
   `ge_cmd_puntero`). Leer y ejecutar los comandos por llamada (bucle,
@@ -39,6 +45,10 @@ al repositorio), `gcc-powerpc-linux-gnu` y `qemu-user`. Las salidas van a
   caja: casi todo la segunda comparación de matrices); 5: 14256 / 13955 /
   7167; 6: 1270 / 988 / 988. Una caja de 8 vértices, ~1200 instrucciones
   menos con `ge_bbox_rapido` (la matriz de mundo cambia en cada objeto).
+  0.5.23, contando todo menos el psq_l emulado, solo `ge_bbox` / con
+  `ge_bbox_pantalla` / con `ge_bbox_llamada` / con los dos: 4: 29262 /
+  29198 / 29457 / 29520; 7: 144723 / 8374 / 145799 / 8374; 8: 22165 /
+  22602 / 22850 / 11088; 9: 29203 / 29640 / 29399 / 30382.
 - `qprof.py`: instrucciones PowerPC por función (y por unidad) a partir de
   `qemu-ppc -d in_asm,exec,nochain -D grande.log` menos una corrida corta:
   `qprof.py grande.log corta.log UNIDADES [FUNCIONES]` (lista las 25 que

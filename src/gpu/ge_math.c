@@ -491,7 +491,7 @@ s64 ge_setup_recip(u64 abs_det, int *e){
 	int ex = 63 - clz64(abs_det), index;
 	const SetupRecipSegment *seg;
 	*e = ex;
-	index = (int)((abs_det << 16) >> ex) - 65536;
+	index = (int)(ex >= 16 ? abs_det >> (ex - 16) : abs_det << (16 - ex)) - 65536;   //Arreglo
 	seg = &setup_recip[index >> 8];
 	return (2 * (s64)seg->k + (s64)seg->m * (index & 255)) >> 8;
 }
