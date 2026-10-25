@@ -634,7 +634,8 @@ void ge_bbox_census_report(const GeStats *g, const GeStats *g0, u64 hz, char *bu
 	         "Censo de cajas: llamadas fuera de objetos %u con %u vertices (%.1f ms); sin dibujar nada %u llamadas y %u vertices "
 	         "(%.1f ms), con huesos %u llamadas y %u vertices; enteras fuera de pantalla %u llamadas y %u vertices (%.1f ms)\n"
 	         "Censo de cajas: objetos sin dibujar nada por su caja: sin prueba exacta %u (%u vertices), fuera %u (%u), dentro %u (%u), "
-	         "dudosa %u (%u), dudosa que cruza el plano de la camara %u (%u); probar la caja de cada llamada %.1f ms",   //Arreglo
+	         "dudosa %u (%u), dudosa que cruza el plano de la camara %u (%u); probar la caja de cada llamada %.1f ms "   //Arreglo
+	         "(de ellos leer sus posiciones %.1f ms: %u llamadas con %u vertices)",   //Arreglo
 	         (unsigned)D(bb_cmds), (unsigned)D(bb_vertices), bb_ms(D(bb_ticks), hz), (unsigned)D(bb_huesos),
 	         (unsigned)D(bb_visibles), (unsigned)(D(bb_cmds) - D(bb_visibles) - D(bb_count0)), (unsigned)D(bb_count0),
 	         (unsigned)D(bb_sin_probar), (unsigned)D(bj_total), (unsigned)D(bj_sin_caja), (unsigned)D(bj_tomados),
@@ -650,7 +651,8 @@ void ge_bbox_census_report(const GeStats *g, const GeStats *g0, u64 hz, char *bu
 	         (unsigned)D(ob_nada_clase[0]), (unsigned)D(ob_nada_clase_vertices[0]), (unsigned)D(ob_nada_clase[1]),   //Arreglo
 	         (unsigned)D(ob_nada_clase_vertices[1]), (unsigned)D(ob_nada_clase[2]), (unsigned)D(ob_nada_clase_vertices[2]),   //Arreglo
 	         (unsigned)D(ob_nada_clase[3]), (unsigned)D(ob_nada_clase_vertices[3]), (unsigned)D(ob_nada_clase[4]),   //Arreglo
-	         (unsigned)D(ob_nada_clase_vertices[4]), bb_ms(D(bx_ll_ticks), hz));   //Arreglo
+	         (unsigned)D(ob_nada_clase_vertices[4]), bb_ms(D(bx_ll_ticks), hz), bb_ms(D(bx_ll_caja_ticks), hz),   //Arreglo
+	         (unsigned)D(bx_ll_cajas), (unsigned)D(bx_ll_leidos));   //Arreglo
 #undef D
 }   //Arreglo
 

@@ -811,7 +811,8 @@ static u32 p_lista(int objetos){   //Arreglo
 static void bbox_pantalla_azar(void){   //Arreglo
 	static u8 vram_ref[0x200000];
 	u32 lista, ronda, distintas = 0, prims_mal = 0, verif = 0, verif_mal = 0, cache_mal = 0, i;
-	u32 pant = 0, dudosas = 0, cruzan = 0, salt = 0, ll_salt = 0, ll_prob = 0;
+	u32 pant = 0, dudosas = 0, cruzan = 0, salt = 0, ll_salt = 0, ll_prob = 0, orden_mal = 0;   //Arreglo
+	static GeStats st1;   //Arreglo
 	u8 *tex = mem_ptr(R_TEX, 16 * 16 * 4), *vram = mem_ptr(0x04000000, 0x200000);
 	printf("Cajas exactas en pantalla (ge_bbox_pantalla, ge_bbox_llamada): listas al azar alrededor de la pantalla y de la camara\n");
 	for(i = 0; i < 16 * 16 * 4; i++) tex[i] = (u8)brnd();
@@ -819,12 +820,13 @@ static void bbox_pantalla_azar(void){   //Arreglo
 	for(ronda = 0; ronda < 1200; ronda++){
 		GeState ini;
 		u32 prims0 = 0, drawn0 = 0;
+		u8 rapido1 = 0;   //Arreglo
 		int modo, prof = (int)brn(2), combo = (int)(ronda % 4);
 		p_pantalla(prof);
 		if(brn(2)){ ge.cmd[GE_CULLFACEENABLE] = 1; ge.cmd[GE_CULL] = brn(2); }
 		memcpy(&ini, &ge, sizeof(ini));
 		lista = p_lista(4 + (int)brn(12));
-		for(modo = 0; modo < 3; modo++){
+		for(modo = 0; modo < 4; modo++){   //Arreglo
 			ge_fast_math = (int)((ronda >> 2) & 1);
 			memcpy(&ge, &ini, sizeof(ge));
 			ge_vertex_reset();
@@ -836,7 +838,14 @@ static void bbox_pantalla_azar(void){   //Arreglo
 			opt_on[OPT_GE_BBOX_RAPIDO] = (u8)(brn(3) != 0);
 			opt_on[OPT_GE_BBOX_PANTALLA] = (u8)(combo != 1 && combo != 3);
 			opt_on[OPT_GE_BBOX_LLAMADA] = (u8)(combo < 2);
+			opt_on[OPT_GE_BBOX_ORDEN] = opt_on[OPT_GE_BBOX_AABB] = (u8)(((ronda >> 3) & 1) ^ (modo == 3));   //Arreglo
+			if(modo == 3) opt_on[OPT_GE_BBOX_RAPIDO] = rapido1;   //Arreglo
 			ge_test_run_list(R_LIST, lista, NULL);
+			if(modo == 3){   //Arreglo
+				if(memcmp(&st1, &ge_stats, sizeof(st1)) && orden_mal++ < 8) printf("  ronda %u: cuentas distintas con ge_bbox_orden y ge_bbox_aabb\n", (unsigned)ronda);   //Arreglo
+				if(memcmp(vram_ref, vram, sizeof(vram_ref)) && distintas++ < 8) printf("  ronda %u modo 3: imagen distinta\n", (unsigned)ronda);   //Arreglo
+				continue;   //Arreglo
+			}   //Arreglo
 			if(modo == 0){
 				memcpy(vram_ref, vram, sizeof(vram_ref));
 				prims0 = ge_stats.primitives;
@@ -847,6 +856,8 @@ static void bbox_pantalla_azar(void){   //Arreglo
 				if(prims_mal++ < 8) printf("  ronda %u modo %d: primitivas %u/%u\n", (unsigned)ronda, modo, (unsigned)ge_stats.primitives, (unsigned)prims0);
 			}
 			if(modo == 1){
+				st1 = ge_stats;   //Arreglo
+				rapido1 = opt_on[OPT_GE_BBOX_RAPIDO];   //Arreglo
 				pant += ge_stats.bx_pantalla; dudosas += ge_stats.bx_dudosas; cruzan += ge_stats.bx_cruzan;
 				salt += ge_stats.bx_saltadas; ll_salt += ge_stats.bx_ll_saltadas; ll_prob += ge_stats.bx_ll_probadas;
 			} else { verif += ge_stats.bx_verif; verif_mal += ge_stats.bx_verif_bad; cache_mal += ge_stats.bx_cache_mal; }
@@ -865,6 +876,8 @@ static void bbox_pantalla_azar(void){   //Arreglo
 	CHECK_EQ(prims_mal, 0u);
 	CHECK_EQ(verif_mal, 0u);
 	CHECK_EQ(cache_mal, 0u);
+	printf("  con y sin ge_bbox_orden y ge_bbox_aabb: %u rondas con cuentas distintas\n", (unsigned)orden_mal);   //Arreglo
+	CHECK_EQ(orden_mal, 0u);   //Arreglo
 	CHECK(pant > 10);
 	CHECK(cruzan > 200);
 	CHECK(ll_salt > 200);
@@ -1069,17 +1082,18 @@ static void bbox_pantalla_bordes(void){   //Arreglo
 	CHECK(lejos_salt * 10 > lejos * 9);
 }
 
-typedef struct { u32 rondas, mal, distintas, probadas, pant, salt, ll_salt, verif, verif_mal, dibujo0, cache_mal; } PRes;   //Arreglo
+typedef struct { u32 rondas, mal, distintas, probadas, pant, salt, ll_salt, verif, verif_mal, dibujo0, cache_mal, orden_mal; } PRes;   //Arreglo
 
 static int p_correr(const char *que, u32 ronda, u32 fin, int llamada, PRes *r){   //Arreglo
 	static u8 vram_ref[0x200000];
 	u8 *vram = mem_ptr(0x04000000, 0x200000);
 	GeState ini;
+	static GeStats st1;   //Arreglo
 	u32 prims0 = 0;
-	int modo, salt = 0;
+	int modo, salt = 0, nuevo = (int)(((ronda * 2654435761u) >> 30) & 1);   //Arreglo
 	memcpy(&ini, &ge, sizeof(ini));
 	r->rondas++;
-	for(modo = 0; modo < 3; modo++){
+	for(modo = 0; modo < 4; modo++){   //Arreglo
 		memcpy(&ge, &ini, sizeof(ge));
 		ge_vertex_reset();
 		ge_raster_reset();
@@ -1090,7 +1104,13 @@ static int p_correr(const char *que, u32 ronda, u32 fin, int llamada, PRes *r){ 
 		opt_on[OPT_GE_BBOX_RAPIDO] = (u8)((ronda * 2654435761u) >> 31);
 		opt_on[OPT_GE_BBOX_PANTALLA] = 1;
 		opt_on[OPT_GE_BBOX_LLAMADA] = (u8)llamada;
+		opt_on[OPT_GE_BBOX_ORDEN] = opt_on[OPT_GE_BBOX_AABB] = (u8)(nuevo ^ (modo == 3));   //Arreglo
 		ge_test_run_list(R_LIST, fin, NULL);
+		if(modo == 3){   //Arreglo
+			if(memcmp(&st1, &ge_stats, sizeof(st1)) && r->orden_mal++ < 8) printf("  %s ronda %u: cuentas distintas con ge_bbox_orden y ge_bbox_aabb\n", que, (unsigned)ronda);   //Arreglo
+			if(memcmp(vram_ref, vram, sizeof(vram_ref)) && r->distintas++ < 8) printf("  %s ronda %u modo 3: imagen distinta\n", que, (unsigned)ronda);   //Arreglo
+			continue;   //Arreglo
+		}   //Arreglo
 		if(modo == 0){
 			prims0 = ge_stats.primitives;
 			r->dibujo0 += prims0 != 0;
@@ -1101,6 +1121,7 @@ static int p_correr(const char *que, u32 ronda, u32 fin, int llamada, PRes *r){ 
 			printf("  %s ronda %u modo %d: primitivas %u/%u\n", que, (unsigned)ronda, modo, (unsigned)ge_stats.primitives, (unsigned)prims0);
 		if(memcmp(vram_ref, vram, sizeof(vram_ref)) && r->distintas++ < 8) printf("  %s ronda %u modo %d: imagen distinta\n", que, (unsigned)ronda, modo);
 		if(modo == 1){
+			st1 = ge_stats;   //Arreglo
 			r->probadas += ge_stats.bx_cajas != 0;
 			r->pant += ge_stats.bx_pantalla != 0;
 			r->salt += ge_stats.bx_saltadas;
@@ -1250,6 +1271,8 @@ static void bbox_pantalla_fino(void){   //Arreglo
 	CHECK_EQ(r.distintas, 0u);
 	CHECK_EQ(r.verif_mal, 0u);
 	CHECK_EQ(r.cache_mal, 0u);
+	printf("  con y sin ge_bbox_orden y ge_bbox_aabb: %u rondas con cuentas distintas\n", (unsigned)r.orden_mal);   //Arreglo
+	CHECK_EQ(r.orden_mal, 0u);   //Arreglo
 	CHECK_EQ(dentro_salt, 0u);
 	CHECK(primero > 100);
 	CHECK(primero_salt * 10 > primero * 9);
@@ -1318,6 +1341,8 @@ static void bbox_pantalla_cercano(void){   //Arreglo
 	CHECK_EQ(rp.distintas + rs.distintas + rc.distintas, 0u);
 	CHECK_EQ(rp.verif_mal + rs.verif_mal + rc.verif_mal, 0u);
 	CHECK_EQ(rp.cache_mal + rs.cache_mal + rc.cache_mal, 0u);
+	printf("  con y sin ge_bbox_orden y ge_bbox_aabb: %u rondas con cuentas distintas\n", (unsigned)(rp.orden_mal + rs.orden_mal + rc.orden_mal));   //Arreglo
+	CHECK_EQ(rp.orden_mal + rs.orden_mal + rc.orden_mal, 0u);   //Arreglo
 	CHECK(rp.probadas * 10 > rp.rondas * 6);
 	CHECK(rp.pant * 10 > rp.probadas * 9);
 	CHECK(rs.dibujo0 * 2 > rs.rondas);
@@ -1335,6 +1360,55 @@ static void p_recta(const float *pa, const float *pb, float del, float *m){   //
 	for(k = 0; k < 3; k++) e1[k] /= le;
 	e2[0] = (u[1] * e1[2] - u[2] * e1[1]) / lu; e2[1] = (u[2] * e1[0] - u[0] * e1[2]) / lu; e2[2] = (u[0] * e1[1] - u[1] * e1[0]) / lu;
 	for(k = 0; k < 3; k++){ m[k] = u[k]; m[3 + k] = e1[k] * del; m[6 + k] = e2[k] * del; }
+}
+
+static void bbox_cerca_camara(void){   //Arreglo
+	PRes r;
+	u32 ronda;
+	memset(&r, 0, sizeof(r));
+	printf("Cajas exactas: detras de la camara a menos del margen (traslaciones grandes que se cancelan)\n");
+	ge_hw = NULL;
+	for(ronda = 0; ronda < 400; ronda++){
+		float T = bfr(200.0f, 2000.0f), e = bfr(0.05f, 0.5f), d = e + bfr(0.02f, 0.4f), m[12], v[24][3], mn[3], mx[3];
+		int prof = (ronda & 3) == 3, nv = 3 + (int)brn(16), i, k;
+		u32 cuerpo;
+		p_pantalla(prof);
+		p_perspectiva();
+		ge.view[9] = 0.0f; ge.view[10] = 0.0f; ge.view[11] = -T;
+		m[0] = bfr(1.0f, 5.0f); m[1] = 0.0f; m[2] = 0.0f;
+		m[3] = 0.0f; m[4] = bfr(1.0f, 5.0f); m[5] = 0.0f;
+		m[6] = 0.0f; m[7] = 0.0f; m[8] = e;
+		m[9] = bfr(-0.3f, 0.3f); m[10] = bfr(-0.3f, 0.3f); m[11] = T + d;
+		rl = R_LIST;
+		rv = R_DATA;
+		p_mundo_m(m);
+		cuerpo = rl + 6 * 4;
+		rl = cuerpo;
+		for(k = 0; k < 3; k++){ mn[k] = 1e30f; mx[k] = -1e30f; }
+		for(i = 0; i < nv; i++)
+			for(k = 0; k < 3; k++){
+				v[i][k] = i < 2 && k < 2 ? (i ? 1.0f : -1.0f) : bfr(-1.0f, 1.0f);
+				if(v[i][k] < mn[k]) mn[k] = v[i][k];
+				if(v[i][k] > mx[k]) mx[k] = v[i][k];
+			}
+		{
+			static const u32 pr[3] = { GE_PRIM_TRIANGLES, GE_PRIM_TRIANGLE_STRIP, GE_PRIM_TRIANGLE_FAN };
+			r_dibujo((7u << 2) | (3u << 7), pr[brn(3)], p_escribir(3, (const float (*)[3])v, nv), nv);
+		}
+		p_objeto(cuerpo, mn, mx);
+		ge_fast_math = (int)((ronda >> 1) & 1);
+		p_correr("cerca", ronda, rl, (int)((ronda >> 2) & 1), &r);
+	}
+	printf("  %u cajas (%u probadas, %u dibujan algo), %u llamadas saltadas (%u por su caja); %u cuentas y %u imagenes distintas; "
+	       "con ge_verificar %u comprobadas, %u distintas; con y sin ge_bbox_orden y ge_bbox_aabb: %u rondas con cuentas distintas\n",
+	       (unsigned)r.rondas, (unsigned)r.probadas, (unsigned)r.dibujo0, (unsigned)r.salt, (unsigned)r.ll_salt, (unsigned)r.mal,
+	       (unsigned)r.distintas, (unsigned)r.verif, (unsigned)r.verif_mal, (unsigned)r.orden_mal);
+	CHECK_EQ(r.mal, 0u);
+	CHECK_EQ(r.distintas, 0u);
+	CHECK_EQ(r.verif_mal, 0u);
+	CHECK_EQ(r.cache_mal, 0u);
+	CHECK_EQ(r.orden_mal, 0u);
+	CHECK(r.probadas * 10 > r.rondas * 6);
 }
 
 static void bbox_pantalla_rara(void){   //Arreglo
@@ -1401,6 +1475,8 @@ static void bbox_pantalla_rara(void){   //Arreglo
 	CHECK_EQ(rp.distintas + rs.distintas, 0u);
 	CHECK_EQ(rp.verif_mal + rs.verif_mal, 0u);
 	CHECK_EQ(rp.cache_mal + rs.cache_mal, 0u);
+	printf("  con y sin ge_bbox_orden y ge_bbox_aabb: %u rondas con cuentas distintas\n", (unsigned)(rp.orden_mal + rs.orden_mal));   //Arreglo
+	CHECK_EQ(rp.orden_mal + rs.orden_mal, 0u);   //Arreglo
 	CHECK(rp.probadas * 10 > rp.rondas * 9);
 	CHECK(rp.dibujo0 * 10 > rp.rondas * 9);
 	CHECK(rs.probadas * 2 > rs.rondas);
@@ -1533,6 +1609,8 @@ void test_bbox(void){
 		CHECK_EQ(ge_stats.ob_nada_clase[0] + ge_stats.ob_nada_clase[1] + ge_stats.ob_nada_clase[2] + ge_stats.ob_nada_clase[3] +
 		         ge_stats.ob_nada_clase[4], ge_stats.ob_nada);   //Arreglo
 		CHECK(ge_stats.bx_ll_saltadas >= 3);   //Arreglo
+		CHECK(ge_stats.bx_ll_cajas >= ge_stats.bx_ll_saltadas);   //Arreglo
+		CHECK(ge_stats.bx_ll_leidos >= 3 * ge_stats.bx_ll_cajas);   //Arreglo
 	}
 
 	memset(&ge_stats, 0, sizeof(ge_stats));
@@ -1555,6 +1633,8 @@ void test_bbox(void){
 	bbox_pantalla_cercano();   //Arreglo
 	memset(&ge_stats, 0, sizeof(ge_stats));   //Arreglo
 	bbox_pantalla_rara();   //Arreglo
+	memset(&ge_stats, 0, sizeof(ge_stats));   //Arreglo
+	bbox_cerca_camara();   //Arreglo
 	memset(&ge_stats, 0, sizeof(ge_stats));   //Arreglo
 	memcpy(opt_on, saved_opt, sizeof(saved_opt));
 	ge_hw = saved_hw;

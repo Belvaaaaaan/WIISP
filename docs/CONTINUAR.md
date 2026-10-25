@@ -2610,6 +2610,35 @@ Qué mirar:
   que no dibujan nada queda y de qué clase; los ms de probar la caja de
   cada llamada; la línea de los huesos.
 
+### Resultado de la 0.5.23 en el Wii (DBZ: sin / con / verif / censo)
+
+- Las 12 capturas de `censo`, las de siempre; `ge_verificar`: 0 distintos
+  en todo, también en "matrices y pantalla guardadas".
+- Escena entera de 95,9 a 93,0 s (−3,0 %); peleas −4,5 %, −5,4 % y
+  −3,8 %.
+- En la ventana 4200-4800: 171.296 de las 236.011 llamadas probadas por
+  su caja, saltadas (3,17 M vértices); ciclos de 17.429 a 16.496 M y GE
+  de 8.575 a 7.605 M.
+- Lo que funcionó no es la pantalla: solo 8 llamadas y 2-18 cajas por
+  ventana caen fuera de la pantalla y no de un plano. La ganancia es de
+  `ge_bbox_llamada` con los planos ±w, llamada a llamada.
+- Probar la caja de cada llamada cuesta ~1.030 ms por ventana (~3.200
+  ciclos por llamada, ~0,75 G ciclos) frente a ~1,7 G ciclos de ahorro
+  bruto.
+- Quedan 3.164 objetos sin dibujar nada (1,05 M vértices, 438 ms), casi
+  todos de cajas dudosas que cruzan el plano de la cámara.
+- Huesos: 4,27 M datos por ventana (57,3 % de los comandos), 10 %
+  repetidos, 7,5 % de matrices repetidas, rachas de 36 datos de media.
+
+Plan acordado con el usuario, una versión por punto:
+1. 0.5.23.1: la prueba de cada llamada más barata.
+2. 0.5.23.2: rescatar las llamadas que cruzan el plano de la cámara (la
+   banda de guarda de 4096 y, sin recorte, el rango z de pantalla como
+   restricciones lineales de Q).
+3. 0.5.23.3: las rachas de huesos (0x2B) más baratas en el bucle de
+   comandos.
+4. 0.5.23.4: 1.4 `ge_charolas` y el diseño del IR.
+
 ### Para el siguiente chat (empezar aquí)
 
 Metodología acordada (detalle en `docs/HOJA_DE_RUTA.md`): primero medir

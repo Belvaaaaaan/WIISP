@@ -4,8 +4,8 @@
    escena 1: + textura con paleta (10 comandos, mismos valores)
    escena 2: + 4 huesos y la matriz de mundo (65 comandos, mismos valores)
    escena 3: + 8 huesos
-   escenas 4 a 9: objetos de 4 llamadas con su caja (ver LEEME.md); 7 a 9
-   con el viewport al doble (los planos de +-w fuera del scissor) y 8 y 9
+   escenas 4 a 10: objetos de 4 llamadas con su caja (ver LEEME.md); 7 a 9
+   con el viewport al doble (los planos de +-w fuera del scissor) y 8 a 10
    con vtype 0x11A (sus propios vertices)
    Con LUCES=1 en el entorno, dos luces encendidas (vtype con normal). Con
    prof_estado=1 escribe el censo de estado al final. */
@@ -69,7 +69,7 @@ int main(int argc, char **argv){
 			}
 		if(esc == 5 || esc >= 7){ ge.proj[10] = -51.0f / 49.0f; ge.proj[14] = -100.0f / 49.0f; }
 	}
-	if(esc >= 7){
+	if(esc >= 7 && esc != 10){
 		ge.cmd[GE_VIEWPORTXSCALE] = f24(480); ge.cmd[GE_VIEWPORTYSCALE] = f24(-272);
 		ge.cmd[GE_DEPTHCLAMPENABLE] = esc == 7;
 	}
@@ -81,7 +81,7 @@ int main(int argc, char **argv){
 				int c, q;
 				for(c = 0; c < 3; c++){
 					q = (int)(rnd() % 16384);
-					if(c == 0) q = esc == 8 ? 1638 + q / 3 : 13107 + q * 3 / 16;
+					if(c == 0) q = esc != 9 ? 1638 + q / 3 : 13107 + q * 3 / 16;
 					v[6 + c * 2] = (u8)q;
 					v[7 + c * 2] = (u8)(q >> 8);
 				}
@@ -92,8 +92,9 @@ int main(int argc, char **argv){
 		if(esc >= 4 && i % 4 == 0){
 			static const float m7[12] = { 3.0f, 0.0f, 6.0f, 0.0f, 0.02f, 0.0f, 0.0179f, 0.0f, -0.0089f, -1.0f, 0.0f, 3.0f };
 			static const float m8[12] = { 8.0f, 0.0f, 0.0f, 0.0f, 8.0f, 0.0f, 0.0f, 0.0f, 4.0f, -4.0f, -2.0f, -1.0f };
+			static const float m10[12] = { 24.0f, 0.0f, 0.0f, 0.0f, 8.0f, 0.0f, 0.0f, 0.0f, 4.0f, -12.0f, -2.0f, -1.0f };
 			cmd(GE_WORLDMATRIXNUMBER, 0);
-			if(esc >= 7) for(j = 0; j < 12; j++) cmd(GE_WORLDMATRIXDATA, f24((esc == 7 ? m7 : m8)[j] + (j == 9 ? 0.001f * (float)(i % 64) : 0.0f)));
+			if(esc >= 7) for(j = 0; j < 12; j++) cmd(GE_WORLDMATRIXDATA, f24((esc == 7 ? m7 : esc == 10 ? m10 : m8)[j] + (j == 9 ? 0.001f * (float)(i % 64) : 0.0f)));
 			else for(j = 0; j < 12; j++) cmd(GE_WORLDMATRIXDATA, f24(j == 11 ? (esc == 5 ? -55.0f : 0.0f) : j == 9 ? (esc == 6 ? 30.0f : 0.0f) + 0.001f * (float)(i % 64) : ge.world[j]));
 			cmd(GE_VERTEXTYPE, 0x100);
 			cmd(GE_BASE, 0x080000);

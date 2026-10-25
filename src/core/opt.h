@@ -79,6 +79,8 @@ enum {
 	OPT_GE_BBOX_RAPIDO,   //Arreglo
 	OPT_GE_BBOX_PANTALLA,   //Arreglo
 	OPT_GE_BBOX_LLAMADA,   //Arreglo
+	OPT_GE_BBOX_ORDEN,   //Arreglo
+	OPT_GE_BBOX_AABB,   //Arreglo
 	OPT_GE_ESTADO_SUCIO,  /* 1.4, primera parte: el estado de una llamada de
 	                         dibujo (formato, transformación, rasterizador,
 	                         estado de GX y la preparación de cada
