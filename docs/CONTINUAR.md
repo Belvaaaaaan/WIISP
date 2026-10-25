@@ -2639,6 +2639,110 @@ Plan acordado con el usuario, una versión por punto:
    comandos.
 4. 0.5.23.4: 1.4 `ge_charolas` y el diseño del IR.
 
+### v0.5.23.1: la prueba de cada llamada más barata (`ge_bbox_orden`, `ge_bbox_aabb`)
+
+Punto 1 del plan. En DBZ las llamadas se saltan por los planos ±w (casi
+nunca por la pantalla), y la 0.5.23 calculaba siempre los bordes de la
+pantalla y las máscaras de los 7 planos en las 8 esquinas.
+
+- Banco: escena 10, como DBZ. Es la 8 con el viewport ×1 y una matriz de
+  mundo que deja las llamadas enteras fuera del plano x− (formato 0x11A,
+  20 vértices por llamada). Perfil de la 0.5.23 por llamada: `bb_fuera`
+  2.705 instrucciones (1.768 sin `ge_bbox_pantalla`), la caja de las
+  posiciones ~1.100 (55 por vértice: mínimos y máximos en la pila).
+- `ge_bbox_orden`: el mismo resultado, en este orden:
+  1. Las esquinas, sumando x + y una vez para las dos z (mismo redondeo:
+     `(x + y) + z`).
+  2. La máscara sin margen, completa solo hasta que algún plano deja fuera
+     todas las esquinas vistas. Después, cada esquina solo se compara con
+     esos planos: si sigue fuera de alguno no puede estar dentro, y si
+     ya no, se hace la máscara completa.
+  3. Los bordes de la pantalla, solo para las esquinas sin plano (las que
+     pueden estar dentro). Las demás, solo si hace falta el programa
+     lineal.
+  4. Con un plano sin margen que deja todo fuera, los planos con margen
+     antes que la pantalla, y solo esos (el margen es ≥ 0, así que un
+     plano con margen implica el mismo sin margen). Sin ninguno, los
+     planos con margen no se miran: no pueden dar nada.
+  `bb_fuera_lento` es el de la 0.5.23, sin tocar.
+- `ge_bbox_aabb`: la caja de las posiciones s8 y s16 con los mínimos y
+  máximos en registros, empezando por el primer vértice (con `else if`).
+  Float va por `bb_aabb_lento`, como antes.
+- Censo (`prof_bbox`): la línea de las cajas añade lo que cuesta leer las
+  posiciones de cada llamada, y cuántas llamadas y vértices se leen. Así
+  se reparte en el Wii el coste de la prueba entre la caja y `bb_fuera`.
+
+Banco (instrucciones por llamada, sin el psq_l emulado; sin / con los dos
+interruptores):
+
+| Escena | Sin | Con |
+|---|---|---|
+| 10, como DBZ | 10.371 | 8.388 (−19 %) |
+| 8, llamadas fuera de la pantalla | 10.925 | 10.159 |
+| 9, llamadas dentro | 23.215 | 23.047 |
+| 7 | 8.130 | 8.059 |
+| 4 | 22.313 | 22.313 |
+
+En la 10, `bb_fuera` pasa de 2.705 a 1.210 instrucciones y la caja de
+~1.100 a ~510. La prueba entera, de ~3.900 a ~1.850.
+
+Verificación:
+- `make -f Makefile.pc test` (x86), `test-ppc` y las pruebas con
+  devkitPPC bajo qemu: 166.348 comprobaciones, 0 fallos. Huellas de
+  test_vdec las de siempre: 4D4A1D8B, 0657B177 y B3A2BCD3.
+- `tests/test_bbox.c`: en las pruebas al azar (pantalla, fino, cercano,
+  rara y la nueva), cada ronda se corre una vez más con los dos
+  interruptores al revés, y `ge_stats` entera y la VRAM tienen que salir
+  iguales: 0 rondas distintas. Prueba nueva: cajas detrás de la cámara a
+  menos del margen, con traslaciones grandes que se cancelan (400 cajas,
+  286 probadas).
+- Mutaciones del código nuevo (23):
+  - **Detectadas, 22:** el signo de −c y el bit de w < 0 en la máscara
+    parcial; los bordes sin calcular (tras los planos y sin ellos); los
+    márgenes a 0 (planos, −c, detrás; este último, por la prueba nueva);
+    detrás como plano; −c sin signo; sin los planos z; "dentro" sin un
+    borde; x + y o z cambiados; sin `cruza`; `dentro` siempre; y en la
+    caja, sin el máximo z, sin el último vértice, y leída del offset de
+    x, s8 /256, sin el mínimo y, y sin signo.
+  - **No detectada, 1:** quitar `q0`, que solo es un atajo. El programa
+    lineal de después da lo mismo (equivalente).
+- pspautotests 275/275; tests/guest 22/22.
+- A/B en las 572 (exacto y MR) de `ge_bbox_orden`, de `ge_bbox_aabb`, de
+  los dos y de los dos sin `ge_bbox_pantalla`. Salen distintos `malloc`,
+  savedata, `io/file`, `io/stat` y `gpu/complex`. Esos cinco también
+  cambian con el mismo binario y las mismas opciones (comprobado tres
+  veces en exacto y en MR): no son de esta versión.
+- A/B del renderizador de GX bajo qemu en las 110 de `gpu/` (exacto y MR):
+  solo `gpu/complex`, como siempre.
+- La 0.5.23 contra la 0.5.23.1 con todo encendido (dos `wiisp-cli-gx`):
+  555 programas, 0 distintos.
+- `ge_verificar` en las 110 de `gpu/`, en exacto y MR: 0 líneas `[VERIF]`.
+- Recarga con ASan (las 572 tres veces seguidas en el mismo proceso):
+  la primera vez, 1 de 572 con 336 bytes más en la tercera vuelta
+  (`threads/scheduling/syscallkinds`, justo cuando se llenó el disco del
+  entorno); sola, 5 de 5 bien, y la recarga entera otra vez, 0 con
+  problemas.
+- Compilación para el Wii: `wiisp.dol` 0.5.23.1.
+
+Autotest (4 registros y un `.capturas.txt`; todas con `prof_pmc`,
+`prof_tirones`, `prof_ventana_juego`, `ventana 600` y `ge_bbox_pantalla`
+y `ge_bbox_llamada` encendidos):
+- sin: `ge_bbox_orden` y `ge_bbox_aabb` a 0 (como la 0.5.23);
+- con: los dos a 1;
+- nopant: con, y `ge_bbox_pantalla` a 0 (¿aporta algo en DBZ?);
+- censo: con, y `prof_bbox` y `capturas 400`.
+Sin verif: el resultado es el mismo bit a bit que el de la 0.5.23 (lo
+comprueban las pruebas ronda a ronda), y la 0.5.23 dio 0 distintos con
+`ge_verificar`.
+
+Qué mirar:
+- con frente a sin (`ventanas.py`): velocidad de las peleas (la prueba
+  costaba ~1.030 ms por ventana);
+- nopant frente a con: si `ge_bbox_pantalla` no gana nada, se puede
+  apagar;
+- censo: las 12 capturas de siempre, los ms de probar la caja de cada
+  llamada y cuánto de eso es leer las posiciones.
+
 ### Para el siguiente chat (empezar aquí)
 
 Metodología acordada (detalle en `docs/HOJA_DE_RUTA.md`): primero medir
@@ -2660,22 +2764,24 @@ Metodología acordada (detalle en `docs/HOJA_DE_RUTA.md`): primero medir
   retornos simulada y `prof_vertices` (0.5.19.1), 1.2c
   `ge_pantalla_rapida` (0.5.20), el censo `prof_bbox` y `ge_cmd_puntero`
   (0.5.21), 1.3 a `ge_bbox_rapido`, 1.3 b `ge_bbox`, `ge_cmd_matrices` y
-  el censo `prof_comandos` (0.5.22) y 1.3 c `ge_bbox_pantalla`, 1.3 d
-  `ge_bbox_llamada` y el censo `prof_huesos` (0.5.23).
+  el censo `prof_comandos` (0.5.22), 1.3 c `ge_bbox_pantalla`, 1.3 d
+  `ge_bbox_llamada` y el censo `prof_huesos` (0.5.23) y la prueba de cada
+  llamada más barata (`ge_bbox_orden`, `ge_bbox_aabb`, 0.5.23.1).
 - Herramientas para medir sin el Wii (banco de qemu con el código de
   devkitPPC, perfil por función, psq_l emulado, A/B) y para leer los
   registros del Wii (`ventanas.py`): `tools/banco/LEEME.md`. El entorno
   (devkitPPC, qemu, pspautotests, PPSSPP): `tools/setup_entorno.sh`.
-- **Siguiente:** leer los registros de la 0.5.23 (`ventanas.py sin=...
-  con=... verif=... censo=...`):
-  - con frente a sin: velocidad, cajas fuera de la pantalla y llamadas
-    probadas y saltadas por su caja;
-  - verif: 0 distintos en todas las líneas, también "matrices y pantalla
-    guardadas";
-  - censo: las 12 capturas, cuánto queda de los objetos que no dibujan
-    nada y de qué clase (en la 0.5.22, 290-840 ms por ventana), los ms de
-    probar la caja de cada llamada y la línea de los huesos (decide si
-    vale un atajo para las rachas de 0x2B).
+- **Siguiente:** leer los registros de la 0.5.23.1 (`ventanas.py sin=...
+  con=... nopant=... censo=...`):
+  - con frente a sin: velocidad de las peleas;
+  - nopant frente a con: si `ge_bbox_pantalla` aporta algo en DBZ;
+  - censo: las 12 capturas, los ms de probar la caja de cada llamada y
+    cuánto es leer las posiciones.
+  Después, el punto 2 (0.5.23.2): rescatar las llamadas que cruzan el
+  plano de la cámara (banda de guarda de 4096 y, sin recorte, el rango z
+  de pantalla en Q; hace falta un programa lineal más general). Luego el
+  3 (0.5.23.3, rachas de huesos) y el 4 (0.5.23.4, `ge_charolas` y el
+  diseño del IR). Lo que sigue es de antes de la 0.5.23:
   Si la prueba de cada llamada cuesta más de lo que salta, se apaga
   `ge_bbox_llamada` (su interruptor) o se limita a las cajas dudosas
   grandes. Después, 1.4 `ge_charolas` (juntar llamadas: lo que queda

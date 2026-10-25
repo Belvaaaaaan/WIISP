@@ -63,7 +63,9 @@ volver a medir tras cada paso.
     0.5.21, el censo de 1.3 (`prof_bbox`) y `ge_cmd_puntero`; en la
     0.5.22, 1.3 a (`ge_bbox_rapido`), 1.3 b (`ge_bbox`) y
     `ge_cmd_matrices`; en la 0.5.23, 1.3 c (`ge_bbox_pantalla`), 1.3 d
-    (`ge_bbox_llamada`) y el censo `prof_huesos`. Falta 1.4.
+    (`ge_bbox_llamada`) y el censo `prof_huesos`; en la 0.5.23.1, la
+    prueba de cada llamada más barata (`ge_bbox_orden`, `ge_bbox_aabb`).
+    Falta 1.4.
 11. Decidir el diseño del IR y hacer 2.2 y 2.3 como IR, junto con 2.5
     (BAT). Las fases 3, 4 y 5 vienen después.
 
@@ -287,6 +289,18 @@ fuera dentro de una caja que se ve, de 22165 a 11088; las que se ven,
 +260 por llamada. Pendiente, sin arreglar: un vértice con la pantalla en
 NaN no se marca como fuera de rango (`round_to_screen`). Detalle en
 docs/CONTINUAR.md.
+
+Hecha (v0.5.23.1): la prueba de cada llamada más barata, con el mismo
+resultado. `ge_bbox_orden`: los planos ±w antes que la pantalla, cada
+esquina solo contra los planos que siguen dejando todo fuera, y los bordes
+de la pantalla solo cuando hacen falta. `ge_bbox_aabb`: la caja de las
+posiciones en registros. Banco de qemu, llamadas enteras fuera de un
+plano (como DBZ): de 10371 a 8388 instrucciones por llamada; la prueba,
+de ~3900 a ~1850. Idéntica (cada ronda de las pruebas al azar, con y sin
+los dos interruptores; 23 mutaciones, 22 detectadas y una equivalente;
+A/B; la 0.5.23 contra la 0.5.23.1). Siguen, por este orden: 0.5.23.2
+(llamadas que cruzan el plano de la cámara), 0.5.23.3 (rachas de huesos)
+y 0.5.23.4 (1.4 y el diseño del IR).
 
 Primera tanda acordada (todas "más barato", verificables en el PC):
 0.1 `prof_espera`, **skinning rápido** (`ge_skin_rapido`), **matrices al

@@ -5,6 +5,37 @@ la 0.5.17.2; antes se marcaban con `//arreglo`). Aquí va, por versión, qué
 se arregló o cambió y una descripción breve. El detalle está en
 `docs/CONTINUAR.md`.
 
+## 0.5.23.1
+
+- `gpu/ge_vertex.c`: `ge_bbox_orden` (encendido). La prueba exacta de una
+  caja (`bb_fuera`) da lo mismo con menos cuentas:
+  - las esquinas suman primero x + y y luego z (el mismo redondeo);
+  - mientras algún plano sin margen deja fuera todas las esquinas, cada
+    esquina nueva solo se compara con esos planos (si sigue fuera de
+    alguno, no puede estar dentro);
+  - los bordes de la pantalla se calculan solo para las esquinas que
+    pueden estar dentro o cuando hace falta el programa lineal;
+  - con un plano que deja fuera las 8 esquinas sin margen, los planos
+    con margen se miran antes que la pantalla, y solo esos;
+  - sin ninguno, los planos con margen no se miran (no pueden dar nada).
+  El camino de la 0.5.23 queda como `bb_fuera_lento`.
+- `gpu/ge_vertex.c`: `ge_bbox_aabb` (encendido). La caja de las
+  posiciones de cada llamada (s8 y s16) con los mínimos y máximos en
+  registros; float, como antes. El camino de la 0.5.23 queda como
+  `bb_aabb_lento`.
+- `gpu/ge.c`, `gpu/ge.h`: el censo de cajas (`prof_bbox`) separa lo que
+  cuesta leer las posiciones de cada llamada, y cuántas llamadas y
+  vértices se leen.
+- `core/opt.h`, `core/opt.c`: `ge_bbox_orden` y `ge_bbox_aabb`.
+- `tests/test_bbox.c`: en las pruebas al azar, cada ronda se corre otra vez
+  con los dos interruptores al revés y todas las cuentas (`ge_stats`
+  entera) y la imagen tienen que salir iguales. Prueba nueva: cajas
+  detrás de la cámara a menos del margen (traslaciones grandes que se
+  cancelan).
+- `tools/banco/bench_lista.c`: escena 10, como DBZ: llamadas enteras fuera
+  del plano x− con el viewport ×1.
+- `hle/hle.h`, `dist/apps/wiisp/meta.xml`: versión 0.5.23.1.
+
 ## 0.5.23
 
 - `gpu/ge_vertex.c`: `ge_bbox_pantalla` (encendido, 1.3 c). La prueba

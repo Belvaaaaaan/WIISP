@@ -30,7 +30,9 @@ al repositorio), `gcc-powerpc-linux-gnu` y `qemu-user`. Las salidas van a
   profundidad (las salta `ge_bbox_pantalla`); 8 = una caja grande que se
   ve con las llamadas fuera de la pantalla y dentro de ±w (las salta
   `ge_bbox_llamada`); 9 = la misma con las llamadas dentro (lo que cuesta
-  probar la caja de cada llamada). `LUCES=1` enciende dos luces; con `prof_estado=1` escribe el
+  probar la caja de cada llamada); 10 (viewport ×1, vértices 0x11A) = las
+  llamadas de una caja que se ve, enteras fuera del plano x− (como DBZ).
+  `LUCES=1` enciende dos luces; con `prof_estado=1` escribe el
   censo de estado; al final, una línea con las cuentas de `ge_bbox`. Corre
   la lista con el mismo bucle que `process_dl_queue_body` (con y sin
   `ge_cmd_puntero`). Leer y ejecutar los comandos por llamada (bucle,
@@ -49,6 +51,9 @@ al repositorio), `gcc-powerpc-linux-gnu` y `qemu-user`. Las salidas van a
   `ge_bbox_pantalla` / con `ge_bbox_llamada` / con los dos: 4: 29262 /
   29198 / 29457 / 29520; 7: 144723 / 8374 / 145799 / 8374; 8: 22165 /
   22602 / 22850 / 11088; 9: 29203 / 29640 / 29399 / 30382.
+  0.5.23.1, total menos `on_sigill`, `__scalbn` y `ldexp`, sin / con
+  `ge_bbox_orden` y `ge_bbox_aabb`: 4: 22313 / 22313; 7: 8130 / 8059; 8:
+  10925 / 10159; 9: 23215 / 23047; 10: 10371 / 8388.
 - `qprof.py`: instrucciones PowerPC por función (y por unidad) a partir de
   `qemu-ppc -d in_asm,exec,nochain -D grande.log` menos una corrida corta:
   `qprof.py grande.log corta.log UNIDADES [FUNCIONES]` (lista las 25 que
