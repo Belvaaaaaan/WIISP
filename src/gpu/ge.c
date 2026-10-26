@@ -774,7 +774,7 @@ void ge_load_clut(u32 blocks){
 		ge_stats.cs_paletas_igual += igual;
 	}
 	ge.clut_bytes = bytes;
-	ge.clut_gen++;
+	if(!igual || !opt_on[OPT_GE_CLUT_IGUAL]) ge.clut_gen++;   //Arreglo
 }
 
 

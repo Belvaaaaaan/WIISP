@@ -106,7 +106,7 @@ int main(int argc, char **argv){
 				tex = k < 3 ? TEX_A : k < 6 ? TEX_B : k < 9 ? TEX_V1 : TEX_V2;
 				cmd(GE_TEXADDR0, tex & 0xFFFFFF); cmd(GE_TEXBUFWIDTH0, 64 | ((tex >> 8) & 0x0F0000)); cmd(GE_TEXFLUSH, 0);
 				break;
-			case 6: k = (int)rn(2); cmd(GE_CLUTADDR, (k ? CLUT_1 : CLUT_2) & 0xFFFFFF); cmd(GE_LOADCLUT, 8); break;
+			case 6: k = (int)rn(2); cmd(GE_CLUTADDR, (k ? CLUT_1 : CLUT_2) & 0xFFFFFF); cmd(GE_LOADCLUT, rn(3) ? 8 : 4); break;
 			case 7: cmd(GE_SHADEMODE, rn(2)); break;
 			case 8: cmd(GE_ALPHABLENDENABLE, rn(2)); cmd(GE_BLENDMODE, rn(11) | (rn(11) << 4)); break;
 			case 9: cmd(GE_ALPHATESTENABLE, rn(2)); break;
@@ -114,7 +114,7 @@ int main(int argc, char **argv){
 			case 11: cmd(GE_TEXFUNC, rn(5)); break;
 			case 12: cmd(GE_ZTESTENABLE, rn(2)); break;
 			case 13: cmd(GE_FRAMEBUFPIXFORMAT, rn(4)); break;
-			case 14: cmd(GE_LOADCLUT, 8); break;
+			case 14: cmd(GE_LOADCLUT, rn(3) ? 8 : 4); break;   /* la misma paleta o la mitad */
 			case 15: cmd(GE_TEXFORMAT, rn(2) ? 5 : 3); break;
 			case 16: cmd(GE_FRAMEBUFWIDTH, rn(2) ? 512 : 480); break;
 			case 17: k = (int)rn(2); cmd(GE_MASKRGB, k ? 0xFFFFFF : 0); cmd(GE_ZWRITEDISABLE, (u32)k); break;   /* sin dibujar nada */
@@ -154,7 +154,11 @@ int main(int argc, char **argv){
 			case 1: { u8 *t = mem_ptr(TEX_B + rn(0x1000), 4); t[0] ^= 0x33; } break;
 			case 2: ge_sync_domain++; break;
 			case 3: mem_note_write_all(); break;
-			case 4: { u8 *t = mem_ptr(CLUT_2 + rn(0x400), 4); t[0] ^= 0x11; mem_note_write(CLUT_2, 0x400); } break;
+			case 4: {   /* una paleta, dentro de lo que se carga, con aviso */
+				u32 c = rn(2) ? CLUT_1 : CLUT_2;
+				u8 *t = mem_ptr(c + rn(0x100), 4);
+				t[0] ^= 0x11; mem_note_write(c, 0x400);
+			} break;
 			case 5: case 6: {   /* la textura en uso, sin aviso (en todo su tamaño); a veces con otro periodo */
 				u8 *q = mem_ptr(tt, 0x1000);
 				for(j = 0; j < 0x1000; j += 64) q[j + (int)rn(64)] ^= 0x5A;

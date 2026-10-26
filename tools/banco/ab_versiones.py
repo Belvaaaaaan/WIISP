@@ -8,12 +8,14 @@ Las de savedata no entran (comparten la carpeta de partidas). Para ver en
 qué dibujo y en qué función empiezan a ser distintas: GX_TRAZA=1 (ver
 stub_estado.c) con un programa y diff de lo que sale por stderr.
 
-    ab_versiones.py CLI_GX_A CLI_GX_B PSPAUTOTESTS LISTA [hilos] [--a OPCION=V]... [--b OPCION=V]... [--fifo]
+    ab_versiones.py CLI_GX_A CLI_GX_B PSPAUTOTESTS LISTA [hilos] [--a OPCION=V]... [--b OPCION=V]... [--fifo | --sin-fifo]
 
 --a/--b: interruptores para cada lado (el mismo CLI con --opt distintos
 sirve para un A/B de un interruptor del renderizador de GX). --fifo: de la
 línea [GX] solo cuenta la huella del FIFO (los triángulos con su estado,
 igual con un GX_Begin por triángulo o uno para muchos: ge_charolas_envio).
+--sin-fifo: de la línea [GX] se quita la huella del FIFO (para comparar con
+un CLI de antes de la 0.5.23.4, que no la escribe).
 
 SPDX-License-Identifier: GPL-2.0-or-later
 """
@@ -23,6 +25,8 @@ args = sys.argv[1:]
 opts = {'--a': [], '--b': []}
 fifo = '--fifo' in args
 if fifo: args.remove('--fifo')
+sin_fifo = '--sin-fifo' in args
+if sin_fifo: args.remove('--sin-fifo')
 for k in ('--a', '--b'):
     while k in args:
         i = args.index(k); opts[k] += ['--opt', args[i + 1]]; del args[i:i + 2]
@@ -36,6 +40,7 @@ def run(cli, t, extra):
                        extra + [str(root / 'tests' / (t + '.prx'))], capture_output=True, timeout=1200)
     out = r.stdout
     if fifo: out = re.sub(rb'\[GX\] [^;]*; ', b'[GX] ', out)
+    if sin_fifo: out = re.sub(rb'(\[GX\] [^;\n]*); FIFO[^\n]*', rb'\1', out)
     return out
 
 

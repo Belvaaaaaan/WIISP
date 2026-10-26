@@ -17,8 +17,9 @@ se arregló o cambió y una descripción breve. El detalle está en
   textura y todos sus niveles en la RAM. Sigue si no subió
   `ge_raster_gen`, ni `clut_gen`, ni hay marcas del grupo nuevo de destinos
   (ver `ge.c`). La corta todo lo que ya quitaba `tri_listo` o marcaba los
-  destinos o el estado de GX (VRAM, presentar, `set_pf`, copias, sprites,
-  líneas, puntos, borrados, vuelta a la CPU de las paletas, reiniciar).
+  destinos o el estado de GX (VRAM, presentar, `set_pf`, copias, líneas,
+  puntos, borrados, vuelta a la CPU de las paletas, reiniciar; los sprites,
+  solo sin `ge_charolas_sprites`).
   - La textura se vuelve a buscar en el primer triángulo de la llamada,
     como en el camino de siempre: con `tc_again` (la misma comprobación que
     `tc_lookup` sobre la entrada que ya era la buena) o, si desde la última
@@ -29,6 +30,12 @@ se arregló o cambió y una descripción breve. El detalle está en
     seguido la charola, se compara lo que deja `setup_targets` con lo
     guardado, que la textura salga de una búsqueda rápida, que el estado de
     GX no haga falta emitirlo y, si el estado estaba listo, que lo siga.
+- `wii/gx_ge.c`: `ge_charolas_sprites` (encendido). Los sprites ya no
+  cortan la charola y la apuntan como los triángulos: una llamada de
+  sprites sigue a la anterior (de sprites o de triángulos) con su misma
+  clave. La textura pendiente se comprueba en el primer sprite que dibuja
+  (después de descartar los de ancho o alto cero, que no buscan textura en
+  el camino de siempre). Sin el interruptor, como antes.
 - `gpu/ge_raster.c`, `gpu/ge_vertex.c`, `wii/gx_ge.c`:
   `ge_charolas_envio` (encendido). Los triángulos aceptados de una llamada
   (con los vértices en el caché de la llamada, para que los punteros sigan
@@ -57,17 +64,24 @@ se arregló o cambió y una descripción breve. El detalle está en
 - `hle/hle.c`, `gpu/ge.h`: líneas `[TIEMPOS] Charolas`, `Envio por
   charolas` y `Verificacion de las charolas`.
 - `core/opt.h`, `core/opt.c`: `ge_charolas` (estaba reservado),
-  `ge_charolas_envio`, `ge_charolas_tiras` y `ge_charolas_ge`.
+  `ge_charolas_sprites`, `ge_charolas_envio`, `ge_charolas_tiras` y
+  `ge_charolas_ge`.
 - `tests/test_vdec.c`: el renderizador que lo apunta todo recibe también
   las tandas; vueltas nuevas sin el envío por charolas y sin las tiras,
   iguales a la referencia y entre sí (contadores incluidos).
 - `tools/banco/bench_charolas.c` y `banco_charolas.sh`: listas al azar con
   cambios entre llamadas y entre tramos (lo que haría la CPU), corridas con
-  y sin los interruptores sobre la libogc que guarda el estado.
+  y sin los interruptores sobre la libogc que guarda el estado. Texturas en
+  la RAM y en la VRAM (dentro y fuera de un búfer en el que se dibuja; la
+  del principio, al azar), llamadas que no dibujan nada (máscara de color
+  entera y sin escribir profundidad), sprites de ancho cero y escrituras
+  sin aviso en la textura en uso (a veces con otro periodo).
   `stub_estado.c`: huella del FIFO (cada triángulo con el estado de su
   `GX_Begin`; igual con uno por triángulo o uno para muchos), con
   `gx_ge.c` compilado con `-DWIISP_FIFO_TRAZA`. `ab_versiones.py`: `--a`,
-  `--b` y `--fifo`. `bench_lista.c`: escena 11, como una pelea de DBZ.
+  `--b`, `--fifo` y `--sin-fifo` (contra un CLI de antes de la huella del
+  FIFO). `bench_lista.c`: escena 11, como una pelea de DBZ, y 12, sprites
+  en 2D de uno en uno.
   `mutar_gx.py`: mutaciones de GX contra el banco de las charolas.
   `build_tests_dkp.sh`: también `ge_raster.c`.
 - `tests/test_bbox.c`, `test_censo.c`, `test_listas.c` y `frontend/app.c`: el miembro nuevo

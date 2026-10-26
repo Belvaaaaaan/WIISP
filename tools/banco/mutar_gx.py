@@ -31,7 +31,7 @@ DKP_OBJ = {
     'src/gpu/ge.c': ('bench_cmd.o', 'tools/banco/bench_cmd.c', []),
 }
 CAMBIOS = (3, 5, 10, 40)
-APAGADO = ['ge_charolas=0', 'ge_charolas_envio=0', 'ge_charolas_ge=0', 'ge_charolas_tiras=0', 'ge_charolas_sprites=0']
+APAGADO = ['ge_charolas=0', 'ge_charolas_envio=0', 'ge_charolas_ge=0', 'ge_charolas_tiras=0', 'ge_charolas_sprites=0', 'ge_clut_igual=0']
 
 def ppc_fuentes():
     pat = ['src/core/*.c', 'src/loader/*.c', 'src/cpu/*.c', 'src/hle/*.c', 'src/gpu/*.c']
@@ -67,7 +67,8 @@ def salida(binario, semilla, cambios, opts, limite):
     except subprocess.TimeoutExpired:
         return None
     if r.returncode: return 'termina con %d' % r.returncode
-    return re.sub(r'^\[GX\] [^;]*; ', '[GX] ', r.stdout, flags=re.M)
+    out = re.sub(r'^\[GX\] [^;]*; ', '[GX] ', r.stdout, flags=re.M)
+    return re.sub(r', [0-9]+ paletas;', ';', out)   # lo que ahorra ge_clut_igual
 
 def main():
     args = sys.argv[1:]

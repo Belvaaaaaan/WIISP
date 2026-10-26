@@ -222,3 +222,31 @@
 >>>
 	ok = prepare(0);
 ===
+=== clut igual: sin mirar el tamano
+@ src/gpu/ge.c
+<<<
+	int igual = bytes == ge.clut_bytes;
+>>>
+	int igual = 1;
+===
+=== clut igual: sin comparar los bytes
+@ src/gpu/ge.c
+<<<
+			if(igual && memcmp(ge.clut + off, p, 16)) igual = 0;
+>>>
+			(void)0;
+===
+=== clut igual: siempre
+@ src/gpu/ge.c
+<<<
+	if(!igual || !opt_on[OPT_GE_CLUT_IGUAL]) ge.clut_gen++;   //Arreglo
+>>>
+	if(!opt_on[OPT_GE_CLUT_IGUAL]) ge.clut_gen++;   //Arreglo
+===
+=== clut igual: comparar solo la primera fila
+@ src/gpu/ge.c
+<<<
+			if(igual && memcmp(ge.clut + off, p, 16)) igual = 0;
+>>>
+			if(igual && off == 0 && memcmp(ge.clut + off, p, 16)) igual = 0;
+===

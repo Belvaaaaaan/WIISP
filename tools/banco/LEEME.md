@@ -79,7 +79,11 @@ al repositorio), `gcc-powerpc-linux-gnu` y `qemu-user`. Las salidas van a
   cambios entre llamadas (destinos, máscaras, LIGHTMODE, textura, paleta,
   sombreado, mezcla, tipo de vértice, primitiva; `CAMBIOS=N` en el entorno:
   N % de llamadas con algún cambio) y entre tramos de la lista (textura
-  escrita con y sin aviso, periodo nuevo, aviso de vaciar la caché).
+  escrita con y sin aviso, la que está en uso sin aviso y a veces con otro
+  periodo, periodo nuevo, aviso de vaciar la caché). Texturas en la RAM y
+  en la VRAM (dentro y fuera de un búfer en el que se dibuja; la del
+  principio, al azar por semilla), llamadas que no dibujan (máscara de
+  color entera y sin escribir profundidad) y sprites de ancho cero.
   Compara la huella del estado de GX, la del FIFO, los contadores del GE y
   los de la caché de texturas entre dos juegos de interruptores (`fifo`:
   sin el número de `GX_Begin`, para `ge_charolas_envio`). Encontró un
@@ -94,10 +98,16 @@ al repositorio), `gcc-powerpc-linux-gnu` y `qemu-user`. Las salidas van a
   `ge_raster.c`, `ge.c`) contra el banco de las charolas: recompila solo el
   archivo mutado (con devkitPPC o con el gcc de PowerPC), enlaza
   `bench_charolas` y lo compara, semilla a semilla, con el banco sin mutar
-  y las charolas apagadas (el camino de siempre).
+  y las charolas apagadas (el camino de siempre), con `CAMBIOS` 3, 5, 10 y
+  40 (40 casos con `--semillas 10`, ~3 min con 2 hilos).
 - `bench_lista` escena 11: como una pelea de DBZ (4 huesos y la matriz de
-  mundo en cada llamada, la textura una sola vez). 0.5.23.4, instrucciones
-  por llamada (total con el psq_l emulado), 0xC301: ver CONTINUAR.
+  mundo en cada llamada, la textura una sola vez); escena 12 (vtype 0):
+  sprites en 2D de uno en uno con la textura una sola vez (un juego 2D, el
+  texto). Instrucciones por llamada de la 0.5.23.4: ver CONTINUAR.
+  Ojo al medir: el número de argumentos cambia la alineación de la pila y
+  con ella lo que cuestan algunas copias (escena 12: 2.798 sin argumentos,
+  2.778 con cualquiera); para comparar, pasar siempre los mismos
+  interruptores, con su valor.
 - `qprof.py`: instrucciones PowerPC por función (y por unidad) a partir de
   `qemu-ppc -d in_asm,exec,nochain -D grande.log` menos una corrida corta:
   `qprof.py grande.log corta.log UNIDADES [FUNCIONES]` (lista las 25 que
@@ -127,7 +137,8 @@ al repositorio), `gcc-powerpc-linux-gnu` y `qemu-user`. Las salidas van a
 - `ab_versiones.py`: dos `wiisp-cli-gx` (por ejemplo del commit anterior,
   con `git worktree`) en las pspautotests: misma salida y misma huella de
   GX. Con `--a OPCION=V` y `--b OPCION=V`, el mismo CLI con interruptores
-  distintos; con `--fifo`, de la línea `[GX]` solo la huella del FIFO. `gpu/exact/pixel` lee memoria que la GPU de mentira no escribe (los
+  distintos; con `--fifo`, de la línea `[GX]` solo la huella del FIFO; con
+  `--sin-fifo`, sin ella (contra un CLI de antes de la 0.5.23.4). `gpu/exact/pixel` lee memoria que la GPU de mentira no escribe (los
   destinos de `GX_CopyTex`/`GX_CopyDisp`): desde la 0.5.23.2 el script
   corre qemu con `MALLOC_PERTURB_=165` y sale igual en las dos.
 - `gevert.sh DIR_BANCO [opcion=valor...]`: instrucciones por vértice
