@@ -256,7 +256,7 @@ static void write_case_data(const Case *c){
 
 static size_t cap_draws;   /* lo capturado antes de los vértices inmediatos */
 static int pantalla_off;   //Arreglo
-static int envio_off;   //Arreglo
+static int envio_off, tiras_off;   //Arreglo
 
 /* opt: los interruptores de los vértices; ens: ge_ensamblar_rapido */
 static void run_case(const Case *c, int opt, int ens, GeStats *st){
@@ -274,6 +274,8 @@ static void run_case(const Case *c, int opt, int ens, GeStats *st){
 	opt_on[OPT_GE_ENSAMBLAR] = (u8)ens;
 	opt_on[OPT_GE_PANTALLA_RAPIDA] = (u8)(opt && !pantalla_off);   //Arreglo
 	opt_on[OPT_GE_CHAROLAS_ENVIO] = (u8)!envio_off;   //Arreglo
+	opt_on[OPT_GE_CHAROLAS_GE] = (u8)(opt && !envio_off);   //Arreglo
+	opt_on[OPT_GE_CHAROLAS_TIRAS] = (u8)!tiras_off;   //Arreglo
 	memset(&ge_stats, 0, sizeof(ge_stats));
 	cap_n = 0;
 	for(k = 0; k < 3; k++){
@@ -472,7 +474,7 @@ void test_vdec(void){
 	ge_fast_math = 1;
 	opt_on[OPT_GE_SKIN_RAPIDO] = 1;
 	for(n = 0; n < 3000; n++){
-		GeStats sa, sb, sc, sd, se;   //Arreglo
+		GeStats sa, sb, sc, sd, se, sf;   //Arreglo
 		int k;
 		random_case(&c);
 		random_imm(&c);
@@ -489,13 +491,14 @@ void test_vdec(void){
 		   ge_ensamblar_rapido, que no cambia ni los contadores (ge_tri_rapido
 		   cuenta como fuera de pantalla algunos que el camino viejo contaba
 		   como de espaldas) */
-		for(k = 0; k < 4; k++){   //Arreglo
-			GeStats *sb_k = k == 3 ? &se : k == 2 ? &sd : k ? &sc : &sb;   //Arreglo
+		for(k = 0; k < 5; k++){   //Arreglo
+			GeStats *sb_k = k == 4 ? &sf : k == 3 ? &se : k == 2 ? &sd : k ? &sc : &sb;   //Arreglo
 			pantalla_off = k == 2;   //Arreglo
 			envio_off = k == 3;   //Arreglo
+			tiras_off = k == 4;   //Arreglo
 			run_case(&c, 1, k != 0, sb_k);   //Arreglo
 			pantalla_off = 0;   //Arreglo
-			envio_off = 0;   //Arreglo
+			envio_off = tiras_off = 0;   //Arreglo
 			if(k == 1) total_prims += (int)sc.primitives;   //Arreglo
 			if(an == cap_n && !memcmp(a, cap, an * sizeof(u32)) && sa.vertices == sb_k->vertices &&
 			   sa.vertex_reads == sb_k->vertex_reads && sa.tris == sb_k->tris && sa.tris_drawn == sb_k->tris_drawn &&
@@ -512,7 +515,8 @@ void test_vdec(void){
 				       (unsigned)i, (unsigned)an, (unsigned)cap_n);
 			}
 		}
-		if(memcmp(&sb, &sc, sizeof(sb)) || memcmp(&sc, &sd, sizeof(sc)) || memcmp(&sc, &se, sizeof(sc))) ens_bad++;   //Arreglo
+		if(memcmp(&sb, &sc, sizeof(sb)) || memcmp(&sc, &sd, sizeof(sc)) || memcmp(&sc, &se, sizeof(sc)) || memcmp(&sc, &sf, sizeof(sc)))   //Arreglo
+			ens_bad++;   //Arreglo
 	}
 	printf("  ge_charolas_envio: %u tandas de triangulos con %u triangulos\n", (unsigned)cap_lotes, (unsigned)cap_lote_tris);   //Arreglo
 	CHECK(cap_lote_tris > 3000);   //Arreglo

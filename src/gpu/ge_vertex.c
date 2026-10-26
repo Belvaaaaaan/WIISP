@@ -2045,7 +2045,13 @@ static void vsource_batch(VSource *s, int count){
 
 static void vsource_init(VSource *s, const VFormat *f, u32 vaddr, u32 iaddr, int count){
 	int i;
-	memset(s, 0, sizeof(*s));
+	if(opt_on[OPT_GE_CHAROLAS_GE]){   //Arreglo
+		s->use_cache = s->zero = s->batch = 0;   //Arreglo
+		s->lower = 0;   //Arreglo
+		s->list = NULL;   //Arreglo
+		s->idx_list = NULL;   //Arreglo
+		s->cache = NULL;   //Arreglo
+	} else memset(s, 0, sizeof(*s));   //Arreglo
 	s->f = f;
 	s->vaddr = vaddr;
 	s->iaddr = iaddr;
@@ -2081,6 +2087,66 @@ static void submit_primitive(const VSource *vr, u32 prim_type, int vertex_count)
 	int phase = prof_ge_enter(GEF_ENSAMBLAR);
 	submit_primitive_body(vr, prim_type, vertex_count);
 	prof_ge_leave(phase);
+}
+
+static void __attribute__((noinline)) tira_verif(const GeClipVertex *v0, const GeClipVertex *v1, const GeClipVertex *v2, int r,   //Arreglo
+                                                    int recorta){
+	int flags = ge_tri_flags, mask = 0, ref;
+	ref = triangle_rejected(v0, v1, v2, &mask);
+	ge_tri_flags = flags;
+	verif_tris++;
+	if(ref == r && (!ref && mask != 0) == recorta) return;
+	verif_tris_bad++;
+	if(verif_tris_logged++ < 24)
+		hle_log_quiet("[VERIF] tira en charola: descarte %d/%d recorte %d/%d (banderas %03X %03X %03X)\n", ref, r, !ref && mask != 0,
+		              recorta, (unsigned)v0->v.clip_flags, (unsigned)v1->v.clip_flags, (unsigned)v2->v.clip_flags);
+}
+
+static void tira_charola(const VSource *vr, const GeClipVertex **w, int start, int vertex_count){   //Arreglo
+	const int through = ge_through(), depth_clip = ge.cmd[GE_DEPTHCLAMPENABLE] & 1, plano = !(ge.cmd[GE_SHADEMODE] & 1);
+	const u32 fuera_todos = cull_xy ? GE_CF_XP | GE_CF_XN | GE_CF_YP | GE_CF_YN | GE_CF_ZP | GE_CF_ZN : GE_CF_ZP | GE_CF_ZN;
+	const u32 m = GE_CF_OUTSIDE | GE_CF_NEAR;
+	const int verif = opt_on[OPT_GE_VERIF];
+	u32 tris = 0, dibujados = 0, fuera = 0, espaldas = 0;
+	int vtx, flags = ge_tri_flags;
+	for(vtx = start; vtx < vertex_count; vtx++){
+		int provoking = (data_index_++) % 3, wind = (data_index_ - 1) % 2, sign;
+		const GeClipVertex *v0, *v1, *v2;
+		w[provoking] = vsource_ref(vr, vtx, &data_[provoking], 1);
+		v0 = w[0]; v1 = w[1]; v2 = w[2];
+		if(!through){
+			u32 f0 = v0->v.clip_flags, f1 = v1->v.clip_flags, f2 = v2->v.clip_flags, any = f0 | f1 | f2, all = f0 & f1 & f2;
+			if(((any & GE_CF_OUTSIDE) && (!depth_clip || (f0 & m) == GE_CF_OUTSIDE || (f1 & m) == GE_CF_OUTSIDE ||
+			                               (f2 & m) == GE_CF_OUTSIDE)) || (all & GE_CF_WNEG) || (all & fuera_todos) ||
+			   (!depth_clip && !(all & GE_CF_WPOS))){
+				if(verif) tira_verif(v0, v1, v2, 1, 0);
+				tris++;
+				fuera++;
+				flags = GE_TRI_OUTSIDE;
+				continue;
+			}
+			if(depth_clip && (any & GE_CF_NEAR)){
+				if(verif) tira_verif(v0, v1, v2, 0, 1);
+				ge_stats.tris += tris; ge_stats.tris_cull_off += tris; ge_stats.tris_drawn += dibujados;
+				ge_stats.tris_outside += fuera; ge_stats.tris_back += espaldas;
+				tris = dibujados = fuera = espaldas = 0;
+				send_triangle(CULL_OFF, w, provoking, wind != 0);
+				flags = ge_tri_flags;
+				continue;
+			}
+		}
+		if(verif) tira_verif(v0, v1, v2, 0, 0);
+		tris++;
+		flags = 0;
+		sign = triangle_area_sign(&v0->v, &v1->v, &v2->v);
+		if(!sign){ espaldas++; continue; }
+		if(sign < 0){ const GeClipVertex *t = v0; v0 = v2; v2 = t; }
+		if(ge_raster_triangle_ccw_c(&v0->v, &v1->v, &v2->v, plano ? &w[provoking]->v : &v2->v)) dibujados++;
+		else { fuera++; flags = GE_TRI_OUTSIDE; }
+	}
+	ge_stats.tris += tris; ge_stats.tris_cull_off += tris; ge_stats.tris_drawn += dibujados;
+	ge_stats.tris_outside += fuera; ge_stats.tris_back += espaldas;
+	ge_tri_flags = flags;
 }
 
 static void submit_primitive_body(const VSource *vr, u32 prim_type, int vertex_count){
@@ -2173,6 +2239,9 @@ static void submit_primitive_body(const VSource *vr, u32 prim_type, int vertex_c
 			skip--;
 			start++;
 		}
+		if(ge_charola_tris && cull == CULL_OFF && opt_on[OPT_GE_CHAROLAS_TIRAS] && opt_on[OPT_GE_TRI_RAPIDO])   //Arreglo
+			tira_charola(vr, w, start, vertex_count);   //Arreglo
+		else   //Arreglo
 		for(vtx = start; vtx < vertex_count; vtx++){
 			int provoking = (data_index_++) % 3, wind = (data_index_ - 1) % 2;
 			int alt = cull == CULL_OFF ? cull : (cull ^ wind);
@@ -2586,48 +2655,56 @@ static void __attribute__((noinline)) bb_verificar(void){   //Arreglo
 }
 
 void ge_draw_prim(u32 prim, u32 count){
-	VFormat f;
+	VFormat fl;   //Arreglo
+	const VFormat *fp = &fl;   //Arreglo
 	VSource vr;
 	u32 vaddr = ge.vaddr, iaddr = ge.iaddr, vt = ge.cmd[GE_VERTEXTYPE];
 	int sucio = opt_on[OPT_GE_ESTADO_SUCIO], bbv = 0, bbs;   //Arreglo
 
 	if(count == 0) return;
 	if(sucio || opt_on[OPT_PROF_ESTADO]) estado_entorno();
-	if(sucio && es.f_ok && es.f_vt == vt) memcpy(&f, &es.f, sizeof(f));
+	if(opt_on[OPT_GE_CHAROLAS_GE]){   //Arreglo
+		if(!(sucio && es.f_ok && es.f_vt == vt)){   //Arreglo
+			vformat_setup(&es.f, vt);   //Arreglo
+			es.f_vt = vt;   //Arreglo
+			es.f_ok = 1;   //Arreglo
+		}   //Arreglo
+		fp = &es.f;   //Arreglo
+	} else if(sucio && es.f_ok && es.f_vt == vt) memcpy(&fl, &es.f, sizeof(fl));   //Arreglo
 	else {
-		vformat_setup(&f, vt);
-		memcpy(&es.f, &f, sizeof(f));
+		vformat_setup(&fl, vt);   //Arreglo
+		memcpy(&es.f, &fl, sizeof(fl));   //Arreglo
 		es.f_vt = vt;
 		es.f_ok = 1;
 	}
 	if(!mem_valid(vaddr, 1)) return;
-	if(f.idx && !mem_valid(iaddr, 1)) return;
+	if(fp->idx && !mem_valid(iaddr, 1)) return;   //Arreglo
 
 	/* Sin formato de posición (o en turbo) no se dibuja, pero se avanza */
-	if(f.pos && !ge_turbo){
+	if(fp->pos && !ge_turbo){   //Arreglo
 		int phase, verif = opt_on[OPT_GE_VERIF];
-		u32 v_key = vt & 0x800000u, t_key = v_key | (f.col != 0);
+		u32 v_key = vt & 0x800000u, t_key = v_key | (fp->col != 0);   //Arreglo
 		int v_clean = es.v_ok && es.v_key == v_key && !(ge_sucio & GE_SUCIO_V);
 		int t_clean = es.t_ok && es.t_key == t_key && !(ge_sucio & GE_SUCIO_T);
 		GE_PROF_T0;
 		if(!(sucio && v_clean)){
 			load_morph_weights();
-			setup_uv_prescale(&f);
-		} else if(verif) estado_v(&f, 1);
-		if(!(sucio && t_clean)) compute_transform_state(&f);
-		else if(verif) estado_t_verif(&f);
+			setup_uv_prescale(fp);   //Arreglo
+		} else if(verif) estado_v(fp, 1);   //Arreglo
+		if(!(sucio && t_clean)) compute_transform_state(fp);   //Arreglo
+		else if(verif) estado_t_verif(fp);   //Arreglo
 		ge_sucio &= ~(u32)(GE_SUCIO_V | GE_SUCIO_T);
 		es.v_key = v_key; es.t_key = t_key;
 		es.v_ok = es.t_ok = 1;
-		if(opt_on[OPT_PROF_ESTADO]) census_vt(&f, v_clean, t_clean);
+		if(opt_on[OPT_PROF_ESTADO]) census_vt(fp, v_clean, t_clean);   //Arreglo
 		phase = prof_ge_enter(GEF_LEER);
 		if(prof_vtx_on) prof_vtx_phase = VXF_PREPARAR;   //Arreglo
-		if((bbx.valida | bbx.dudosa) && opt_on[OPT_GE_BBOX] && (bbs = bb_saltable(prim, count, &f, vaddr)) != 0){   //Arreglo
+		if((bbx.valida | bbx.dudosa) && opt_on[OPT_GE_BBOX] && (bbs = bb_saltable(prim, count, fp, vaddr)) != 0){   //Arreglo
 			float uv[2], nrm[3];   //Arreglo
-			int ligero = ge_prim_datos_sobran(vaddr + count * f.size);   //Arreglo
+			int ligero = ge_prim_datos_sobran(vaddr + count * fp->size);   //Arreglo
 			memcpy(uv, last_uv, sizeof(uv));   //Arreglo
 			memcpy(nrm, last_normal, sizeof(nrm));   //Arreglo
-			bb_final(&f, prim, count, vaddr, ligero);   //Arreglo
+			bb_final(fp, prim, count, vaddr, ligero);   //Arreglo
 			if(!verif){   //Arreglo
 				bb_aplicar();   //Arreglo
 				ge_stats.bx_saltadas++;   //Arreglo
@@ -2642,12 +2719,12 @@ void ge_draw_prim(u32 prim, u32 count){
 			bb_fin.prims = ge_stats.primitives;   //Arreglo
 			bbv = 1;   //Arreglo
 		}   //Arreglo
-		vsource_init(&vr, &f, vaddr, iaddr, (int)count);
+		vsource_init(&vr, fp, vaddr, iaddr, (int)count);   //Arreglo
 		vsource_batch(&vr, (int)count);
 		prof_ge_leave(phase);
 		ge_stats.draws++;
 		ge_stats.draws_prim[prim & 7]++;
-		vtype_note(f.vtype, prim, count);
+		vtype_note(fp->vtype, prim, count);   //Arreglo
 		if(vr.use_indices) ge_stats.draws_indexed++;
 		if(vr.use_cache) ge_stats.draws_reuse++;
 		GE_PROF_ADD(3);
@@ -2656,8 +2733,8 @@ void ge_draw_prim(u32 prim, u32 count){
 	}
 
 	/* El GE avanza las direcciones tras dibujar */
-	if(f.idx) ge.iaddr = iaddr + count * idx_size[f.idx];
-	else ge.vaddr = vaddr + count * f.size;
+	if(fp->idx) ge.iaddr = iaddr + count * idx_size[fp->idx];   //Arreglo
+	else ge.vaddr = vaddr + count * fp->size;   //Arreglo
 	if(bbv) bb_verificar();   //Arreglo
 }
 

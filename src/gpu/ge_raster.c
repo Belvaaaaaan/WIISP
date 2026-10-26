@@ -2175,17 +2175,18 @@ void ge_raster_charola_vaciar(void){   //Arreglo
 	ch_n = 0;
 }
 
-void ge_raster_triangle_ccw_c(const GeVertex *v0, const GeVertex *v1, const GeVertex *v2, const GeVertex *col){   //Arreglo
+int ge_raster_triangle_ccw_c(const GeVertex *v0, const GeVertex *v1, const GeVertex *v2, const GeVertex *col){   //Arreglo
 	GeTriCharola *t;
 	int mnx = imin(imin(v0->x, v1->x), v2->x), mxx = imax(imax(v0->x, v1->x), v2->x);
 	int mny = imin(imin(v0->y, v1->y), v2->y), mxy = imax(imax(v0->y, v1->y), v2->y);
 	if(imin(mxx | (SSF - 1), rs.sc_x2) < imax(mnx & ~(SSF - 1), rs.sc_x1) ||
-	   imin(mxy | (SSF - 1), rs.sc_y2) < imax(mny & ~(SSF - 1), rs.sc_y1)){ ge_tri_flags |= GE_TRI_OUTSIDE; return; }
+	   imin(mxy | (SSF - 1), rs.sc_y2) < imax(mny & ~(SSF - 1), rs.sc_y1)){ ge_tri_flags |= GE_TRI_OUTSIDE; return 0; }
 	ge_stats.primitives++;
 	t = &ch_tris[ch_n];
 	t->v[0] = v0; t->v[1] = v1; t->v[2] = v2;
 	t->col = col;
 	if(++ch_n == CH_TRIS) ge_raster_charola_vaciar();
+	return 1;
 }
 
 void ge_raster_triangle_c(const GeVertex *v0, const GeVertex *v1, const GeVertex *v2, const GeVertex *col){   //Arreglo

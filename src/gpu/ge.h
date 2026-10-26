@@ -106,6 +106,7 @@ typedef struct {
 	u32 cm_verif, cm_verif_bad;   //Arreglo
 	u32 ch_rachas, ch_cmds, ch_verif, ch_verif_cmds, ch_verif_bad;   //Arreglo
 	u32 ch_llamadas, ch_siguen, ch_sin, ch_clave, ch_textura, chv_llamadas, chv_malas;   //Arreglo
+	u32 ce_tandas, ce_juntos, ce_sueltos;   //Arreglo
 } GeStats;
 void ge_get_stats(GeStats *out);
 

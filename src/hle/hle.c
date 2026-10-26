@@ -611,6 +611,11 @@ static void profile_ge_lines(const GeStats *g, const GeStats *b, u32 vblanks){
 		        pct(opt_on[OPT_GE_VERIF] ? g->chv_llamadas - b->chv_llamadas : g->ch_siguen - b->ch_siguen, g->ch_llamadas - b->ch_llamadas),
 		        opt_on[OPT_GE_VERIF] ? "habrian seguido (con ge_verificar se rehace igual y se compara)" : "siguieron",
 		        (unsigned)(g->ch_sin - b->ch_sin), (unsigned)(g->ch_clave - b->ch_clave), (unsigned)(g->ch_textura - b->ch_textura));   //Arreglo
+	if(opt_on[OPT_GE_CHAROLAS_ENVIO] && g->ce_tandas != b->ce_tandas)   //Arreglo
+		hle_log("[TIEMPOS] Envio por charolas (ge_charolas_envio): %u tandas, %u triangulos con un GX_Begin por tanda (%.1f de media) "
+		        "y %u por el camino de cada triangulo\n", (unsigned)(g->ce_tandas - b->ce_tandas), (unsigned)(g->ce_juntos - b->ce_juntos),
+		        g->ce_tandas != b->ce_tandas ? (double)(g->ce_juntos - b->ce_juntos) / (double)(g->ce_tandas - b->ce_tandas) : 0.0,
+		        (unsigned)(g->ce_sueltos - b->ce_sueltos));   //Arreglo
 	if(opt_on[OPT_GE_VERIF] && opt_on[OPT_GE_CHAROLAS])   //Arreglo
 		hle_log("[TIEMPOS] Verificacion de las charolas (ge_verificar): %u llamadas que habrian seguido la anterior comparadas, "
 		        "%u distintas\n", (unsigned)(g->chv_llamadas - b->chv_llamadas), (unsigned)(g->chv_malas - b->chv_malas));   //Arreglo

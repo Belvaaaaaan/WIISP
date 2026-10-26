@@ -379,7 +379,7 @@ typedef struct {
 extern int ge_charola_tris;   //Arreglo
 void ge_raster_charola_vaciar(void);   //Arreglo
 void ge_raster_triangle_c(const GeVertex *v0, const GeVertex *v1, const GeVertex *v2, const GeVertex *col);   //Arreglo
-void ge_raster_triangle_ccw_c(const GeVertex *v0, const GeVertex *v1, const GeVertex *v2, const GeVertex *col);   //Arreglo
+int ge_raster_triangle_ccw_c(const GeVertex *v0, const GeVertex *v1, const GeVertex *v2, const GeVertex *col);   //Arreglo
 static inline void ge_tri_col(GeVertex *o, const GeVertex *c, const GeVertex *col){   //Arreglo
 	*o = *c;
 	o->color0 = col->color0;

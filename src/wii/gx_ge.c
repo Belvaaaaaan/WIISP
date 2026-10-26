@@ -2981,6 +2981,7 @@ static void gx_triangle(const GeVertex *v0, const GeVertex *v1, const GeVertex *
 static void gx_triangles(const GeTriCharola *t, int n){   //Arreglo
 	GxEmitLocal l;
 	int i = 0, m;
+	ge_stats.ce_tandas++;
 	while(i < n){
 		const GeTriCharola *x = &t[i];
 		if(!ch_pend && tri_listo && opt_on[OPT_GE_ESTADO_SUCIO] && opt_on[OPT_GX_ENVIO] && !opt_on[OPT_PROF_ESTADO] &&
@@ -2994,8 +2995,10 @@ static void gx_triangles(const GeTriCharola *t, int n){   //Arreglo
 		}
 		i++;
 	}
+	ge_stats.ce_sueltos += (u32)i;
 	if(i == n) return;
 	m = n - i;
+	ge_stats.ce_juntos += (u32)m;
 	ge_stats.es_tri += (u32)m;
 	ge_stats.es_tri_listo += (u32)m;
 	if(opt_on[OPT_GE_VERIF]) ge_stats.es_tri_verif += (u32)m;
