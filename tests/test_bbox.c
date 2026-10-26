@@ -1494,7 +1494,7 @@ static void bbox_triangulos_limites(void){   //Arreglo
 static void bbox_guarda_z(void){   //Arreglo
 	static u8 vram_ref[0x200000];
 	u8 *vram = mem_ptr(0x04000000, 0x200000);
-	u32 ronda, mal = 0, cajas = 0, llamadas = 0, cambio_dib = 0, cambio_salt = 0, nada = 0;
+	u32 ronda, mal = 0, cajas = 0, llamadas = 0, cambio_dib = 0, cambio_salt = 0, nada = 0, lej_nada = 0, lej_ll = 0;
 	printf("Banda de guarda (ge_bbox_guarda): sin recorte, con una escala z que deja fuera de su rango lo mas cercano del frustum, "
 	       "y la escala z cambiada entre la caja y las llamadas\n");
 	ge_hw = NULL;
@@ -1508,7 +1508,7 @@ static void bbox_guarda_z(void){   //Arreglo
 		ge.cmd[GE_VIEWPORTZSCALE] = f24(-60000.0f);
 		ge.cmd[GE_VIEWPORTZCENTER] = f24(32000.0f);
 		{
-			const float q = bfr(-0.95f, -0.65f);
+			const float q = (ronda & 2) ? bfr(0.65f, 0.95f) : bfr(-0.95f, -0.65f);
 			w = ge.proj[14] / (ge.proj[10] + q);
 		}
 		cx = bfr(-0.3f, 0.3f); cy = bfr(-0.3f, 0.3f);
@@ -1561,6 +1561,7 @@ static void bbox_guarda_z(void){   //Arreglo
 				prims0 = ge_stats.primitives;
 				memcpy(vram_ref, vram, sizeof(vram_ref));
 				nada += !cambio && !prims0;
+				lej_nada += !cambio && !prims0 && (ronda & 2);
 				cambio_dib += cambio && prims0;
 				continue;
 			}
@@ -1569,25 +1570,27 @@ static void bbox_guarda_z(void){   //Arreglo
 			if(modo == 1){
 				cajas += ge_stats.bx_guarda;
 				llamadas += !cambio && ge_stats.bx_saltadas;
+				lej_ll += !cambio && ge_stats.bx_saltadas && (ronda & 2);
 				cambio_salt += cambio && ge_stats.bx_saltadas;
 			}
 		}
 		opt_on[OPT_GE_VERIF] = 0;
 	}
 	opt_on[OPT_GE_BBOX_TRIANGULOS] = 1;
-	printf("  %u objetos sin dibujar nada: %u cajas fuera por la banda, %u con sus llamadas saltadas; con la escala z cambiada, "
-	       "%u dibujan y %u se saltan; %u cuentas e imagenes distintas\n", (unsigned)nada, (unsigned)cajas, (unsigned)llamadas,
-	       (unsigned)cambio_dib, (unsigned)cambio_salt, (unsigned)mal);
+	printf("  %u objetos sin dibujar nada (%u del lado lejano): %u cajas fuera por la banda, %u con sus llamadas saltadas (%u del lado lejano); "
+	       "con la escala z cambiada, %u dibujan y %u se saltan; %u cuentas e imagenes distintas\n", (unsigned)nada, (unsigned)lej_nada,
+	       (unsigned)cajas, (unsigned)llamadas, (unsigned)lej_ll, (unsigned)cambio_dib, (unsigned)cambio_salt, (unsigned)mal);
 	CHECK_EQ(mal, 0u);
 	CHECK(nada > 150);
 	CHECK(llamadas * 10 > nada * 9);
+	CHECK(lej_nada > 60 && lej_ll * 10 > lej_nada * 9);
 	CHECK(cambio_dib > 150);
 	CHECK_EQ(cambio_salt, 0u);
 }
 
 static void bbox_guarda_vuelta(void){   //Arreglo
 	PRes rp, rs;
-	u32 ronda;
+	u32 ronda, por_lado[4] = { 0, 0, 0, 0 };
 	memset(&rp, 0, sizeof(rp)); memset(&rs, 0, sizeof(rs));
 	printf("Banda de guarda (ge_bbox_guarda): objetos largos desde muy fuera de la banda hasta cerca de la pantalla\n");
 	ge_hw = NULL;
@@ -1624,7 +1627,11 @@ static void bbox_guarda_vuelta(void){   //Arreglo
 		r_dibujo((7u << 2) | (3u << 7), GE_PRIM_TRIANGLE_STRIP, p_escribir(3, (const float (*)[3])v, nv), nv);
 		p_objeto(cuerpo, mn, mx);
 		ge_fast_math = (int)((ronda >> 1) & 1);
-		p_correr("vuelta", ronda, rl, (int)((ronda >> 2) & 1), prof ? &rp : &rs);
+		{
+			const u32 g0 = rp.guarda + rs.guarda;
+			p_correr("vuelta", ronda, rl, (int)((ronda >> 2) & 1), prof ? &rp : &rs);
+			por_lado[lado] += rp.guarda + rs.guarda - g0;
+		}
 	}
 	printf("  con recorte: %u objetos (%u dibujan algo), %u llamadas que no dibujan nada: saltadas %u sin ge_bbox_guarda ni ge_bbox_triangulos "
 	       "y %u con ellos (%u por la banda, %u por sus triangulos); sin recorte: %u objetos (%u dibujan algo), %u llamadas que no dibujan "
@@ -1638,6 +1645,9 @@ static void bbox_guarda_vuelta(void){   //Arreglo
 	CHECK_EQ(rp.orden_mal + rs.orden_mal, 0u);
 	CHECK(rp.dibujo0 > 50 && rs.dibujo0 > 50);
 	CHECK(rp.guarda >= 120 && rs.guarda >= 100);
+	printf("  por la banda, segun el lado por el que sale: izquierda %u, derecha %u, arriba %u, abajo %u\n", (unsigned)por_lado[0],
+	       (unsigned)por_lado[1], (unsigned)por_lado[2], (unsigned)por_lado[3]);
+	CHECK(por_lado[0] >= 40 && por_lado[1] >= 40 && por_lado[2] >= 40 && por_lado[3] >= 40);
 	CHECK(rp.nada_s4 > 200 && rs.nada_s4 > 160);
 }
 
