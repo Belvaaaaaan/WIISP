@@ -1573,6 +1573,60 @@ static void bbox_guarda_z(void){   //Arreglo
 	CHECK_EQ(cambio_salt, 0u);
 }
 
+static void bbox_guarda_vuelta(void){   //Arreglo
+	PRes rp, rs;
+	u32 ronda;
+	memset(&rp, 0, sizeof(rp)); memset(&rs, 0, sizeof(rs));
+	printf("Banda de guarda (ge_bbox_guarda): objetos largos desde muy fuera de la banda hasta cerca de la pantalla\n");
+	ge_hw = NULL;
+	for(ronda = 0; ronda < 1200; ronda++){
+		float pa[3], pb[3], m[12], v[24][3], mn[3], mx[3], sxa, sya, sxb, syb, L, R, T, B, X0, Y0, xc, yc, del;
+		int prof = (int)(ronda & 1), lado = (int)brn(4), nv = 4 + 2 * (int)brn(7), i, k;
+		u32 cuerpo;
+		p_pantalla(prof);
+		p_perspectiva();
+		xc = ge_f24(ge.cmd[GE_VIEWPORTXCENTER]); yc = ge_f24(ge.cmd[GE_VIEWPORTYCENTER]);
+		X0 = (float)(ge.cmd[GE_OFFSETX] & 0xFFFF) / 16.0f; Y0 = (float)(ge.cmd[GE_OFFSETY] & 0xFFFF) / 16.0f;
+		L = X0 + (float)(ge.cmd[GE_SCISSOR1] & 0x3FF); R = X0 + (float)(ge.cmd[GE_SCISSOR2] & 0x3FF);
+		T = Y0 + (float)((ge.cmd[GE_SCISSOR1] >> 10) & 0x3FF); B = Y0 + (float)((ge.cmd[GE_SCISSOR2] >> 10) & 0x3FF);
+		if(lado < 2){ sxa = xc + (lado ? 1.0f : -1.0f) * bfr(3000.0f, 9000.0f); sya = bfr(T, B); }
+		else { sya = yc + (lado == 3 ? 1.0f : -1.0f) * bfr(3000.0f, 9000.0f); sxa = bfr(L, R); }
+		sxb = bfr(L - 400.0f, R + 400.0f);
+		syb = bfr(T - 400.0f, B + 400.0f);
+		p_ojo_sx(sxa, sya, bfr(pp_n * 1.5f, pp_f * 0.5f), pa);
+		p_ojo_sx(sxb, syb, bfr(pp_n * 1.5f, pp_f * 0.5f), pb);
+		del = bfr(0.0005f, 0.004f) * (float)__builtin_sqrt(pb[0] * pb[0] + pb[1] * pb[1] + pb[2] * pb[2]);
+		p_recta(pa, pb, del, m);
+		rl = R_LIST;
+		rv = R_DATA;
+		p_mundo_m(m);
+		cuerpo = rl + 6 * 4;
+		rl = cuerpo;
+		for(k = 0; k < 3; k++){ mn[k] = 1e30f; mx[k] = -1e30f; }
+		for(i = 0; i < nv; i++){
+			v[i][0] = -1.0f + 2.0f * (float)(i / 2) / (float)(nv / 2 - 1);
+			v[i][1] = (i & 1) ? 0.5f : -0.5f;
+			v[i][2] = 0.0f;
+			for(k = 0; k < 3; k++){ if(v[i][k] < mn[k]) mn[k] = v[i][k]; if(v[i][k] > mx[k]) mx[k] = v[i][k]; }
+		}
+		r_dibujo((7u << 2) | (3u << 7), GE_PRIM_TRIANGLE_STRIP, p_escribir(3, (const float (*)[3])v, nv), nv);
+		p_objeto(cuerpo, mn, mx);
+		ge_fast_math = (int)((ronda >> 1) & 1);
+		p_correr("vuelta", ronda, rl, (int)((ronda >> 2) & 1), prof ? &rp : &rs);
+	}
+	printf("  con recorte: %u objetos (%u dibujan algo), %u llamadas que no dibujan nada: saltadas %u sin ge_bbox_guarda ni ge_bbox_triangulos "
+	       "y %u con ellos (%u por la banda, %u por sus triangulos); sin recorte: %u objetos (%u dibujan algo), %u llamadas que no dibujan "
+	       "nada: saltadas %u y %u (%u por la banda, %u por sus triangulos); %u cuentas y %u imagenes distintas\n",
+	       (unsigned)rp.rondas, (unsigned)rp.dibujo0, (unsigned)rp.nada_ll, (unsigned)rp.nada_s1, (unsigned)rp.nada_s4, (unsigned)rp.guarda,
+	       (unsigned)rp.tri, (unsigned)rs.rondas, (unsigned)rs.dibujo0, (unsigned)rs.nada_ll, (unsigned)rs.nada_s1, (unsigned)rs.nada_s4,
+	       (unsigned)rs.guarda, (unsigned)rs.tri, (unsigned)(rp.mal + rs.mal), (unsigned)(rp.distintas + rs.distintas));
+	CHECK_EQ(rp.mal + rs.mal, 0u);
+	CHECK_EQ(rp.distintas + rs.distintas, 0u);
+	CHECK_EQ(rp.verif_mal + rs.verif_mal, 0u);
+	CHECK_EQ(rp.orden_mal + rs.orden_mal, 0u);
+	CHECK(rp.dibujo0 > 100 && rs.dibujo0 > 100);
+}
+
 static void bbox_guarda_azar(void){   //Arreglo
 	PRes rp, rs;
 	u32 ronda;
@@ -1910,6 +1964,8 @@ void test_bbox(void){
 	bbox_triangulos_limites();   //Arreglo
 	memset(&ge_stats, 0, sizeof(ge_stats));   //Arreglo
 	bbox_guarda_z();   //Arreglo
+	memset(&ge_stats, 0, sizeof(ge_stats));   //Arreglo
+	bbox_guarda_vuelta();   //Arreglo
 	memset(&ge_stats, 0, sizeof(ge_stats));   //Arreglo
 	memcpy(opt_on, saved_opt, sizeof(saved_opt));
 	ge_hw = saved_hw;
