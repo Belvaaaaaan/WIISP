@@ -34,6 +34,14 @@ def parse(path):
         if m: w.update(bx_salt=int(m.group(1)), bx_vert=int(m.group(2)) / 1000.0)
         m = re.search(r'cajas fuera de la pantalla (\d+),.*?por su caja \(ge_bbox_llamada\): (\d+) llamadas probadas.*?saltadas (\d+) con (\d+) vertices', l)
         if m: w.update(bx_pant=int(m.group(1)), bx_ll_prob=int(m.group(2)), bx_ll_salt=int(m.group(3)), bx_ll_vert=int(m.group(4)) / 1000.0)
+        m = re.search(r'por la banda de guarda \(ge_bbox_guarda\): (\d+) cajas y (\d+) llamadas fuera \((\d+) probadas\); por sus triangulos \(ge_bbox_triangulos\): (\d+) llamadas fuera \((\d+) probadas\)', l)
+        if m: w.update(bx_gu_caj=int(m.group(1)), bx_gu_ll=int(m.group(2)), bx_tri=int(m.group(4)), bx_tri_prob=int(m.group(5)))
+        m = re.match(r'\[TIEMPOS\] PMC: (\d+) M ciclos', l)
+        if m: w['mciclos'] = int(m.group(1))
+        m = re.search(r'Rachas de huesos \(ge_cmd_huesos\): (\d+) rachas con (\d+) comandos', l)
+        if m: w.update(hu_rachas=int(m.group(1)), hu_cmds=int(m.group(2)) / 1000.0)
+        m = re.search(r'probar la caja de cada llamada ([\d.]+) ms \(de ellos leer sus posiciones ([\d.]+) ms.*?repasar sus triangulos ([\d.]+) ms', l)
+        if m: w.update(ms_ll=num(m.group(1)), ms_tri=num(m.group(3)))
     return wins
 
 runs = [(a.split('=', 1)[0], parse(a.split('=', 1)[1])) for a in sys.argv[1:]]
@@ -42,13 +50,18 @@ for k, w in runs:
     print(f"{k:10} {len(w)} ventanas, {tr:6.1f} s reales, {tj:6.2f} s de juego ({100 * tj / tr:5.1f}%), {sum(x['minstr'] for x in w):7.1f} M instr")
 print()
 cols = [('real', 's reales', '{:7.1f}'), ('vel', '% velocidad', '{:7.1f}'), ('tir_s', 's de tirones', '{:7.1f}'),
+        ('mciclos', 'M ciclos (PMC)', '{:7d}'),
         ('cpu', '% CPU', '{:7.1f}'), ('ge', '% GE', '{:7.1f}'), ('leer', '% leer vertices', '{:7.1f}'),
         ('c_leer', 'ciclos por vertice', '{:7d}'), ('c_ens', 'ciclos por triangulo (ensamblar)', '{:7d}'),
         ('c_env', 'ciclos por primitiva (enviar)', '{:7d}'), ('c_est', 'ciclos por llamada (estado)', '{:7d}'),
         ('c_cmd', 'ciclos por llamada (comandos)', '{:7d}'), ('c_pcmd', 'ciclos por comando', '{:7d}'),
         ('bx_salt', 'llamadas saltadas (ge_bbox)', '{:7d}'), ('bx_vert', 'miles de vertices saltados', '{:7.0f}'),
         ('bx_pant', 'cajas fuera de la pantalla', '{:7d}'), ('bx_ll_prob', 'llamadas probadas por su caja', '{:7d}'),
-        ('bx_ll_salt', 'saltadas por su caja', '{:7d}'), ('bx_ll_vert', 'miles de vertices (por su caja)', '{:7.0f}')]
+        ('bx_ll_salt', 'saltadas por su caja', '{:7d}'), ('bx_ll_vert', 'miles de vertices (por su caja)', '{:7.0f}'),
+        ('bx_gu_caj', 'cajas fuera por la banda', '{:7d}'), ('bx_gu_ll', 'llamadas fuera por la banda', '{:7d}'),
+        ('bx_tri_prob', 'llamadas repasadas por triangulos', '{:7d}'), ('bx_tri', 'fuera por sus triangulos', '{:7d}'),
+        ('ms_ll', 'ms probando la caja de cada llamada', '{:7.0f}'), ('ms_tri', 'ms repasando triangulos', '{:7.0f}'),
+        ('hu_rachas', 'rachas de huesos (ge_cmd_huesos)', '{:7d}'), ('hu_cmds', 'miles de comandos en rachas', '{:7.0f}')]
 print('ventana     ' + ''.join(f'{k[:7]:>7}' for k, _ in runs))
 for i in range(min(len(w) for _, w in runs)):
     w0 = runs[0][1][i]

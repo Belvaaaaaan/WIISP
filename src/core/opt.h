@@ -65,6 +65,7 @@ enum {
 	OPT_GE_PANTALLA_RAPIDA,   //Arreglo
 	OPT_GE_CMD_PUNTERO,   //Arreglo
 	OPT_GE_CMD_MATRICES,   //Arreglo
+	OPT_GE_CMD_HUESOS,   //Arreglo
 	OPT_GE_VERIF,         /* comprobar los caminos rápidos del GE contra los de
 	                         referencia en el Wii (ge_vdec_esp, gx_envio_rapido,
 	                         ge_ensamblar_rapido, ge_vdec_psq): lento, solo

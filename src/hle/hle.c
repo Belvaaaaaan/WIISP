@@ -616,6 +616,13 @@ static void profile_ge_lines(const GeStats *g, const GeStats *b, u32 vblanks){
 	if(opt_on[OPT_GE_VERIF] && opt_on[OPT_GE_CMD_PUNTERO] && opt_on[OPT_GE_CMD_MATRICES])   //Arreglo
 		hle_log("[TIEMPOS] Verificacion de las matrices (ge_verificar): %u datos y numeros de matriz por el atajo comparados con "
 		        "execute, %u distintos\n", (unsigned)(g->cm_verif - b->cm_verif), (unsigned)(g->cm_verif_bad - b->cm_verif_bad));   //Arreglo
+	if(opt_on[OPT_GE_CMD_PUNTERO] && opt_on[OPT_GE_CMD_HUESOS])   //Arreglo
+		hle_log("[TIEMPOS] Rachas de huesos (ge_cmd_huesos): %u rachas con %u comandos por el atajo\n", (unsigned)(g->ch_rachas - b->ch_rachas),
+		        (unsigned)(g->ch_cmds - b->ch_cmds));   //Arreglo
+	if(opt_on[OPT_GE_VERIF] && opt_on[OPT_GE_CMD_PUNTERO] && opt_on[OPT_GE_CMD_HUESOS])   //Arreglo
+		hle_log("[TIEMPOS] Verificacion de las rachas de huesos (ge_verificar): %u rachas con %u comandos por el atajo comparadas con "
+		        "execute, %u distintas\n", (unsigned)(g->ch_verif - b->ch_verif), (unsigned)(g->ch_verif_cmds - b->ch_verif_cmds),
+		        (unsigned)(g->ch_verif_bad - b->ch_verif_bad));   //Arreglo
 	if(opt_on[OPT_GE_VERIF] && opt_on[OPT_GE_BBOX_RAPIDO])   //Arreglo
 		hle_log("[TIEMPOS] Verificacion de las cajas (ge_verificar): %u BBOX rapidas comparadas con la prueba de siempre, %u distintas\n",
 		        (unsigned)(g->bbv_cajas - b->bbv_cajas), (unsigned)(g->bbv_malas - b->bbv_malas));   //Arreglo

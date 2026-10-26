@@ -5,6 +5,47 @@ la 0.5.17.2; antes se marcaban con `//arreglo`). Aquí va, por versión, qué
 se arregló o cambió y una descripción breve. El detalle está en
 `docs/CONTINUAR.md`.
 
+## 0.5.23.3
+
+- `gpu/ge.c`: `ge_cmd_huesos` (encendido). En el bucle de comandos con
+  puntero (`run_commands_ptr`), un 0x2A (número de hueso) o 0x2B (dato de
+  hueso) empieza una racha: los 0x2A y 0x2B seguidos se ejecutan en un
+  bucle propio (`racha_huesos`) hasta el primer comando de otro tipo, la
+  parada de la lista (stall) o el final de la RAM. Deja lo mismo que uno a
+  uno:
+  - cada dato va al hueso `num & 0x7F` si es < 96, con los bits `arg << 8`;
+  - el número cuenta en 24 bits (la máscara se pone al final: los 7 bits
+    bajos no dependen de ella); un 0x2A lo pone a `arg & 0x7F`;
+  - 0x2B queda a 0 si hubo algún dato; `cur_cmd` es el último comando;
+    los comandos se cuentan; `ge_sucio` no cambia (los huesos no marcan
+    ningún grupo).
+  El byte del comando se lee aparte (`p[3]`, la RAM de la PSP está en
+  little-endian) para que GCC lea el dato con `lwbrx`: ~15 instrucciones
+  por comando, antes ~62. Con `ge_verificar` (y sin los censos), cada
+  racha se calcula por el atajo, se deshace, se ejecuta con `execute`
+  comando a comando y se compara todo (`verificar_huesos`).
+- `gpu/ge.c`, `gpu/ge.h`, `hle/hle.c`: líneas `[TIEMPOS] Rachas de huesos`
+  (rachas y comandos por el atajo) y `Verificacion de las rachas de
+  huesos`.
+- `core/opt.h`, `core/opt.c`: `ge_cmd_huesos`. `ge_bbox_triangulos` pasa a
+  apagado por defecto: en DBZ cuesta más de lo que salta (ciclos de las
+  peleas +0,5 a +1,0 % con él; ver CONTINUAR).
+- `tests/test_listas.c`: prueba nueva de rachas (3000 listas al azar con
+  0x2A y 0x2B mezclados, números por encima de 96 y junto al final de los
+  24 bits, la parada dentro de la racha, la racha hasta el borde de la RAM
+  y en la copia sin caché): con el atajo, sin él y por `execute`, el mismo
+  estado. Las listas al azar cuentan también las rachas verificadas.
+- `tests/test_main.c`, `tests/test.h`: `--solo suite,suite` (solo esas
+  suites, con los interruptores por defecto que deja `test_guion` para las
+  que van detrás) y `--parar` (sale en el primer fallo).
+- `tools/banco/mutar.py` y `tools/banco/mutaciones/0.5.23.3.txt`: pruebas
+  de mutaciones rápidas (ver `tools/banco/LEEME.md`).
+- `tools/banco/ventanas.py`: filas nuevas (ciclos del PMC, banda,
+  triángulos, ms del censo, rachas de huesos).
+- `tools/setup_entorno.sh`: escribe `env.sh`, que leen los guiones del
+  banco.
+- `hle/hle.h`, `dist/apps/wiisp/meta.xml`: versión 0.5.23.3.
+
 ## 0.5.23.2
 
 - `gpu/ge_vertex.c`: `ge_bbox_guarda` (encendido; necesita

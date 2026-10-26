@@ -118,6 +118,7 @@ void test_listas(void){
 	u8 saved_opt[OPT_N];
 	static GeState ini;
 	u32 ronda, distintas = 0, errores = 0, bordes_n = 0, cmds = 0, saltos = 0, verif = 0, verif_mal = 0, mverif = 0, mverif_mal = 0;
+	u32 hverif = 0, hverif_mal = 0;   //Arreglo
 	u8 *v;
 	int i;
 
@@ -202,6 +203,8 @@ void test_listas(void){
 		verif_mal += ge_stats.cp_verif_bad;
 		mverif += ge_stats.cm_verif;
 		mverif_mal += ge_stats.cm_verif_bad;
+		hverif += ge_stats.ch_verif;   //Arreglo
+		hverif_mal += ge_stats.ch_verif_bad;   //Arreglo
 		opt_on[OPT_GE_VERIF] = 0;
 		cmds += a.commands;
 		errores += a.st == 4;
@@ -221,6 +224,9 @@ void test_listas(void){
 	CHECK(verif > 5000);
 	CHECK_EQ(mverif_mal, 0u);
 	CHECK(mverif > 1000);
+	printf("  con ge_verificar: %u rachas de huesos comparadas con execute, %u distintas\n", (unsigned)hverif, (unsigned)hverif_mal);   //Arreglo
+	CHECK_EQ(hverif_mal, 0u);   //Arreglo
+	CHECK(hverif > 50);   //Arreglo
 	CHECK(errores >= bordes_n);
 	CHECK(cmds > 20000);
 
@@ -281,6 +287,79 @@ void test_listas(void){
 		printf("  %u comandos de matrices por el atajo, 64 veces cada uno: %u distintos\n", (unsigned)mats, (unsigned)malos);
 		CHECK_EQ(mats, 10u);
 		CHECK_EQ(malos, 0u);
+	}
+
+	{   //Arreglo
+		u32 rep, malos = 0, rachas = 0, rcmds = 0, verif_n = 0, verif_mal = 0, dentro = 0, borde = 0;
+		printf("Rachas de huesos (ge_cmd_huesos) contra un comando cada vez\n");
+		sucio_ini = 0;
+		opt_on[OPT_GE_CMD_MATRICES] = 1;
+		for(rep = 0; rep < 3000; rep++){
+			Foto a, b, c;
+			u32 sa, sb, sc, k, base, ini_r, len, end, caso = rep % 4, mezcla = lrn(3);
+			for(i = 0; i < 256; i++) ini.cmd[i] = lrnd() & 0xFFFFFF;
+			k = lrn(5);
+			ini.cmd[GE_BONEMATRIXNUMBER] = k == 0 ? lrn(96) : k == 1 ? 90 + lrn(38) : k == 2 ? 0xFFFFF0u + lrn(16) : k == 3 ? lrnd() : lrnd() & 0xFFFFFF;
+			for(k = 0; k < 96; k++) ini.bone[k / 12][k % 12] = (float)(int)lrn(3);
+			len = 1 + (lrn(4) ? lrn(40) : lrn(300));
+			if(caso == 3){
+				base = 0x0A000000u - 4 * (len + 4 + lrn(4));
+				if(lrn(2)) base = (base & 0x0FFFFFFFu) | 0x40000000u;
+			} else {
+				base = 0x08D60000u + lrn(0x1000) * 4;
+				if(lrn(4) == 0) base |= 0x40000000u;
+			}
+			lp = base;
+			for(k = lrn(4); k > 0; k--) lcmd(GE_NOP, lrnd());
+			ini_r = lp;
+			for(k = 0; k < len; k++){
+				u32 tipo = mezcla == 0 ? (k % 13 == 0) : mezcla == 1 ? lrn(8) == 0 : lrn(2);
+				if(tipo) lcmd(GE_BONEMATRIXNUMBER, lrn(3) ? lrn(96) + 12 * lrn(3) : lrnd());
+				else lcmd(GE_BONEMATRIXDATA, lrn(4) ? (lrn(3) ? 0x3F8000u : 0) : lrnd());
+			}
+			if(caso == 3){
+				while((lp & 0x0FFFFFFFu) < 0x0A000000u) lcmd(lrn(4) ? GE_BONEMATRIXDATA : GE_NOP, lrnd());
+				end = lrn(2) ? 0xFFFFFFF0u : ini_r + 4 * lrn(len) + 1 + lrn(3);
+				borde++;
+			} else {
+				for(k = lrn(3); k > 0; k--){
+					u32 cc;
+					do cc = lrnd() & 0xFF; while(evitado(cc) || cc == GE_BONEMATRIXNUMBER || cc == GE_BONEMATRIXDATA);
+					lcmd(cc, lrnd());
+				}
+				end = lp;
+				if(caso == 2){ end = ini_r + 4 * lrn(len + 1); dentro++; }
+			}
+			opt_on[OPT_GE_CMD_HUESOS] = 0;
+			correr(&ini, base, end, 1, &a);
+			sa = ge_sucio;
+			opt_on[OPT_GE_CMD_HUESOS] = 1;
+			opt_on[OPT_GE_VERIF] = (u8)(rep % 3 == 2);
+			correr(&ini, base, end, 1, &b);
+			sb = ge_sucio;
+			rachas += ge_stats.ch_rachas;
+			rcmds += ge_stats.ch_cmds;
+			verif_n += ge_stats.ch_verif;
+			verif_mal += ge_stats.ch_verif_bad;
+			opt_on[OPT_GE_VERIF] = 0;
+			correr(&ini, base, end, 0, &c);
+			sc = ge_sucio;
+			if(memcmp(&a, &b, sizeof(a)) || memcmp(&a, &c, sizeof(a)) || sa != sb || sa != sc){
+				if(malos++ < 8)
+					printf("  lista %u distinta (caso %u): estado %u/%u/%u, pc %08X/%08X/%08X, comandos %u/%u/%u\n", (unsigned)rep, (unsigned)caso,
+					       (unsigned)a.st, (unsigned)b.st, (unsigned)c.st, (unsigned)a.pc, (unsigned)b.pc, (unsigned)c.pc,
+					       (unsigned)a.commands, (unsigned)b.commands, (unsigned)c.commands);
+			}
+		}
+		sucio_ini = GE_SUCIO_TODO;
+		printf("  3000 listas (%u con la parada dentro de la racha, %u hasta el borde de la memoria): %u distintas; "
+		       "%u rachas con %u comandos por el atajo; con ge_verificar %u comparadas, %u distintas\n", (unsigned)dentro, (unsigned)borde,
+		       (unsigned)malos, (unsigned)rachas, (unsigned)rcmds, (unsigned)verif_n, (unsigned)verif_mal);
+		CHECK_EQ(malos, 0u);
+		CHECK_EQ(verif_mal, 0u);
+		CHECK(rachas > 1500);
+		CHECK(rcmds > 40000);
+		CHECK(verif_n > 500);
 	}
 
 	{   //Arreglo

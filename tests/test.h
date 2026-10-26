@@ -11,17 +11,18 @@
 #include <stdio.h>
 
 extern int failures, checks;
+void test_parar(void);   //Arreglo
 
 #define CHECK(cond) do { \
 	checks++; \
-	if(!(cond)){ failures++; printf("  FALLO %s:%d: %s\n", __FILE__, __LINE__, #cond); } \
+	if(!(cond)){ failures++; printf("  FALLO %s:%d: %s\n", __FILE__, __LINE__, #cond); test_parar(); } \
 } while(0)
 
 #define CHECK_EQ(a, b) do { \
 	unsigned long long va_ = (unsigned long long)(a), vb_ = (unsigned long long)(b); \
 	checks++; \
 	if(va_ != vb_){ failures++; \
-		printf("  FALLO %s:%d: %s == %s (0x%llX != 0x%llX)\n", __FILE__, __LINE__, #a, #b, va_, vb_); } \
+		printf("  FALLO %s:%d: %s == %s (0x%llX != 0x%llX)\n", __FILE__, __LINE__, #a, #b, va_, vb_); test_parar(); } \
 } while(0)
 
 /* tests/test_formats.c: criptografía, descompresión e imágenes de disco */

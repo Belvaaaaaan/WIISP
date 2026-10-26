@@ -58,6 +58,21 @@ al repositorio), `gcc-powerpc-linux-gnu` y `qemu-user`. Las salidas van a
   22341 / 23161; 7: 8111 / 8130; 8: 10432 / 10659; 9: 23134 / 24331; 10:
   8485 / 8515 (ninguna escena tiene llamadas que crucen la cámara: solo el
   coste).
+- `mutar.py MUTACIONES [--solo suite,suite] [--hilos N] [--asan] [--ppc]`:
+  pruebas de mutaciones rápidas. Compila una vez los objetos de las
+  pruebas del PC (-O2, sin sanitizers; se rehacen solos si cambia un `.c`
+  o un `.h`), y por cada mutación recompila solo el archivo mutado,
+  enlaza y corre las suites de `--solo` con `--parar` (sale en el primer
+  fallo), varias a la vez y cada una en su carpeta (algunas pruebas
+  escriben archivos con nombre fijo). Las que sobreviven se repasan con
+  todas las suites y, con `--asan` o `--ppc`, también con ASan o en
+  PowerPC bajo qemu. Así el resultado es el mismo que corriendo todo con
+  ASan para cada mutación, en una fracción del tiempo. Formato del
+  archivo de mutaciones (texto exacto, una sola vez en el archivo):
+  `=== nombre`, `@ archivo`, `<<<`, antes, `>>>`, después, `===`. Las de
+  cada versión se guardan en `tools/banco/mutaciones/`. Una mutación que
+  deja la lista dando vueltas cuenta como colgada (detectada); el límite
+  es 10 veces lo que tardan las suites sin mutar (30 s como poco).
 - `qprof.py`: instrucciones PowerPC por función (y por unidad) a partir de
   `qemu-ppc -d in_asm,exec,nochain -D grande.log` menos una corrida corta:
   `qprof.py grande.log corta.log UNIDADES [FUNCIONES]` (lista las 25 que

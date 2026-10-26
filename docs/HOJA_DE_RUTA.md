@@ -66,7 +66,9 @@ volver a medir tras cada paso.
     (`ge_bbox_llamada`) y el censo `prof_huesos`; en la 0.5.23.1, la
     prueba de cada llamada más barata (`ge_bbox_orden`, `ge_bbox_aabb`);
     en la 0.5.23.2, la banda de guarda (`ge_bbox_guarda`) y el repaso por
-    triángulos (`ge_bbox_triangulos`). Falta 1.4.
+    triángulos (`ge_bbox_triangulos`, apagado desde la 0.5.23.3: en DBZ
+    cuesta más de lo que salta); en la 0.5.23.3, las rachas de huesos
+    (`ge_cmd_huesos`). Falta 1.4.
 11. Decidir el diseño del IR y hacer 2.2 y 2.3 como IR, junto con 2.5
     (BAT). Las fases 3, 4 y 5 vienen después.
 
@@ -317,6 +319,19 @@ pruebas con un vértice en cada límite, 36 mutaciones (25 detectadas, el
 resto de margen, equivalentes o solo de poder), A/B, 0.5.23.1 contra
 0.5.23.2. Censo nuevo de por qué no se saltan las llamadas que no dibujan
 nada. Siguen 0.5.23.3 (rachas de huesos) y 0.5.23.4 (1.4 y el IR).
+
+Resultado de la 0.5.23.2 en el Wii: imagen igual y verificación con 0
+distintas, pero la banda no salta nada en DBZ y el repaso por triángulos
+cuesta más de lo que salta (peleas +0,5 a +1,0 % de ciclos): se apaga
+`ge_bbox_triangulos` por defecto.
+
+Hecha (v0.5.23.3): las rachas de huesos más baratas. `ge_cmd_huesos`: los
+0x2A/0x2B seguidos (57 % de los comandos de la pelea) se ejecutan en un
+bucle propio, con el mismo estado que uno a uno, hasta otro comando, la
+parada o el final de la RAM. De ~62 a ~15 instrucciones por comando de
+hueso; banco con 8 huesos, −7,2 % por llamada. Mutaciones con
+`tools/banco/mutar.py` (rápidas, mismo resultado). Sigue 0.5.23.4 (1.4
+`ge_charolas` y el diseño del IR).
 
 Primera tanda acordada (todas "más barato", verificables en el PC):
 0.1 `prof_espera`, **skinning rápido** (`ge_skin_rapido`), **matrices al

@@ -1,0 +1,179 @@
+=== indice hasta 96 incluido
+@ src/gpu/ge.c
+<<<
+			if(idx < 96) memcpy(hb + idx, &bits, 4);
+>>>
+			if(idx <= 96) memcpy(hb + idx, &bits, 4);
+===
+=== indice hasta 95
+@ src/gpu/ge.c
+<<<
+			if(idx < 96) memcpy(hb + idx, &bits, 4);
+>>>
+			if(idx < 95) memcpy(hb + idx, &bits, 4);
+===
+=== indice con 8 bits
+@ src/gpu/ge.c
+<<<
+			u32 idx = num & 0x7F, bits = rd_le32(p) << 8;
+>>>
+			u32 idx = num & 0xFF, bits = rd_le32(p) << 8;
+===
+=== dato sin desplazar
+@ src/gpu/ge.c
+<<<
+			u32 idx = num & 0x7F, bits = rd_le32(p) << 8;
+>>>
+			u32 idx = num & 0x7F, bits = rd_le32(p) << 7;
+===
+=== contador de dos en dos
+@ src/gpu/ge.c
+<<<
+			num++;
+		} else if(c == GE_BONEMATRIXNUMBER){
+>>>
+			num += 2;
+		} else if(c == GE_BONEMATRIXNUMBER){
+===
+=== numero con 8 bits
+@ src/gpu/ge.c
+<<<
+			num = rd_le32(p) & 0x7F;
+			nums++;
+>>>
+			num = rd_le32(p) & 0xFF;
+			nums++;
+===
+=== sin contar los numeros
+@ src/gpu/ge.c
+<<<
+			num = rd_le32(p) & 0x7F;
+			nums++;
+>>>
+			num = rd_le32(p) & 0x7F;
+===
+=== dato a 0 siempre
+@ src/gpu/ge.c
+<<<
+	if(nums != n) ge.cmd[GE_BONEMATRIXDATA] = 0;
+>>>
+	ge.cmd[GE_BONEMATRIXDATA] = 0;
+===
+=== dato a 0 nunca
+@ src/gpu/ge.c
+<<<
+	if(nums != n) ge.cmd[GE_BONEMATRIXDATA] = 0;
+>>>
+	(void)nums;
+===
+=== numero sin la mascara de 24 bits
+@ src/gpu/ge.c
+<<<
+	ge.cmd[GE_BONEMATRIXNUMBER] = num & 0xFFFFFF;
+>>>
+	ge.cmd[GE_BONEMATRIXNUMBER] = num;
+===
+=== comando actual fijo
+@ src/gpu/ge.c
+<<<
+	ge.cur_cmd = p[-1];
+>>>
+	ge.cur_cmd = GE_BONEMATRIXDATA;
+===
+=== comando leido de otro byte
+@ src/gpu/ge.c
+<<<
+		u32 c = p[3];
+>>>
+		u32 c = p[2];
+===
+=== uno de mas al final
+@ src/gpu/ge.c
+<<<
+	while(p < fin){
+		u32 c = p[3];
+>>>
+	while(p <= fin){
+		u32 c = p[3];
+===
+=== comandos contados de menos
+@ src/gpu/ge.c
+<<<
+	ge_stats.commands += n;
+	ge_stats.ch_rachas++;
+>>>
+	ge_stats.commands += n - 1;
+	ge_stats.ch_rachas++;
+===
+=== sin la parada
+@ src/gpu/ge.c
+<<<
+				if(!(d & 3) && d / 4 < n) n = d / 4;   //Arreglo
+>>>
+				(void)d;   //Arreglo
+===
+=== parada un comando despues
+@ src/gpu/ge.c
+<<<
+				if(!(d & 3) && d / 4 < n) n = d / 4;   //Arreglo
+>>>
+				if(!(d & 3) && d / 4 < n) n = d / 4 + 1;   //Arreglo
+===
+=== parada sin mirar la alineacion
+@ src/gpu/ge.c
+<<<
+				if(!(d & 3) && d / 4 < n) n = d / 4;   //Arreglo
+>>>
+				if(d / 4 < n) n = d / 4;   //Arreglo
+===
+=== un comando mas alla de la memoria
+@ src/gpu/ge.c
+<<<
+				u32 n = (lim - off) / 4 + 1, d = l->stall - pc;   //Arreglo
+>>>
+				u32 n = (lim - off) / 4 + 2, d = l->stall - pc;   //Arreglo
+===
+=== tambien fuera de la RAM
+@ src/gpu/ge.c
+<<<
+			if((huesos | huesos_v) && (cmd == GE_BONEMATRIXDATA || cmd == GE_BONEMATRIXNUMBER) && off <= lim){   //Arreglo
+>>>
+			if((huesos | huesos_v) && (cmd == GE_BONEMATRIXDATA || cmd == GE_BONEMATRIXNUMBER)){   //Arreglo
+===
+=== pc un comando antes
+@ src/gpu/ge.c
+<<<
+				l->pc = pc + 4 * n;   //Arreglo
+>>>
+				l->pc = pc + 4 * n - 4;   //Arreglo
+===
+=== el atajo tambien con ge_verificar
+@ src/gpu/ge.c
+<<<
+				n = huesos ? racha_huesos(ram, off, n) : verificar_huesos(l, ram, off, n);   //Arreglo
+>>>
+				n = racha_huesos(ram, off, n);   //Arreglo
+===
+=== el atajo con los censos
+@ src/gpu/ge.c
+<<<
+	const int huesos = opt_on[OPT_GE_CMD_HUESOS] && !lento;   //Arreglo
+>>>
+	const int huesos = opt_on[OPT_GE_CMD_HUESOS] && !opt_on[OPT_GE_VERIF];   //Arreglo
+===
+=== verificar sin comparar los huesos
+@ src/gpu/ge.c
+<<<
+	malo = memcmp(atajo, ge.bone, sizeof(atajo)) || ge.cmd[GE_BONEMATRIXNUMBER] != r2a || ge.cmd[GE_BONEMATRIXDATA] != r2b ||
+>>>
+	malo = ge.cmd[GE_BONEMATRIXNUMBER] != r2a || ge.cmd[GE_BONEMATRIXDATA] != r2b ||
+===
+=== verificar ejecutando un comando menos
+@ src/gpu/ge.c
+<<<
+	for(i = 0; i < n; i++){
+		l->pc = pc + 4 * i;
+>>>
+	for(i = 1; i < n; i++){
+		l->pc = pc + 4 * i;
+===

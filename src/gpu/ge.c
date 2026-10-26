@@ -1181,6 +1181,63 @@ static void __attribute__((noinline)) censo_huesos(u32 op){   //Arreglo
 	if(cmd == GE_PRIM && (arg & 0xFFFF) && ((ge.cmd[GE_VERTEXTYPE] >> 9) & 3)) ge_stats.hu_llamadas++;
 }
 
+static u32 racha_huesos(const u8 *ram, u32 off, u32 n){   //Arreglo
+	const u8 *p = ram + off, *fin = p + 4 * n;
+	u32 num = ge.cmd[GE_BONEMATRIXNUMBER], nums = 0;
+	float *hb = &ge.bone[0][0];
+	while(p < fin){
+		u32 c = p[3];
+		if(c == GE_BONEMATRIXDATA){
+			u32 idx = num & 0x7F, bits = rd_le32(p) << 8;
+			if(idx < 96) memcpy(hb + idx, &bits, 4);
+			num++;
+		} else if(c == GE_BONEMATRIXNUMBER){
+			num = rd_le32(p) & 0x7F;
+			nums++;
+		} else break;
+		p += 4;
+	}
+	n = (u32)(p - (ram + off)) / 4;
+	ge.cmd[GE_BONEMATRIXNUMBER] = num & 0xFFFFFF;
+	if(nums != n) ge.cmd[GE_BONEMATRIXDATA] = 0;
+	ge.cur_cmd = p[-1];
+	ge_stats.commands += n;
+	ge_stats.ch_rachas++;
+	ge_stats.ch_cmds += n;
+	return n;
+}
+
+static u32 __attribute__((noinline)) verificar_huesos(DisplayList *l, const u8 *ram, u32 off, u32 n){   //Arreglo
+	static float antes[96], atajo[96];
+	u32 pc = l->pc, c2a = ge.cmd[GE_BONEMATRIXNUMBER], c2b = ge.cmd[GE_BONEMATRIXDATA], cur = ge.cur_cmd, cmds = ge_stats.commands;
+	u32 sucio = ge_sucio, vaddr = ge.vaddr, iaddr = ge.iaddr, offset = ge.offset, prims = ge_stats.primitives;
+	u32 clut = ge.clut_gen, st = (u32)gpu_state, r2a, r2b, rcur, rcmds, rsucio, i;
+	u64 ciclos = cycles_executed;
+	int malo;
+	memcpy(antes, ge.bone, sizeof(antes));
+	n = racha_huesos(ram, off, n);
+	ge_stats.ch_rachas--;
+	ge_stats.ch_cmds -= n;
+	memcpy(atajo, ge.bone, sizeof(atajo));
+	r2a = ge.cmd[GE_BONEMATRIXNUMBER]; r2b = ge.cmd[GE_BONEMATRIXDATA]; rcur = ge.cur_cmd; rcmds = ge_stats.commands; rsucio = ge_sucio;
+	memcpy(ge.bone, antes, sizeof(antes));
+	ge.cmd[GE_BONEMATRIXNUMBER] = c2a; ge.cmd[GE_BONEMATRIXDATA] = c2b; ge.cur_cmd = cur; ge_stats.commands = cmds; ge_sucio = sucio;
+	for(i = 0; i < n; i++){
+		l->pc = pc + 4 * i;
+		execute(l, rd_le32(ram + off + 4 * i));
+	}
+	l->pc = pc;
+	ge_stats.ch_verif++;
+	ge_stats.ch_verif_cmds += n;
+	malo = memcmp(atajo, ge.bone, sizeof(atajo)) || ge.cmd[GE_BONEMATRIXNUMBER] != r2a || ge.cmd[GE_BONEMATRIXDATA] != r2b ||
+	       ge.cur_cmd != rcur || ge_stats.commands != rcmds || ge_sucio != rsucio || ge.vaddr != vaddr || ge.iaddr != iaddr ||
+	       ge.offset != offset || ge_stats.primitives != prims || ge.clut_gen != clut || (u32)gpu_state != st ||
+	       cycles_executed != ciclos;
+	if(malo && ge_stats.ch_verif_bad++ < 16)
+		hle_log_quiet("[VERIF] racha de huesos de %u comandos en 0x%08X distinta por el atajo\n", (unsigned)n, (unsigned)pc);
+	return n;
+}
+
 static void __attribute__((noinline)) comando_lento(DisplayList *l, u32 op, u32 pc){   //Arreglo
 	u32 cmd = op >> 24;
 	if(opt_on[OPT_PROF_COMANDOS]) cmd_hist[cmd]++;
@@ -1197,6 +1254,9 @@ static void __attribute__((noinline)) run_commands_ptr(DisplayList *l){
 	const u32 lim = psp_mem.ram_size - 4;
 	const int lento = opt_on[OPT_PROF_ESTADO] | opt_on[OPT_GE_VERIF] | opt_on[OPT_PROF_COMANDOS] | opt_on[OPT_PROF_HUESOS];   //Arreglo
 	const int matrices = opt_on[OPT_GE_CMD_MATRICES] && !lento;   //Arreglo
+	const int huesos = opt_on[OPT_GE_CMD_HUESOS] && !lento;   //Arreglo
+	const int huesos_v = opt_on[OPT_GE_CMD_HUESOS] && opt_on[OPT_GE_VERIF] && !opt_on[OPT_PROF_ESTADO] &&
+	                     !opt_on[OPT_PROF_COMANDOS] && !opt_on[OPT_PROF_HUESOS];   //Arreglo
 	while(gpu_state == GPU_RUNNING){
 		u32 pc = l->pc, off = (pc & PSP_ADDR_MASK) - PSP_RAM_BASE, op, cmd, arg;
 		if(pc == l->stall){ gpu_state = GPU_STALL; break; }
@@ -1206,6 +1266,13 @@ static void __attribute__((noinline)) run_commands_ptr(DisplayList *l){
 		cmd = op >> 24;
 		arg = op & 0x00FFFFFFu;
 		if(cmd_con_caso[cmd] | lento){   //Arreglo
+			if((huesos | huesos_v) && (cmd == GE_BONEMATRIXDATA || cmd == GE_BONEMATRIXNUMBER) && off <= lim){   //Arreglo
+				u32 n = (lim - off) / 4 + 1, d = l->stall - pc;   //Arreglo
+				if(!(d & 3) && d / 4 < n) n = d / 4;   //Arreglo
+				n = huesos ? racha_huesos(ram, off, n) : verificar_huesos(l, ram, off, n);   //Arreglo
+				l->pc = pc + 4 * n;   //Arreglo
+				continue;   //Arreglo
+			}   //Arreglo
 			if(matrices && cmd_matriz[cmd]){   //Arreglo
 				const MatDesc *d = &mat_desc[cmd_matriz[cmd]];   //Arreglo
 				MatRes r;   //Arreglo

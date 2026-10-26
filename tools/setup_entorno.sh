@@ -79,9 +79,15 @@ for layer in man['layers']:
 EOF
 fi
 
+cat > "$DEST/env.sh" <<EOF
+export DEVKITPRO=$DEST/devkitpro
+export DEVKITPPC=$DEST/devkitpro/devkitPPC
+EOF
+
 cat <<EOF
 
-Listo. Exporta esto (o ponlo en tu shell):
+Listo. Exporta esto (o ponlo en tu shell, o haz ". $DEST/env.sh"; los
+guiones de tools/banco lo leen de ahí):
   export DEVKITPRO=$DEST/devkitpro
   export DEVKITPPC=$DEST/devkitpro/devkitPPC
 Pruebas:

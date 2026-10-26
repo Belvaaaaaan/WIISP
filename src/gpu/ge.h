@@ -104,6 +104,7 @@ typedef struct {
 	u32 ob_nada_clase[5], ob_nada_clase_vertices[5];   //Arreglo
 	u32 hu_datos, hu_iguales, hu_mat, hu_mat_iguales, hu_rachas, hu_racha_datos, hu_rachas_largas, hu_llamadas;   //Arreglo
 	u32 cm_verif, cm_verif_bad;   //Arreglo
+	u32 ch_rachas, ch_cmds, ch_verif, ch_verif_cmds, ch_verif_bad;   //Arreglo
 } GeStats;
 void ge_get_stats(GeStats *out);
 

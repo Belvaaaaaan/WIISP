@@ -2893,6 +2893,84 @@ Qué mirar:
   recorte, cómo son sus vértices y triángulos, y cuántas tienen todos sus
   triángulos descartados (lo que el repaso podría saltar todavía).
 
+### Resultado de la 0.5.23.2 en el Wii (DBZ: sin / con / verif / censo)
+
+- Las 12 capturas de `censo`, las de siempre (9E8BC705 ... E9392291); las
+  cuatro corridas ejecutan las mismas 1343,1 M instrucciones.
+- verif: "Verificacion de ge_bbox" 0 distintas (175.234 llamadas que se
+  habrían saltado, dibujadas y comparadas en la 4200-4800; 162.892 en la
+  3600-4200, 57.313 al final), cajas rápidas 0 distintas, todo lo demás 0.
+- `ge_bbox_guarda`: no hace nada en DBZ (53 cajas probadas por ventana, 0
+  fuera). Cuesta casi nada; se queda encendido.
+- `ge_bbox_triangulos`: en la 4200-4800 repasa 64.715 llamadas (todas las
+  que la caja no salta, también las 50.507 vistas por su primer vértice) y
+  salta 3.819 más (175.234 frente a 171.415; +181 mil vértices). Cuesta
+  207 ms por ventana en el censo (293 en la 3600-4200), ~2.300 ciclos por
+  llamada repasada, más de lo que ahorra: ciclos (PMC) de con frente a sin,
+  +0,8 % (3600-4200), +0,5 % (4200-4800) y +1,0 % (final); leer vértices
+  de 522 a 551 ciclos por vértice. Escena 92,4 frente a 92,6 s.
+  **Se apaga por defecto en la 0.5.23.3** (el camino sigue, con su
+  interruptor). Limitarlo a las llamadas que no se ven por su primer
+  vértice queda como idea: haría falta separar en el censo lo que cuesta
+  cada clase.
+- Censo, lo que queda: las llamadas probadas por su caja que no dibujan
+  nada son solo 536 (9.268 vértices), 505 con todos sus triángulos
+  descartados. Por la salida: esquina dentro 401, vértices de Q en la banda
+  134. Sus vértices: 7.822 fuera de la pantalla, 1.106 detrás de la
+  cámara, 320 fuera de la banda. Lo que el repaso puede saltar ya está
+  casi todo saltado.
+- Siguen sin dibujar nada 15.483 llamadas fuera de objetos (sin BBOX) con
+  267 mil vértices (218 ms), 13.546 con huesos: no tienen caja que probar.
+  Idea para más adelante (con los huesos, la caja de las posiciones no
+  vale).
+
+### v0.5.23.3: rachas de huesos (`ge_cmd_huesos`) y mutaciones rápidas
+
+Punto 3 del plan. En la 0.5.23 el censo `prof_huesos` daba, en la pelea,
+4,27 M datos de hueso por ventana (57 % de los comandos) en rachas de 36
+datos de media (3 matrices; cada una con su 0x2A delante). Con
+`ge_cmd_matrices` cada dato todavía pasaba por el bucle general: leer,
+mirar la tabla de casos, la de matrices, el descriptor, y guardar número,
+comando, `ge_sucio`, `cur_cmd`, la cuenta y `l->pc`. Banco (escena 3, 8
+huesos = 104 comandos de hueso por llamada): `run_commands_ptr` 7.911
+instrucciones por llamada frente a 412 sin huesos (escena 1): ~62 por
+comando.
+
+`ge_cmd_huesos`: al llegar un 0x2A o 0x2B, `racha_huesos` ejecuta los
+siguientes 0x2A/0x2B en un bucle propio con el número en un registro,
+hasta otro comando, la parada (stall) o el final de la RAM (detalle en
+ARREGLOS). La parada: el bucle normal mira `pc == stall` antes de cada
+comando; como el pc sube de 4 en 4, la racha para en `(stall − pc) / 4`
+si la diferencia es múltiplo de 4 (si no, el pc nunca llega a la parada).
+Primera versión, 22 instrucciones por dato: GCC leía la palabra con `lwz`
+para mirar el byte del comando y daba la vuelta al dato con tres
+rotaciones. Leyendo el byte del comando aparte (`p[3]`) usa `lwbrx`; con
+la máscara de 24 bits al final y sin la bandera de "hubo datos" (se sabe
+contando los 0x2A), 15.
+
+Banco, instrucciones por llamada (total sin el psq_l emulado; bucle de
+comandos + racha), sin / con `ge_cmd_huesos`:
+- escena 2 (4 huesos, 52 comandos de hueso): total 62.845 / 60.437;
+  comandos 4.603 / 2.195;
+- escena 3 (8 huesos, 104): total 68.557 / 63.605 (−7,2 %); comandos
+  7.911 / 2.959.
+En el Wii, con 4,27 M comandos de hueso por ventana a ~47 instrucciones
+menos cada uno: ~200 M instrucciones, ~1,5 % de los ciclos de la pelea.
+
+Además:
+- `ge_bbox_triangulos` apagado por defecto (resultado de la 0.5.23.2,
+  arriba).
+- Mutaciones rápidas (`tools/banco/mutar.py`, pedido del usuario): antes
+  cada mutación recompilaba todo con ASan (~1 min) y corría todas las
+  pruebas (~6,8 min con ASan): ~8 min por mutación. Ahora los objetos se
+  compilan una vez a -O2 sin ASan, cada mutación recompila solo su
+  archivo y corre las suites que tocan el código (`--solo`, `--parar`), 4
+  a la vez; las que sobreviven se repasan con todas las suites (y con
+  ASan, `--asan`, o en PowerPC, `--ppc`). Mismo resultado: una mutación
+  detectada lo está con cualquier suite; las que sobreviven pasan por todo
+  como antes. Todas las pruebas sin ASan a -O2: 39 s de compilar y 96 s de
+  correr (con ASan, ~60 s y ~407 s).
+
 ### Para el siguiente chat (empezar aquí)
 
 Metodología acordada (detalle en `docs/HOJA_DE_RUTA.md`): primero medir

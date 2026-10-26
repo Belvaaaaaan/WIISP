@@ -17,9 +17,44 @@
 #include <sys/stat.h>
 #include <unistd.h>
 
+#include "core/opt.h"   //Arreglo
 #include "test.h"
 
 int failures, checks;
+static int parar;   //Arreglo
+static const char *solo;   //Arreglo
+
+void test_parar(void){   //Arreglo
+	if(!parar) return;
+	printf("\n%d comprobaciones, %d fallos (parada en el primero)\n", checks, failures);
+	fflush(stdout);
+	_exit(1);
+}
+
+static int toca(const char *nombre){   //Arreglo
+	size_t n = strlen(nombre);
+	const char *p = solo;
+	if(!p) return 1;
+	while(*p){
+		size_t k = strcspn(p, ",");
+		if(k == n && !strncmp(p, nombre, n)) return 1;
+		p += k;
+		if(*p == ',') p++;
+	}
+	return 0;
+}
+
+static int tras_guion, reset_hecho;   //Arreglo
+
+static void antes_de(const char *nombre){   //Arreglo
+	if(!strcmp(nombre, "guion")) tras_guion = 1;
+	if(solo && tras_guion && !reset_hecho){
+		opt_reset();
+		reset_hecho = 1;
+	}
+}
+
+#define SUITE(f) do { if(toca(#f + 5)){ antes_de(#f + 5); f(); } else if(!strcmp(#f, "test_guion")) tras_guion = 1; } while(0)   //Arreglo
 
 /* ------------------------------------------------------------------ */
 /* Constructor de ejecutables sintéticos                              */
@@ -515,6 +550,13 @@ static int write_test_pbp(const char *path){
 
 int main(int argc, char **argv){
 	if(argc == 3 && !strcmp(argv[1], "--write-pbp")) return write_test_pbp(argv[2]);
+	{   //Arreglo
+		int a;
+		for(a = 1; a < argc; a++){
+			if(!strcmp(argv[a], "--parar")) parar = 1;
+			else if(!strcmp(argv[a], "--solo") && a + 1 < argc) solo = argv[++a];
+		}
+	}
 
 	u8 *ram = malloc(PSP_RAM_SIZE_32MB), *vram = malloc(PSP_VRAM_SIZE);
 	u8 *scratch = malloc(PSP_SCRATCH_SIZE);
@@ -525,31 +567,31 @@ int main(int argc, char **argv){
 		return 1;
 	}
 
-	test_memory();
-	test_prx();
-	test_exec();
-	test_pbp();
-	test_robustness();
-	test_filelist();
-	test_formats();
-	test_io();
-	test_osk();
-	test_guion();
-	test_texclut();
-	test_gxtiles();
-	test_skin();
-	test_vdec();
-	test_censo();
-	test_bbox();   //Arreglo
-	test_listas();   //Arreglo
-	test_tirones();
-	test_registro();
-	test_gxemit();
-	test_vfpu();
-	test_wiimote();
-	test_interp();
-	test_enlace();   //Arreglo
-	test_texcache();   /* la última: vacía la memoria */
+	SUITE(test_memory);   //Arreglo
+	SUITE(test_prx);   //Arreglo
+	SUITE(test_exec);   //Arreglo
+	SUITE(test_pbp);   //Arreglo
+	SUITE(test_robustness);   //Arreglo
+	SUITE(test_filelist);   //Arreglo
+	SUITE(test_formats);   //Arreglo
+	SUITE(test_io);   //Arreglo
+	SUITE(test_osk);   //Arreglo
+	SUITE(test_guion);   //Arreglo
+	SUITE(test_texclut);   //Arreglo
+	SUITE(test_gxtiles);   //Arreglo
+	SUITE(test_skin);   //Arreglo
+	SUITE(test_vdec);   //Arreglo
+	SUITE(test_censo);   //Arreglo
+	SUITE(test_bbox);   //Arreglo
+	SUITE(test_listas);   //Arreglo
+	SUITE(test_tirones);   //Arreglo
+	SUITE(test_registro);   //Arreglo
+	SUITE(test_gxemit);   //Arreglo
+	SUITE(test_vfpu);   //Arreglo
+	SUITE(test_wiimote);   //Arreglo
+	SUITE(test_interp);   //Arreglo
+	SUITE(test_enlace);   //Arreglo
+	SUITE(test_texcache);   /* la última: vacía la memoria */   //Arreglo
 
 	printf("\n%d comprobaciones, %d fallos\n", checks, failures);
 	free(ram); free(vram); free(scratch);
