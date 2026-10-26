@@ -108,39 +108,6 @@
 	gx_tocado = 1;
 }
 ===
-=== sprites no cortan la charola
-@ src/wii/gx_ge.c
-<<<
-static void gx_rect(const GeVertex *v0, const GeVertex *v1){
-	int ok;
-	tri_listo = 0;
-	charola = 0;   //Arreglo
->>>
-static void gx_rect(const GeVertex *v0, const GeVertex *v1){
-	int ok;
-	tri_listo = 0;
-===
-=== sprites sin la comprobacion pendiente de la textura
-@ src/wii/gx_ge.c
-<<<
-static void gx_rect(const GeVertex *v0, const GeVertex *v1){
-	int ok;
-	tri_listo = 0;
-	charola = 0;   //Arreglo
-	if(ch_pend){ ch_pend = 0; targets_dirty = 1; }   //Arreglo
->>>
-static void gx_rect(const GeVertex *v0, const GeVertex *v1){
-	int ok;
-	tri_listo = 0;
-	charola = 0;   //Arreglo
-===
-=== charola apuntada tambien desde los sprites
-@ src/wii/gx_ge.c
-<<<
-	if(!ch_tri || !opt_on[OPT_GE_CHAROLAS] || !opt_on[OPT_GE_ESTADO_SUCIO] || opt_on[OPT_PROF_ESTADO]) return;
->>>
-	if(!opt_on[OPT_GE_CHAROLAS] || !opt_on[OPT_GE_ESTADO_SUCIO] || opt_on[OPT_PROF_ESTADO]) return;
-===
 === envio: sin esperar a que el estado este listo
 @ src/wii/gx_ge.c
 <<<
@@ -215,4 +182,43 @@ static void gx_rect(const GeVertex *v0, const GeVertex *v1){
 	if(!page_span(addr, len, &first, &last)) return;
 >>>
 	if(!page_span(addr, len, &first, &last)) return;
+===
+=== sprites: textura pendiente antes de descartar los de ancho cero
+@ src/wii/gx_ge.c
+<<<
+	if(v0->x == v1->x || v0->y == v1->y) return;
+	if(ch_pend) ch_textura();   //Arreglo
+>>>
+	if(ch_pend) ch_textura();   //Arreglo
+	if(v0->x == v1->x || v0->y == v1->y) return;
+===
+=== sprites: sin la textura pendiente con su charola
+@ src/wii/gx_ge.c
+<<<
+	if(v0->x == v1->x || v0->y == v1->y) return;
+	if(ch_pend) ch_textura();   //Arreglo
+>>>
+	if(v0->x == v1->x || v0->y == v1->y) return;
+===
+=== sprites: charola sin apuntar desde ellos
+@ src/wii/gx_ge.c
+<<<
+	ch_spr = opt_on[OPT_GE_CHAROLAS_SPRITES];   //Arreglo
+>>>
+	ch_spr = 0;   //Arreglo
+===
+=== charola apuntada tambien desde lineas y puntos
+@ src/wii/gx_ge.c
+<<<
+	if(!(ch_tri || ch_spr) || !opt_on[OPT_GE_CHAROLAS] || !opt_on[OPT_GE_ESTADO_SUCIO] || opt_on[OPT_PROF_ESTADO]) return;
+>>>
+	if(!opt_on[OPT_GE_CHAROLAS] || !opt_on[OPT_GE_ESTADO_SUCIO] || opt_on[OPT_PROF_ESTADO]) return;
+===
+=== sprites: ch_spr sin volver a cero
+@ src/wii/gx_ge.c
+<<<
+	ok = prepare(0);
+	ch_spr = 0;   //Arreglo
+>>>
+	ok = prepare(0);
 ===

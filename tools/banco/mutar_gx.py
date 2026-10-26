@@ -30,8 +30,8 @@ DKP_OBJ = {
     'src/gpu/ge_raster.c': ('ge_raster.o', 'src/gpu/ge_raster.c', []),
     'src/gpu/ge.c': ('bench_cmd.o', 'tools/banco/bench_cmd.c', []),
 }
-CAMBIOS = (3, 10, 40)
-APAGADO = ['ge_charolas=0', 'ge_charolas_envio=0', 'ge_charolas_ge=0', 'ge_charolas_tiras=0']
+CAMBIOS = (3, 5, 10, 40)
+APAGADO = ['ge_charolas=0', 'ge_charolas_envio=0', 'ge_charolas_ge=0', 'ge_charolas_tiras=0', 'ge_charolas_sprites=0']
 
 def ppc_fuentes():
     pat = ['src/core/*.c', 'src/loader/*.c', 'src/cpu/*.c', 'src/hle/*.c', 'src/gpu/*.c']

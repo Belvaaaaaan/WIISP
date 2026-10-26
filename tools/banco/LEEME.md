@@ -73,6 +73,31 @@ al repositorio), `gcc-powerpc-linux-gnu` y `qemu-user`. Las salidas van a
   cada versión se guardan en `tools/banco/mutaciones/`. Una mutación que
   deja la lista dando vueltas cuenta como colgada (detectada); el límite
   es 10 veces lo que tardan las suites sin mutar (30 s como poco).
+- `bench_charolas.c` (lo compila `build_banco.sh`) + `banco_charolas.sh
+  SEMILLAS LLAMADAS "OPCIONES_A" "OPCIONES_B" [fifo]`: listas al azar por el
+  bucle de `ge.c` y el renderizador de GX sobre `stub_estado.c`, con
+  cambios entre llamadas (destinos, máscaras, LIGHTMODE, textura, paleta,
+  sombreado, mezcla, tipo de vértice, primitiva; `CAMBIOS=N` en el entorno:
+  N % de llamadas con algún cambio) y entre tramos de la lista (textura
+  escrita con y sin aviso, periodo nuevo, aviso de vaciar la caché).
+  Compara la huella del estado de GX, la del FIFO, los contadores del GE y
+  los de la caché de texturas entre dos juegos de interruptores (`fifo`:
+  sin el número de `GX_Begin`, para `ge_charolas_envio`). Encontró un
+  fallo de verdad en la primera versión de `ge_charolas` (ver CONTINUAR).
+- `stub_estado.c` con `gx_ge.c` compilado con `-DWIISP_FIFO_TRAZA`: la
+  línea `[GX]` añade la huella del FIFO (cada triángulo con el estado de su
+  `GX_Begin`, igual con un `GX_Begin` por triángulo o uno para muchos;
+  sprites, líneas y puntos enteros; las primitivas de `blit`, por su tipo y
+  número de vértices). `build_cli_gx.sh` lo compila así.
+- `mutar_gx.py MUTACIONES [--semillas N] [--hilos N]`: mutaciones del
+  camino de GX (`gx_ge.c`, `texcache.c`, `memory.c`, `ge_vertex.c`,
+  `ge_raster.c`, `ge.c`) contra el banco de las charolas: recompila solo el
+  archivo mutado (con devkitPPC o con el gcc de PowerPC), enlaza
+  `bench_charolas` y lo compara, semilla a semilla, con el banco sin mutar
+  y las charolas apagadas (el camino de siempre).
+- `bench_lista` escena 11: como una pelea de DBZ (4 huesos y la matriz de
+  mundo en cada llamada, la textura una sola vez). 0.5.23.4, instrucciones
+  por llamada (total con el psq_l emulado), 0xC301: ver CONTINUAR.
 - `qprof.py`: instrucciones PowerPC por función (y por unidad) a partir de
   `qemu-ppc -d in_asm,exec,nochain -D grande.log` menos una corrida corta:
   `qprof.py grande.log corta.log UNIDADES [FUNCIONES]` (lista las 25 que
@@ -101,7 +126,8 @@ al repositorio), `gcc-powerpc-linux-gnu` y `qemu-user`. Las salidas van a
   diff entre dos versiones se ve en qué dibujo y qué función cambia.
 - `ab_versiones.py`: dos `wiisp-cli-gx` (por ejemplo del commit anterior,
   con `git worktree`) en las pspautotests: misma salida y misma huella de
-  GX. `gpu/exact/pixel` lee memoria que la GPU de mentira no escribe (los
+  GX. Con `--a OPCION=V` y `--b OPCION=V`, el mismo CLI con interruptores
+  distintos; con `--fifo`, de la línea `[GX]` solo la huella del FIFO. `gpu/exact/pixel` lee memoria que la GPU de mentira no escribe (los
   destinos de `GX_CopyTex`/`GX_CopyDisp`): desde la 0.5.23.2 el script
   corre qemu con `MALLOC_PERTURB_=165` y sale igual en las dos.
 - `gevert.sh DIR_BANCO [opcion=valor...]`: instrucciones por vértice

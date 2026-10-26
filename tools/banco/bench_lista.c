@@ -10,6 +10,8 @@
    escena 11: como una pelea de DBZ: 4 huesos y la matriz de mundo en cada
    llamada, la textura con paleta una sola vez al principio (las llamadas
    seguidas con el mismo estado: charolas)
+   escena 12: sprites en 2D (through), uno por llamada, la textura con
+   paleta una sola vez al principio (como un juego 2D o el texto)
    Con LUCES=1 en el entorno, dos luces encendidas (vtype con normal). Con
    prof_estado=1 escribe el censo de estado al final. */
 #include <stdio.h>
@@ -90,6 +92,16 @@ int main(int argc, char **argv){
 				}
 			}
 	}
+	if(esc == 12){   //Arreglo
+		vt = 0x80011A;   //Arreglo
+		for(k = 0; k < 32; k++){   //Arreglo
+			u8 *v = mem_ptr(0x08960000 + (u32)k * 12, 12);   //Arreglo
+			u32 x = (u32)(k / 2 % 4) * 100 + (k & 1 ? 32 : 0), y = (u32)(k / 8) * 60 + (k & 1 ? 32 : 0);   //Arreglo
+			v[0] = v[2] = 0; v[1] = v[3] = k & 1 ? 64 : 0;   //Arreglo
+			v[4] = 0xFF; v[5] = 0xFF;   //Arreglo
+			v[6] = (u8)x; v[7] = (u8)(x >> 8); v[8] = (u8)y; v[9] = (u8)(y >> 8); v[10] = v[11] = 0;   //Arreglo
+		}   //Arreglo
+	}   //Arreglo
 	for(i = 0; i < reps; i++){
 		static u32 salto;
 		if(esc >= 4 && esc <= 10 && i % 4 == 0){   //Arreglo
@@ -107,7 +119,7 @@ int main(int argc, char **argv){
 			salto = lp;
 			cmd(GE_BJUMP, 0);
 		}
-		if(esc == 11 && i == 0){   //Arreglo
+		if((esc == 11 || esc == 12) && i == 0){   //Arreglo
 			cmd(GE_TEXMODE, 0); cmd(GE_TEXFORMAT, 3);   //Arreglo
 			cmd(GE_TEXADDR0, 0x900000); cmd(GE_TEXBUFWIDTH0, 64 | (0x08 << 16)); cmd(GE_TEXSIZE0, 6 | (6 << 8));   //Arreglo
 			cmd(GE_TEXFLUSH, 0);   //Arreglo
@@ -121,7 +133,7 @@ int main(int argc, char **argv){
 			cmd(GE_WORLDMATRIXNUMBER, 0);
 			for(j = 0; j < 12; j++) cmd(GE_WORLDMATRIXDATA, f24(ge.world[j]));
 		}
-		if(esc >= 1 && esc != 11){   //Arreglo
+		if(esc >= 1 && esc < 11){   //Arreglo
 			cmd(GE_TEXMODE, 0); cmd(GE_TEXFORMAT, 3);
 			cmd(GE_TEXADDR0, 0x900000); cmd(GE_TEXBUFWIDTH0, 64 | (0x08 << 16)); cmd(GE_TEXSIZE0, 6 | (6 << 8));
 			cmd(GE_TEXFLUSH, 0);
@@ -129,6 +141,7 @@ int main(int argc, char **argv){
 		}
 		cmd(GE_VERTEXTYPE, vt);
 		cmd(GE_BASE, 0x080000);
+		if(esc == 12){ cmd(GE_VADDR, 0x960000 + (u32)(i % 16) * 24); cmd(GE_PRIM, (GE_PRIM_RECTANGLES << 16) | 2); continue; }   //Arreglo
 		cmd(GE_VADDR, ((esc >= 8 && esc <= 10) ? 0x940000 : 0x900000) + (u32)(i % 16) * 0x400);   //Arreglo
 		cmd(GE_PRIM, (GE_PRIM_TRIANGLE_STRIP << 16) | 20);
 		if(esc >= 4 && esc <= 10 && i % 4 == 3) mem_write32(salto, (GE_BJUMP << 24) | (lp & 0xFFFFFF));   //Arreglo

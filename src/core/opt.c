@@ -58,6 +58,7 @@ const OptInfo opt_info[OPT_N] = {
 	[OPT_GE_CHAROLAS_ENVIO] = { "ge_charolas_envio", 1, 1 },   //Arreglo
 	[OPT_GE_CHAROLAS_GE] = { "ge_charolas_ge", 1, 1 },   //Arreglo
 	[OPT_GE_CHAROLAS_TIRAS] = { "ge_charolas_tiras", 1, 1 },   //Arreglo
+	[OPT_GE_CHAROLAS_SPRITES] = { "ge_charolas_sprites", 1, 1 },   //Arreglo
 	[OPT_CPU_SIN_EXTRA]  = { "cpu_sin_extra",  1, 1 },
 	[OPT_CPU_PREDEC]     = { "cpu_predec",     1, 1 },
 	[OPT_CPU_VERIFICAR]  = { "cpu_verificar",  1, 0 },

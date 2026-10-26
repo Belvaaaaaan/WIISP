@@ -92,6 +92,7 @@ enum {
 	OPT_GE_CHAROLAS_ENVIO,   //Arreglo
 	OPT_GE_CHAROLAS_GE,   //Arreglo
 	OPT_GE_CHAROLAS_TIRAS,   //Arreglo
+	OPT_GE_CHAROLAS_SPRITES,   //Arreglo
 	/* Fase 2: intérprete cacheado */
 	OPT_CPU_SIN_EXTRA,    /* 2.1 sin costo por instrucción */
 	OPT_CPU_PREDEC,       /* 2.2 predecodificación (cpu/predec.h) */

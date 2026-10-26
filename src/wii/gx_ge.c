@@ -258,7 +258,7 @@ static int gx_tocado = 1;
    lo que entra en este archivo desde fuera entre dos triángulos: la llamada
    siguiente, los ganchos de la VRAM, las demás primitivas, presentar... */
 static int tri_listo;
-static int charola, ch_tri, ch_pend;   //Arreglo
+static int charola, ch_tri, ch_spr, ch_pend;   //Arreglo
 static struct {   //Arreglo
 	core_u32 rgen, clut_gen, notas, avisos;
 	int tex;
@@ -2453,7 +2453,7 @@ static void ch_textura_vista(void){   //Arreglo
 static void charola_apuntar(void){   //Arreglo
 	const GeRasterState *r = ge_raster_state();
 	charola = 0;
-	if(!ch_tri || !opt_on[OPT_GE_CHAROLAS] || !opt_on[OPT_GE_ESTADO_SUCIO] || opt_on[OPT_PROF_ESTADO]) return;
+	if(!(ch_tri || ch_spr) || !opt_on[OPT_GE_CHAROLAS] || !opt_on[OPT_GE_ESTADO_SUCIO] || opt_on[OPT_PROF_ESTADO]) return;
 	if(skip_draws || use_rtt || use_clut_gpu || rtt_cur) return;
 	ch.tex = -1;
 	if(tex_on && r->texvalid[0]){
@@ -3059,12 +3059,17 @@ static void draw_sprite(const GeVertex *v0, const GeVertex *v1){
 static void gx_rect(const GeVertex *v0, const GeVertex *v1){
 	int ok;
 	tri_listo = 0;
-	charola = 0;   //Arreglo
-	if(ch_pend){ ch_pend = 0; targets_dirty = 1; }   //Arreglo
+	if(!opt_on[OPT_GE_CHAROLAS_SPRITES]){   //Arreglo
+		charola = 0;   //Arreglo
+		if(ch_pend){ ch_pend = 0; targets_dirty = 1; }   //Arreglo
+	}   //Arreglo
 	if(v0->x == v1->x || v0->y == v1->y) return;
+	if(ch_pend) ch_textura();   //Arreglo
 	if(opt_on[OPT_PROF_ESTADO]) census_prim();
 	first_v0 = v0; first_v1 = v1;
+	ch_spr = opt_on[OPT_GE_CHAROLAS_SPRITES];   //Arreglo
 	ok = prepare(0);
+	ch_spr = 0;   //Arreglo
 	first_v0 = first_v1 = NULL;
 	if(!ok) return;
 	if(use_clut_gpu && tex_on && !clut_gpu_sprite_ok(v0, v1)){
