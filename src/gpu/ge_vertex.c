@@ -3473,7 +3473,7 @@ static inline int bb_tri_fuera(u32 a, u32 b, u32 c, int prof){   //Arreglo
 		const u32 bd = BBT_BANDA | BBT_DELANTE;
 		if(todos & BBT_CERCA) return 1;
 		if((a & bd) == bd || (b & bd) == bd || (c & bd) == bd) return 1;
-		return (todos & BBT_DELANTE) && (todos & (0xFu * BBT_BORDE));
+		return (todos & (0xFu * BBT_BORDE)) != 0;
 	}
 	if(t & (BBT_WN | BBT_BANDA | BBT_Z)) return 1;
 	return (todos & (0xFu * BBT_BORDE)) != 0;

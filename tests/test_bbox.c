@@ -1636,7 +1636,9 @@ static void bbox_guarda_vuelta(void){   //Arreglo
 	CHECK_EQ(rp.distintas + rs.distintas, 0u);
 	CHECK_EQ(rp.verif_mal + rs.verif_mal, 0u);
 	CHECK_EQ(rp.orden_mal + rs.orden_mal, 0u);
-	CHECK(rp.dibujo0 > 100 && rs.dibujo0 > 100);
+	CHECK(rp.dibujo0 > 50 && rs.dibujo0 > 50);
+	CHECK(rp.guarda >= 120 && rs.guarda >= 100);
+	CHECK(rp.nada_s4 > 200 && rs.nada_s4 > 160);
 }
 
 static void bbox_guarda_azar(void){   //Arreglo
