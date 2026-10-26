@@ -2972,8 +2972,9 @@ Además:
   correr (con ASan, ~60 s y ~407 s).
 
 Verificación:
-- Pruebas: x86 con ASan 166.624 comprobaciones, 0 fallos; PowerPC (gcc) y
-  devkitPPC bajo qemu: ver abajo. `tests-dkp` compila ahora también `ge.c`
+- Pruebas: x86 con ASan 166.624 comprobaciones, 0 fallos; devkitPPC bajo
+  qemu 166.624, 0 fallos (huella de test_vdec B3A2BCD3, 29,7 min);
+  PowerPC (gcc) bajo qemu: corriendo. `tests-dkp` compila ahora también `ge.c`
   con devkitPPC (antes solo `ge_vertex.c` y los intérpretes): la racha se
   prueba con el compilador de la Wii.
 - `tests/test_listas.c`, prueba nueva: 3000 listas con 0x2A y 0x2B
