@@ -625,7 +625,8 @@ static void profile_ge_lines(const GeStats *g, const GeStats *b, u32 vblanks){
 		        "formato o primitiva %u, matrices o pantalla cambiadas %u, "
 		        "algun vertice fuera de la caja %u; cajas fuera de la pantalla %u, vistas por su primer vertice %u, dentro %u, dudosas %u "
 		        "(%u cruzan el plano de la camara); por su caja (ge_bbox_llamada): %u llamadas probadas (%u vistas por su primer vertice), "
-		        "%u fuera (%u por la pantalla), saltadas %u con %u vertices%s\n",   //Arreglo
+		        "%u fuera (%u por la pantalla), saltadas %u con %u vertices; por la banda de guarda (ge_bbox_guarda): %u cajas y %u llamadas "   //Arreglo
+		        "fuera (%u probadas); por sus triangulos (ge_bbox_triangulos): %u llamadas fuera (%u probadas)%s\n",   //Arreglo
 		        (unsigned)(g->bx_cajas - b->bx_cajas), (unsigned)(g->bx_fuera - b->bx_fuera), (unsigned)(g->bx_detras - b->bx_detras),
 		        (unsigned)(g->bx_llamadas - b->bx_llamadas), (unsigned)(g->bx_saltadas - b->bx_saltadas),
 		        (unsigned)(g->bx_ligeras - b->bx_ligeras), (unsigned)(g->bx_vertices - b->bx_vertices), (unsigned)(g->bx_formato - b->bx_formato),
@@ -636,6 +637,9 @@ static void profile_ge_lines(const GeStats *g, const GeStats *b, u32 vblanks){
 		        (unsigned)(g->bx_ll_fuera - b->bx_ll_fuera),   //Arreglo
 		        (unsigned)(g->bx_ll_pantalla - b->bx_ll_pantalla), (unsigned)(g->bx_ll_saltadas - b->bx_ll_saltadas),   //Arreglo
 		        (unsigned)(g->bx_ll_vertices - b->bx_ll_vertices),   //Arreglo
+		        (unsigned)(g->bx_guarda - b->bx_guarda), (unsigned)(g->bx_ll_guarda - b->bx_ll_guarda),   //Arreglo
+		        (unsigned)(g->bx_g_probadas - b->bx_g_probadas),   //Arreglo
+		        (unsigned)(g->bx_ll_tri - b->bx_ll_tri), (unsigned)(g->bx_t_probadas - b->bx_t_probadas),   //Arreglo
 		        opt_on[OPT_GE_VERIF] ? " (con ge_verificar se dibujan igual)" : "");   //Arreglo
 	if(opt_on[OPT_GE_VERIF] && opt_on[OPT_GE_BBOX])   //Arreglo
 		hle_log("[TIEMPOS] Verificacion de ge_bbox (ge_verificar): %u llamadas que se habrian saltado, dibujadas y comparadas, %u distintas; "
@@ -671,7 +675,7 @@ static void profile_ge_lines(const GeStats *g, const GeStats *b, u32 vblanks){
 		}
 	}
 	if(opt_on[OPT_PROF_BBOX]){   //Arreglo
-		static char cb[2048];   //Arreglo
+		static char cb[4096];   //Arreglo
 		char *p = cb;
 		ge_bbox_census_report(g, b, prof_hz, cb, sizeof(cb));
 		while(*p){

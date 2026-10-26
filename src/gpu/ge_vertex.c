@@ -2424,6 +2424,8 @@ static struct {   //Arreglo
 	float world[12], view[12], proj[16];
 	int dudosa, pantalla;   //Arreglo
 	u32 pant[10];   //Arreglo
+	int guarda;   //Arreglo
+	u32 pantz[2];   //Arreglo
 } bbx;
 
 static const u8 bb_pant_cmd[10] = { GE_VIEWPORTXSCALE, GE_VIEWPORTYSCALE, GE_VIEWPORTXCENTER, GE_VIEWPORTYCENTER,   //Arreglo
@@ -2435,6 +2437,7 @@ static int bb_llamada(const VFormat *f, const u8 *p, u32 n);   //Arreglo
 static int bb_pant_igual(void){   //Arreglo
 	int i;
 	for(i = 0; i < 10; i++) if(bbx.pant[i] != ge.cmd[bb_pant_cmd[i]]) return 0;
+	if(bbx.guarda && (bbx.pantz[0] != ge.cmd[GE_VIEWPORTZSCALE] || bbx.pantz[1] != ge.cmd[GE_VIEWPORTZCENTER])) return 0;   //Arreglo
 	return 1;
 }
 
@@ -2466,8 +2469,11 @@ static int bb_contiene(const VFormat *f, const u8 *p, u32 n){   //Arreglo
 	}
 }
 
+static u32 bb_prim_actual;   //Arreglo
+
 static int bb_saltable(u32 prim, u32 count, const VFormat *f, u32 vaddr){   //Arreglo
 	u32 off;
+	bb_prim_actual = prim;   //Arreglo
 	ge_stats.bx_llamadas++;
 	if((prim != GE_PRIM_TRIANGLES && prim != GE_PRIM_TRIANGLE_STRIP && prim != GE_PRIM_TRIANGLE_FAN) || f->through || f->wt ||
 	   f->nmorph > 1 || f->idx || (vaddr & (f->biggest - 1)) || !cull_xy){
@@ -2833,7 +2839,9 @@ static const BbPant *bb_pant_actual(void){   //Arreglo
 	return &bbp.p;
 }
 
-enum { BBF_NO, BBF_PLANO, BBF_DETRAS, BBF_PANTALLA };   //Arreglo
+enum { BBF_NO, BBF_PLANO, BBF_DETRAS, BBF_PANTALLA, BBF_GUARDA, BBF_TRIANGULOS };   //Arreglo
+
+static int bb_salida;   //Arreglo
 
 static int bb_fuera_lento(const float *lo, const float *hi, const float *wvp, const float *aw, const BbPant *pt, int *dentro, int *cruza,
                           int parar){   //Arreglo
@@ -2940,6 +2948,225 @@ static int bb_fuera_lento(const float *lo, const float *hi, const float *wvp, co
 	return BBF_NO;
 }
 
+typedef struct {   //Arreglo
+	float a[7][4], k[7];
+	int n;
+} BbBanda;
+
+static void bb_banda_poner(BbBanda *bd, const BbPant *pt, const float *s, float tau){   //Arreglo
+	const float ax = __builtin_fabsf(pt->xs) * s[0], ay = __builtin_fabsf(pt->ys) * s[1];
+	const float rx = (ax + __builtin_fabsf(pt->xc) * s[3]) * (1.0f / 2048.0f), ry = (ay + __builtin_fabsf(pt->yc) * s[3]) * (1.0f / 2048.0f);
+	int i;
+	for(i = 0; i < 7; i++) bd->a[i][0] = bd->a[i][1] = bd->a[i][2] = bd->a[i][3] = 0.0f;
+	bd->a[0][2] = pt->prof ? 1.0f : 0.0f; bd->a[0][3] = 1.0f; bd->k[0] = tau;
+	bd->a[1][0] = pt->xs; bd->a[1][3] = pt->xc;
+	bd->k[1] = (ax + __builtin_fabsf(pt->xc) * s[3]) * (1.0f / 512.0f) + rx;
+	bd->a[2][0] = -pt->xs; bd->a[2][3] = SCREEN_BOUND - pt->xc;
+	bd->k[2] = (ax + __builtin_fabsf(pt->xc - SCREEN_BOUND) * s[3]) * (1.0f / 512.0f) + rx;
+	bd->a[3][1] = pt->ys; bd->a[3][3] = pt->yc;
+	bd->k[3] = (ay + __builtin_fabsf(pt->yc) * s[3]) * (1.0f / 512.0f) + ry;
+	bd->a[4][1] = -pt->ys; bd->a[4][3] = SCREEN_BOUND - pt->yc;
+	bd->k[4] = (ay + __builtin_fabsf(pt->yc - SCREEN_BOUND) * s[3]) * (1.0f / 512.0f) + ry;
+	bd->n = 5;
+	if(!pt->prof){
+		const float zs = ge_f24(ge.cmd[GE_VIEWPORTZSCALE]), zc = ge_f24(ge.cmd[GE_VIEWPORTZCENTER]);
+		const float az = __builtin_fabsf(zs) * s[2], rz = (az + __builtin_fabsf(zc) * s[3]) * (1.0f / 2048.0f);
+		bd->a[5][2] = zs; bd->a[5][3] = zc;
+		bd->k[5] = (az + __builtin_fabsf(zc) * s[3]) * (1.0f / 512.0f) + rz;
+		bd->a[6][2] = -zs; bd->a[6][3] = 65536.0f - zc;
+		bd->k[6] = (az + __builtin_fabsf(zc - 65536.0f) * s[3]) * (1.0f / 512.0f) + rz;
+		bd->n = 7;
+	}
+}
+
+static inline float bb_forma(const float *a, float k, const float *c){   //Arreglo
+	return a[0] * c[0] + a[1] * c[1] + a[2] * c[2] + a[3] * c[3] + k;
+}
+
+static inline int bb_en_banda(const BbBanda *bd, const float *c){   //Arreglo
+	int i;
+	for(i = 1; i < bd->n; i++) if(!(bb_forma(bd->a[i], bd->k[i], c) >= 0.0f)) return 0;
+	return 1;
+}
+
+static inline int bb_en_banda_estricta(const BbPant *pt, const float *c, float zs, float zc){   //Arreglo
+	const float w = c[3];
+	if(!(pt->xs * c[0] + pt->xc * w >= 0.0f && -pt->xs * c[0] + (SCREEN_BOUND - pt->xc) * w >= 0.0f)) return 0;
+	if(!(pt->ys * c[1] + pt->yc * w >= 0.0f && -pt->ys * c[1] + (SCREEN_BOUND - pt->yc) * w >= 0.0f)) return 0;
+	return pt->prof || (zs * c[2] + zc * w >= 0.0f && -zs * c[2] + (65536.0f - zc) * w >= 0.0f);
+}
+
+static int bb_testigos(const BbBanda *bd, const float (*c)[4], const float *h, const float (*g)[8], const float *mg){   //Arreglo
+	u32 hecho = 0, banda = 0;
+	int e, j;
+	for(e = 0; e < 4; e++){
+		for(j = 0; j < 8; j++){
+			if(!(h[j] >= 0.0f) || !(g[e][j] >= -mg[e])) continue;
+			if(!(hecho >> j & 1)){ hecho |= 1u << j; banda |= (u32)bb_en_banda(bd, c[j]) << j; }
+			if(banda >> j & 1) break;
+		}
+		if(j == 8) return 0;
+	}
+	return 1;
+}
+
+static int bb_testigos_estrictos(const BbPant *pt, const float (*c)[4], const float (*g)[8], float zs, float zc){   //Arreglo
+	u32 hecho = 0, banda = 0;
+	int e, j;
+	for(e = 0; e < 4; e++){
+		for(j = 0; j < 8; j++){
+			if(!((pt->prof ? c[j][2] + c[j][3] : c[j][3]) >= 0.0f) || !(g[e][j] >= 0.0f)) continue;
+			if(!(hecho >> j & 1)){ hecho |= 1u << j; banda |= (u32)bb_en_banda_estricta(pt, c[j], zs, zc) << j; }
+			if(banda >> j & 1) break;
+		}
+		if(j == 8) return 0;
+	}
+	return 1;
+}
+
+static void bb_borde_forma(const BbPant *pt, int e, float *a){   //Arreglo
+	a[0] = a[1] = a[2] = 0.0f;
+	switch(e){
+	case 0: a[0] = pt->xs; a[3] = pt->xc - pt->l; break;
+	case 1: a[0] = -pt->xs; a[3] = pt->r - pt->xc; break;
+	case 2: a[1] = pt->ys; a[3] = pt->yc - pt->t; break;
+	default: a[1] = -pt->ys; a[3] = pt->b - pt->yc; break;
+	}
+}
+
+static int bb_resolver(int n, float (*m)[5], float *x){   //Arreglo
+	int i, j, k, p;
+	for(i = 0; i < n; i++){
+		float mejor = 0.0f;
+		p = -1;
+		for(j = i; j < n; j++) if(__builtin_fabsf(m[j][i]) > mejor){ mejor = __builtin_fabsf(m[j][i]); p = j; }
+		if(p < 0 || !(mejor > 1e-9f)) return 0;
+		if(p != i) for(k = 0; k <= n; k++){ float t = m[i][k]; m[i][k] = m[p][k]; m[p][k] = t; }
+		for(j = i + 1; j < n; j++){
+			const float f = m[j][i] / m[i][i];
+			for(k = i; k <= n; k++) m[j][k] -= f * m[i][k];
+		}
+	}
+	for(i = n - 1; i >= 0; i--){
+		float v = m[i][n];
+		for(k = i + 1; k < n; k++) v -= m[i][k] * x[k];
+		x[i] = v / m[i][i];
+		if(!(x[i] == x[i])) return 0;
+	}
+	return 1;
+}
+
+static void bb_forma_u(const float *a, float k, const float *cc, const float (*dc)[3], const float *s, float *f){   //Arreglo
+	int j, q;
+	float sa = __builtin_fabsf(k);
+	f[0] = k;
+	f[1] = f[2] = f[3] = 0.0f;
+	for(j = 0; j < 4; j++){
+		f[0] += a[j] * cc[j];
+		for(q = 0; q < 3; q++) f[1 + q] += a[j] * dc[j][q];
+		sa += __builtin_fabsf(a[j]) * s[j];
+	}
+	if(sa > 0.0f){
+		const float inv = 1.0f / sa;
+		for(q = 0; q < 4; q++) f[q] *= inv;
+	}
+}
+
+static int bb_guarda(const float *lo, const float *hi, const float *wvp, const float *s, const BbPant *pt, const float *mg,
+                     const BbBanda *bd, const float (*c)[4], const float *h){   //Arreglo
+	float cc[4], dc[4][3], ctr[3], rad[3], G[4][4], B[7][4], qc[20][4];
+	int nb = 0, nq = 0, e, i, j, q, k;
+	u32 activas = 0, bordes = 15;
+	for(j = 0; j < 8; j++){
+		if(!(h[j] >= 0.0f)){ activas = 1; continue; }
+		memcpy(qc[nq++], c[j], sizeof(qc[0]));
+	}
+	for(j = 0; j < 8; j++)
+		for(k = 1; k < 8; k <<= 1){
+			const int b = j | k;
+			float t;
+			if((j & k) || (h[j] >= 0.0f) == (h[b] >= 0.0f)) continue;
+			t = h[j] / (h[j] - h[b]);
+			for(i = 0; i < 4; i++) qc[nq][i] = c[j][i] + t * (c[b][i] - c[j][i]);
+			nq++;
+		}
+	for(q = 0; q < nq; q++)
+		for(i = 1; i < bd->n; i++)
+			if(!(activas >> i & 1) && !(bb_forma(bd->a[i], bd->k[i], qc[q]) >= 0.0f)) activas |= 1u << i;
+	if(!(activas & ~1u)) return 0;
+	for(q = 0; q < nq && bordes; q++){
+		for(i = 1; i < bd->n && (!(activas >> i & 1) || bb_forma(bd->a[i], bd->k[i], qc[q]) >= 0.0f); i++){}
+		if(i < bd->n) continue;
+		for(e = 0; e < 4; e++){
+			float a[4];
+			if(!(bordes >> e & 1)) continue;
+			bb_borde_forma(pt, e, a);
+			if(!(bb_forma(a, mg[e], qc[q]) < 0.0f)) bordes &= ~(1u << e);
+		}
+	}
+	if(!bordes) return 0;
+	ge_stats.bx_g_probadas++;
+	for(i = 0; i < 3; i++){
+		ctr[i] = (lo[i] + hi[i]) * 0.5f;
+		rad[i] = (hi[i] - lo[i]) * 0.5f * (1.0f + 1.0f / 524288.0f) + (__builtin_fabsf(lo[i]) + __builtin_fabsf(hi[i])) * (1.0f / 4194304.0f);
+	}
+	for(j = 0; j < 4; j++){
+		cc[j] = wvp[j] * ctr[0] + wvp[4 + j] * ctr[1] + wvp[8 + j] * ctr[2] + wvp[12 + j];
+		for(i = 0; i < 3; i++) dc[j][i] = wvp[4 * i + j] * rad[i];
+	}
+	for(i = 0; i < bd->n; i++){
+		if(!(activas >> i & 1)) continue;
+		bb_forma_u(bd->a[i], bd->k[i], cc, (const float (*)[3])dc, s, B[nb++]);
+	}
+	for(e = 0; e < 4; e++){
+		float a[4];
+		if(!(bordes >> e & 1)) continue;
+		bb_borde_forma(pt, e, a);
+		bb_forma_u(a, mg[e], cc, (const float (*)[3])dc, s, G[e]);
+	}
+	for(e = 0; e < 4; e++){
+		u32 sm;
+		if(!(bordes >> e & 1)) continue;
+		for(sm = 1; sm < (1u << nb); sm++){
+			int sel[4], ns = 0, tipo;
+			for(i = 0; i < nb; i++) if(sm >> i & 1){ if(ns == 4) break; sel[ns++] = i; }
+			if(i < nb) continue;
+			for(tipo = 0; tipo < 2; tipo++){
+				const int nz = tipo ? ns - 1 : ns;
+				u32 zm;
+				if(nz > 3) continue;
+				for(zm = 0; zm < 8; zm++){
+					float m[4][5], lam[4], F[4], suma = 0.0f, phi;
+					int r = 0, k, t;
+					if(__builtin_popcount(zm) != nz) continue;
+					for(k = 0; k < 3; k++){
+						if(!(zm >> k & 1)) continue;
+						for(t = 0; t < ns; t++) m[r][t] = B[sel[t]][1 + k];
+						m[r][ns] = -G[e][1 + k];
+						r++;
+					}
+					if(tipo){
+						for(t = 0; t < ns; t++) m[r][t] = 1.0f;
+						m[r][ns] = 4096.0f;
+						r++;
+					}
+					if(!bb_resolver(ns, m, lam)) continue;
+					for(t = 0; t < ns && lam[t] >= 0.0f; t++){}
+					if(t < ns) continue;
+					for(k = 0; k < 4; k++) F[k] = G[e][k];
+					for(t = 0; t < ns; t++){
+						for(k = 0; k < 4; k++) F[k] += lam[t] * B[sel[t]][k];
+						suma += lam[t];
+					}
+					phi = F[0] + __builtin_fabsf(F[1]) + __builtin_fabsf(F[2]) + __builtin_fabsf(F[3]);
+					if(phi + (1.0f + suma) * (1.0f / 16384.0f) < 0.0f) return 1;
+				}
+			}
+		}
+	}
+	return 0;
+}
+
 static inline void bb_bordes(const BbPant *pt, const float *c, float (*g)[8], int j){   //Arreglo
 	g[0][j] = pt->xs * c[0] + (pt->xc - pt->l) * c[3];
 	g[1][j] = -(pt->xs * c[0] + (pt->xc - pt->r) * c[3]);
@@ -2950,9 +3177,15 @@ static inline void bb_bordes(const BbPant *pt, const float *c, float (*g)[8], in
 static int bb_fuera(const float *lo, const float *hi, const float *wvp, const float *aw, const BbPant *pt, int *dentro, int *cruza,
                     int parar){   //Arreglo
 	float c[8][4], g[4][8], ex[2][4], ey[2][4], ez[2][4], xy[4][4], s[4], mg[4] = { 0.0f, 0.0f, 0.0f, 0.0f }, m0[4] = { -1e30f, -1e30f, -1e30f, -1e30f };
-	int i, j, k, n_in = 0, detras = 0, q0 = 0;
+	int i, j, k, n_in = 0, detras = 0, q0 = 0, zrara = 0;   //Arreglo
 	u32 p0 = 0x7F, hechos = 0;
+	float zs = 0.0f, zc = 0.0f;   //Arreglo
 	if(!opt_on[OPT_GE_BBOX_ORDEN]) return bb_fuera_lento(lo, hi, wvp, aw, pt, dentro, cruza, parar);
+	if(pt && !pt->prof && opt_on[OPT_GE_BBOX_GUARDA]){   //Arreglo
+		zs = ge_f24(ge.cmd[GE_VIEWPORTZSCALE]);   //Arreglo
+		zc = ge_f24(ge.cmd[GE_VIEWPORTZCENTER]);   //Arreglo
+		zrara = !(zc - __builtin_fabsf(zs) >= 0.0f && zc + __builtin_fabsf(zs) < 65536.0f);   //Arreglo
+	}   //Arreglo
 	*dentro = 0;
 	*cruza = 0;
 	for(k = 0; k < 4; k++){
@@ -2988,18 +3221,20 @@ static int bb_fuera(const float *lo, const float *hi, const float *wvp, const fl
 				bb_bordes(pt, c[j], g, j);
 				hechos |= 1u << j;
 				in = (g[0][j] >= 0.0f) & (g[1][j] >= 0.0f) & (g[2][j] >= 0.0f) & (g[3][j] >= 0.0f);
+				if(zrara) in &= (zs * c[j][2] + zc * w >= 0.0f) & (-zs * c[j][2] + (65536.0f - zc) * w >= 0.0f);   //Arreglo
 			}
-			if(in && parar) return BBF_NO;
+			if(in && parar) return bb_salida = 2, BBF_NO;   //Arreglo
 			n_in += in;
 		}
 	}
 	*cruza = detras;
 	if(n_in){
 		*dentro = n_in == 8;
-		return BBF_NO;
+		return bb_salida = 2, BBF_NO;   //Arreglo
 	}
 	if(!p0){
-		if(!pt) return BBF_NO;
+		const int guarda = opt_on[OPT_GE_BBOX_GUARDA];   //Arreglo
+		if(!pt) return bb_salida = 3, BBF_NO;   //Arreglo
 		for(j = 0; j < 8; j++){
 			if(!(hechos >> j & 1)) bb_bordes(pt, c[j], g, j);
 			if((pt->prof ? c[j][2] + c[j][3] : c[j][3]) >= 0.0f){
@@ -3008,7 +3243,8 @@ static int bb_fuera(const float *lo, const float *hi, const float *wvp, const fl
 			}
 		}
 		hechos = 0xFF;
-		if(q0 && m0[0] >= 0.0f && m0[1] >= 0.0f && m0[2] >= 0.0f && m0[3] >= 0.0f) return BBF_NO;
+		if(q0 && m0[0] >= 0.0f && m0[1] >= 0.0f && m0[2] >= 0.0f && m0[3] >= 0.0f &&
+		   (!guarda || bb_testigos_estrictos(pt, (const float (*)[4])c, (const float (*)[8])g, zs, zc))) return bb_salida = 4, BBF_NO;   //Arreglo
 	}
 	if(!aw) aw = bb_awvp();
 	for(k = 0; k < 4; k++){
@@ -3017,7 +3253,7 @@ static int bb_fuera(const float *lo, const float *hi, const float *wvp, const fl
 			float a = __builtin_fabsf(lo[i]), b = __builtin_fabsf(hi[i]);
 			s[k] += (a > b ? a : b) * aw[i * 4 + k];
 		}
-		if(!(s[k] < 1e30f)) return BBF_NO;
+		if(!(s[k] < 1e30f)) return bb_salida = 3, BBF_NO;   //Arreglo
 	}
 	if(p0){
 		const float tw = s[3] * (1.0f / 512.0f);
@@ -3034,12 +3270,13 @@ static int bb_fuera(const float *lo, const float *hi, const float *wvp, const fl
 			else for(j = 0; j < 8 && c[j][k] - c[j][3] > t[k]; j++){}
 			if(j == 8) return BBF_PLANO;
 		}
-		if(!pt) return BBF_NO;
+		if(!pt) return bb_salida = 3, BBF_NO;   //Arreglo
 		for(j = 0; j < 8; j++) if(!(hechos >> j & 1)) bb_bordes(pt, c[j], g, j);
 	}
 	{
 		float h[8], mx[4], tau = (pt->prof ? s[2] + s[3] : s[3]) * (1.0f / 256.0f), minw = 1e30f;
-		int e, nq = 0;
+		BbBanda bd;   //Arreglo
+		int e, nq = 0, guarda = opt_on[OPT_GE_BBOX_GUARDA];   //Arreglo
 		const float ax = __builtin_fabsf(pt->xs) * s[0], ay = __builtin_fabsf(pt->ys) * s[1];
 		const float rx = (ax + __builtin_fabsf(pt->xc) * s[3]) * (1.0f / 2048.0f), ry = (ay + __builtin_fabsf(pt->yc) * s[3]) * (1.0f / 2048.0f);
 		mg[0] = (ax + __builtin_fabsf(pt->xc - pt->l) * s[3]) * (1.0f / 512.0f) + rx;
@@ -3054,7 +3291,9 @@ static int bb_fuera(const float *lo, const float *hi, const float *wvp, const fl
 			for(e = 0; e < 4; e++) if(g[e][j] > mx[e]) mx[e] = g[e][j];
 			if(c[j][3] < minw) minw = c[j][3];
 		}
-		if(nq && mx[0] >= -mg[0] && mx[1] >= -mg[1] && mx[2] >= -mg[2] && mx[3] >= -mg[3]) return BBF_NO;
+		if(guarda) bb_banda_poner(&bd, pt, s, tau);   //Arreglo
+		if(nq && mx[0] >= -mg[0] && mx[1] >= -mg[1] && mx[2] >= -mg[2] && mx[3] >= -mg[3] &&
+		   (!guarda || bb_testigos(&bd, (const float (*)[4])c, h, (const float (*)[8])g, mg))) return bb_salida = 5, BBF_NO;   //Arreglo
 		for(j = 0; j < 8; j++)
 			for(k = 1; k < 8; k <<= 1){
 				const int b = j | k;
@@ -3070,10 +3309,11 @@ static int bb_fuera(const float *lo, const float *hi, const float *wvp, const fl
 				if(v < minw) minw = v;
 			}
 		if(!nq) return BBF_PLANO;
-		if(pt->prof && !(minw > s[3] * (1.0f / 256.0f))) return BBF_NO;
+		if(pt->prof && !(minw > s[3] * (1.0f / 256.0f))) return bb_salida = 6, BBF_NO;   //Arreglo
 		for(e = 0; e < 4; e++) if(mx[e] < -mg[e]) return BBF_PANTALLA;
+		if(guarda && bb_guarda(lo, hi, wvp, s, pt, mg, &bd, (const float (*)[4])c, h)) return BBF_GUARDA;   //Arreglo
 	}
-	return BBF_NO;
+	return bb_salida = 7, BBF_NO;   //Arreglo
 }
 
 static int bb_aabb_lento(const VFormat *f, const u8 *p, u32 n, float *lo, float *hi){   //Arreglo
@@ -3163,9 +3403,214 @@ static int bb_punto_visto(const float *v, const float *wvp, const BbPant *pt){  
 	float c[4];
 	int k;
 	for(k = 0; k < 4; k++) c[k] = v[0] * wvp[k] + v[1] * wvp[4 + k] + v[2] * wvp[8 + k] + wvp[12 + k];
-	return c[3] > 0.0f && __builtin_fabsf(c[0]) <= c[3] && __builtin_fabsf(c[1]) <= c[3] && __builtin_fabsf(c[2]) <= c[3] &&
-	       (!pt || (pt->xs * c[0] + (pt->xc - pt->l) * c[3] >= 0.0f && -(pt->xs * c[0] + (pt->xc - pt->r) * c[3]) >= 0.0f &&
-	                pt->ys * c[1] + (pt->yc - pt->t) * c[3] >= 0.0f && -(pt->ys * c[1] + (pt->yc - pt->b) * c[3]) >= 0.0f));
+	if(!(c[3] > 0.0f && __builtin_fabsf(c[0]) <= c[3] && __builtin_fabsf(c[1]) <= c[3] && __builtin_fabsf(c[2]) <= c[3] &&
+	     (!pt || (pt->xs * c[0] + (pt->xc - pt->l) * c[3] >= 0.0f && -(pt->xs * c[0] + (pt->xc - pt->r) * c[3]) >= 0.0f &&
+	              pt->ys * c[1] + (pt->yc - pt->t) * c[3] >= 0.0f && -(pt->ys * c[1] + (pt->yc - pt->b) * c[3]) >= 0.0f)))) return 0;   //Arreglo
+	if(pt && !pt->prof && opt_on[OPT_GE_BBOX_GUARDA]){   //Arreglo
+		const float zs = ge_f24(ge.cmd[GE_VIEWPORTZSCALE]), zc = ge_f24(ge.cmd[GE_VIEWPORTZCENTER]);   //Arreglo
+		if(!(zc - __builtin_fabsf(zs) >= 0.0f && zc + __builtin_fabsf(zs) < 65536.0f))   //Arreglo
+			return zs * c[2] + zc * c[3] >= 0.0f && -zs * c[2] + (65536.0f - zc) * c[3] >= 0.0f;   //Arreglo
+	}   //Arreglo
+	return 1;   //Arreglo
+}
+
+enum { BBT_WN = 1, BBT_WP = 2, BBT_CERCA = 4, BBT_DELANTE = 8, BBT_BANDA = 16, BBT_Z = 32, BBT_BORDE = 0x100, BBT_PLANO = 0x1000 };   //Arreglo
+
+static u32 bb_vertice_marcas(const float *v, const float *wvp, const float *aw, const BbPant *pt, float zs, float zc, int rapido){   //Arreglo
+	float c[4], sv[4];
+	u32 m = 0;
+	int k;
+	const float a0 = __builtin_fabsf(v[0]), a1 = __builtin_fabsf(v[1]), a2 = __builtin_fabsf(v[2]);
+	for(k = 0; k < 4; k++) c[k] = v[0] * wvp[k] + v[1] * wvp[4 + k] + v[2] * wvp[8 + k] + wvp[12 + k];
+	if(rapido && __builtin_fabsf(c[0]) <= c[3] && __builtin_fabsf(c[1]) <= c[3] && __builtin_fabsf(c[2]) <= c[3]){
+		const float gx = pt->xs * c[0], gy = pt->ys * c[1];
+		if(gx + (pt->xc - pt->l) * c[3] >= 0.0f && -gx + (pt->r - pt->xc) * c[3] >= 0.0f && gy + (pt->yc - pt->t) * c[3] >= 0.0f &&
+		   -gy + (pt->b - pt->yc) * c[3] >= 0.0f) return 0;
+	}
+	for(k = 0; k < 4; k++) sv[k] = a0 * aw[k] + a1 * aw[4 + k] + a2 * aw[8 + k] + aw[12 + k];
+	if(!(sv[0] < 1e30f && sv[1] < 1e30f && sv[2] < 1e30f && sv[3] < 1e30f)) return 0;
+	{
+		const float mw = sv[3] * (1.0f / 512.0f);
+		if(c[3] < -mw) m |= BBT_WN;
+		if(c[3] > mw) m |= BBT_WP;
+		if(c[0] - c[3] > (sv[0] + sv[3]) * (1.0f / 512.0f)) m |= BBT_PLANO;
+		if(-c[0] - c[3] > (sv[0] + sv[3]) * (1.0f / 512.0f)) m |= BBT_PLANO << 1;
+		if(c[1] - c[3] > (sv[1] + sv[3]) * (1.0f / 512.0f)) m |= BBT_PLANO << 2;
+		if(-c[1] - c[3] > (sv[1] + sv[3]) * (1.0f / 512.0f)) m |= BBT_PLANO << 3;
+		if(c[2] - c[3] > (sv[2] + sv[3]) * (1.0f / 512.0f)) m |= BBT_PLANO << 4;
+		if(-c[2] - c[3] > (sv[2] + sv[3]) * (1.0f / 512.0f)) m |= BBT_PLANO << 5;
+		if(pt->prof){
+			const float mz = (sv[2] + sv[3]) * (1.0f / 512.0f);
+			if(c[2] + c[3] < -mz) m |= BBT_CERCA;
+			if(c[2] + c[3] > mz) m |= BBT_DELANTE;
+		}
+	}
+	if(m & BBT_WP){
+		const float ax = __builtin_fabsf(pt->xs) * sv[0], ay = __builtin_fabsf(pt->ys) * sv[1];
+		const float rx = (ax + __builtin_fabsf(pt->xc) * sv[3]) * (1.0f / 2048.0f), ry = (ay + __builtin_fabsf(pt->yc) * sv[3]) * (1.0f / 2048.0f);
+		const float gx = pt->xs * c[0], gy = pt->ys * c[1];
+		if(gx + pt->xc * c[3] < -((ax + __builtin_fabsf(pt->xc) * sv[3]) * (1.0f / 512.0f) + rx) ||
+		   -gx + (SCREEN_BOUND - pt->xc) * c[3] < -((ax + __builtin_fabsf(SCREEN_BOUND - pt->xc) * sv[3]) * (1.0f / 512.0f) + rx) ||
+		   gy + pt->yc * c[3] < -((ay + __builtin_fabsf(pt->yc) * sv[3]) * (1.0f / 512.0f) + ry) ||
+		   -gy + (SCREEN_BOUND - pt->yc) * c[3] < -((ay + __builtin_fabsf(SCREEN_BOUND - pt->yc) * sv[3]) * (1.0f / 512.0f) + ry)) m |= BBT_BANDA;
+		if(gx + (pt->xc - pt->l) * c[3] < -((ax + __builtin_fabsf(pt->xc - pt->l) * sv[3]) * (1.0f / 512.0f) + rx)) m |= BBT_BORDE;
+		if(-gx + (pt->r - pt->xc) * c[3] < -((ax + __builtin_fabsf(pt->xc - pt->r) * sv[3]) * (1.0f / 512.0f) + rx)) m |= BBT_BORDE << 1;
+		if(gy + (pt->yc - pt->t) * c[3] < -((ay + __builtin_fabsf(pt->yc - pt->t) * sv[3]) * (1.0f / 512.0f) + ry)) m |= BBT_BORDE << 2;
+		if(-gy + (pt->b - pt->yc) * c[3] < -((ay + __builtin_fabsf(pt->yc - pt->b) * sv[3]) * (1.0f / 512.0f) + ry)) m |= BBT_BORDE << 3;
+		if(!pt->prof){
+			const float az = __builtin_fabsf(zs) * sv[2], rz = (az + __builtin_fabsf(zc) * sv[3]) * (1.0f / 2048.0f), gz = zs * c[2];
+			if(gz + zc * c[3] < -((az + __builtin_fabsf(zc) * sv[3]) * (1.0f / 512.0f) + rz) ||
+			   -gz + (65536.0f - zc) * c[3] < -((az + __builtin_fabsf(65536.0f - zc) * sv[3]) * (1.0f / 512.0f) + rz)) m |= BBT_Z;
+		}
+	}
+	return m;
+}
+
+static inline int bb_tri_fuera(u32 a, u32 b, u32 c, int prof){   //Arreglo
+	const u32 t = a | b | c, todos = a & b & c;
+	if(todos & (BBT_WN | (0x3Fu * BBT_PLANO))) return 1;
+	if(prof){
+		const u32 bd = BBT_BANDA | BBT_DELANTE;
+		if(todos & BBT_CERCA) return 1;
+		if((a & bd) == bd || (b & bd) == bd || (c & bd) == bd) return 1;
+		return (todos & BBT_DELANTE) && (todos & (0xFu * BBT_BORDE));
+	}
+	if(t & (BBT_WN | BBT_BANDA | BBT_Z)) return 1;
+	return (todos & (0xFu * BBT_BORDE)) != 0;
+}
+
+static int bb_triangulos(const VFormat *f, const u8 *p, u32 n, u32 prim, const float *wvp, const BbPant *pt){   //Arreglo
+	const float *aw = bb_awvp();
+	const float zs = ge_f24(ge.cmd[GE_VIEWPORTZSCALE]), zc = ge_f24(ge.cmd[GE_VIEWPORTZCENTER]);
+	const float axs = __builtin_fabsf(pt->xs), ays = __builtin_fabsf(pt->ys), azs = __builtin_fabsf(zs);
+	const int rapido = pt->xc - axs >= 0.0f && pt->xc + axs <= SCREEN_BOUND && pt->yc - ays >= 0.0f && pt->yc + ays <= SCREEN_BOUND &&
+	                   (pt->prof || (zc - azs >= 0.0f && zc + azs < 65536.0f));
+	const u8 *q = p + f->off_pos;
+	const u32 size = f->size;
+	u32 i, m0 = 0, m1 = 0;
+	for(i = 0; i < n; i++, q += size){
+		float v[3];
+		u32 m;
+		if(f->pos == 2){
+			v[0] = (float)(s16)rd_le16(q) * (1.0f / 32768.0f);
+			v[1] = (float)(s16)rd_le16(q + 2) * (1.0f / 32768.0f);
+			v[2] = (float)(s16)rd_le16(q + 4) * (1.0f / 32768.0f);
+		} else if(f->pos == 1){
+			v[0] = (float)(s8)q[0] * (1.0f / 128.0f);
+			v[1] = (float)(s8)q[1] * (1.0f / 128.0f);
+			v[2] = (float)(s8)q[2] * (1.0f / 128.0f);
+		} else {
+			v[0] = clean_nan_inf(f32_from(rd_le32(q)));
+			v[1] = clean_nan_inf(f32_from(rd_le32(q + 4)));
+			v[2] = clean_nan_inf(f32_from(rd_le32(q + 8)));
+		}
+		m = bb_vertice_marcas(v, wvp, aw, pt, zs, zc, rapido);
+		if(prim == GE_PRIM_TRIANGLES){
+			if(i % 3 == 0) m0 = m;
+			else if(i % 3 == 1) m1 = m;
+			else if(!bb_tri_fuera(m0, m1, m, pt->prof)) return 0;
+		} else if(prim == GE_PRIM_TRIANGLE_FAN){
+			if(i == 0) m0 = m;
+			else if(i >= 2 && !bb_tri_fuera(m0, m1, m, pt->prof)) return 0;
+			m1 = m;
+		} else {
+			if(i >= 2 && !bb_tri_fuera(m0, m1, m, pt->prof)) return 0;
+			m0 = m1;
+			m1 = m;
+		}
+	}
+	return 1;
+}
+
+static struct {   //Arreglo
+	int activa, razon;
+	VFormat f;
+	const u8 *p;
+	u32 n, prim;
+	float wvp[16];
+} bbn;
+
+static int bb_tri_razon(u32 a, u32 b, u32 c, int prof){   //Arreglo
+	const u32 t = a | b | c, todos = a & b & c;
+	if(prof){
+		if(todos & 1) return 0;
+		if(((a & 3) == 2) || ((b & 3) == 2) || ((c & 3) == 2)) return 2;
+		if(!(t & 1) && (todos & 0xF0)) return 3;
+		return 4;
+	}
+	if(t & 8) return 0;
+	if(t & 1) return 1;
+	if(t & 2) return 2;
+	if(todos & 0xF0) return 3;
+	return 4;
+}
+
+void ge_bbox_ll_censo(int nada){   //Arreglo
+	BbPant pt;
+	float zs, zc;
+	u32 i;
+	if(!bbn.activa) return;
+	bbn.activa = 0;
+	if(!nada) return;
+	bb_pant(&pt);
+	zs = ge_f24(ge.cmd[GE_VIEWPORTZSCALE]);
+	zc = ge_f24(ge.cmd[GE_VIEWPORTZCENTER]);
+	ge_stats.bx_nd_ll++;
+	ge_stats.bx_nd_vert += bbn.n;
+	ge_stats.bx_nd_prof += (u32)pt.prof;
+	ge_stats.bx_nd_razon[(unsigned)bbn.razon < 9 ? bbn.razon : 8]++;
+	{   //Arreglo
+		u32 fl0 = 0, fl1 = 0, otros = 0, cuantos = 0;
+		for(i = 0; i < bbn.n; i++){
+			float v[3], c[4], sx, sy, sz;
+			u32 fl = 0;
+			int k;
+			bb_pos(&bbn.f, bbn.p + i * bbn.f.size, v);
+			for(k = 0; k < 4; k++) c[k] = v[0] * bbn.wvp[k] + v[1] * bbn.wvp[4 + k] + v[2] * bbn.wvp[8 + k] + bbn.wvp[12 + k];
+			sx = pt.xc + pt.xs * c[0] / c[3];
+			sy = pt.yc + pt.ys * c[1] / c[3];
+			sz = zc + zs * c[2] / c[3];
+			if(!(c[3] > 0.0f)) fl |= 8;
+			if(pt.prof ? c[2] < -c[3] : !(sz >= 0.0f && sz < 65536.0f)) fl |= 1;
+			if(!(sx >= 0.0f && sx < SCREEN_BOUND && sy >= 0.0f && sy < SCREEN_BOUND)) fl |= 2;
+			if(c[3] > 0.0f){
+				if(sx < pt.l) fl |= 0x10;
+				if(sx >= pt.r) fl |= 0x20;
+				if(sy < pt.t) fl |= 0x40;
+				if(sy >= pt.b) fl |= 0x80;
+			}
+			if(bbn.prim == GE_PRIM_TRIANGLES){
+				if(i % 3 == 0) fl0 = fl;
+				else if(i % 3 == 1) fl1 = fl;
+				else { k = bb_tri_razon(fl0, fl1, fl, pt.prof); ge_stats.bx_nd_t[k]++; otros += k == 4; cuantos++; }
+			} else if(bbn.prim == GE_PRIM_TRIANGLE_FAN){
+				if(i == 0) fl0 = fl;
+				else if(i >= 2){ k = bb_tri_razon(fl0, fl1, fl, pt.prof); ge_stats.bx_nd_t[k]++; otros += k == 4; cuantos++; }
+				fl1 = fl;
+			} else {
+				if(i >= 2){ k = bb_tri_razon(fl0, fl1, fl, pt.prof); ge_stats.bx_nd_t[k]++; otros += k == 4; cuantos++; }
+				fl0 = fl1;
+				fl1 = fl;
+			}
+		}
+		if(cuantos && !otros){ ge_stats.bx_nd_tri++; ge_stats.bx_nd_tri_vert += bbn.n; }
+	}   //Arreglo
+	for(i = 0; i < bbn.n; i++){
+		float v[3], c[4], sx, sy, sz;
+		int k, cl;
+		bb_pos(&bbn.f, bbn.p + i * bbn.f.size, v);
+		for(k = 0; k < 4; k++) c[k] = v[0] * bbn.wvp[k] + v[1] * bbn.wvp[4 + k] + v[2] * bbn.wvp[8 + k] + bbn.wvp[12 + k];
+		sz = zc + zs * c[2] / c[3];
+		if(!(c[3] > 0.0f)) cl = 0;
+		else if(pt.prof ? c[2] < -c[3] : !(sz >= 0.0f && sz < 65536.0f)) cl = 1;
+		else {
+			sx = pt.xc + pt.xs * c[0] / c[3];
+			sy = pt.yc + pt.ys * c[1] / c[3];
+			if(!(sx >= 0.0f && sx < SCREEN_BOUND && sy >= 0.0f && sy < SCREEN_BOUND)) cl = 2;
+			else cl = sx >= pt.l && sx < pt.r && sy >= pt.t && sy < pt.b ? 3 : 4;
+		}
+		ge_stats.bx_nd_v[cl]++;
+	}
 }
 
 static int bb_llamada(const VFormat *f, const u8 *p, u32 n){   //Arreglo
@@ -3187,12 +3632,32 @@ static int bb_llamada(const VFormat *f, const u8 *p, u32 n){   //Arreglo
 			ge_stats.bx_ll_cajas++;   //Arreglo
 			ge_stats.bx_ll_leidos += n;   //Arreglo
 		}   //Arreglo
+		bb_salida = 1;   //Arreglo
 		r = ok ? bb_fuera(lo, hi, wvp, NULL, pt, &dentro, &cruza, 1) : BBF_NO;   //Arreglo
 	}   //Arreglo
+	if(r == BBF_NO && pt && f->pos && opt_on[OPT_GE_BBOX_TRIANGULOS]){   //Arreglo
+		u64 t2 = t0 ? prof_clock() : 0;   //Arreglo
+		ge_stats.bx_t_probadas++;   //Arreglo
+		if(bb_triangulos(f, p, n, bb_prim_actual, wvp, pt)) r = BBF_TRIANGULOS;   //Arreglo
+		if(t0) ge_stats.bx_t_ticks += prof_clock() - t2;   //Arreglo
+	}   //Arreglo
 	if(t0) ge_stats.bx_ll_ticks += prof_clock() - t0;
-	if(r == BBF_NO) return 0;
+	if(r == BBF_NO){   //Arreglo
+		if(opt_on[OPT_PROF_BBOX]){   //Arreglo
+			bbn.activa = 1;   //Arreglo
+			bbn.razon = bb_punto_visto(v, wvp, pt) ? 0 : !opt_on[OPT_GE_BBOX_ORDEN] ? 8 : bb_salida;   //Arreglo
+			bbn.f = *f;   //Arreglo
+			bbn.p = p;   //Arreglo
+			bbn.n = n;   //Arreglo
+			bbn.prim = bb_prim_actual;   //Arreglo
+			memcpy(bbn.wvp, wvp, sizeof(bbn.wvp));   //Arreglo
+		}   //Arreglo
+		return 0;   //Arreglo
+	}   //Arreglo
 	ge_stats.bx_ll_fuera++;
 	ge_stats.bx_ll_pantalla += r == BBF_PANTALLA;
+	ge_stats.bx_ll_guarda += r == BBF_GUARDA;   //Arreglo
+	ge_stats.bx_ll_tri += r == BBF_TRIANGULOS;   //Arreglo
 	return 1;
 }
 
@@ -3446,6 +3911,7 @@ static void bb_clasificar(const VFormat *f, const float (*pos)[3], int n){   //A
 	if(r == BBF_PLANO || r == BBF_DETRAS) ge_stats.bx_fuera++;
 	if(r == BBF_DETRAS) ge_stats.bx_detras++;
 	if(r == BBF_PANTALLA) ge_stats.bx_pantalla++;
+	if(r == BBF_GUARDA) ge_stats.bx_guarda++;   //Arreglo
 	for(i = 0; i < 3; i++){
 		bbx.lo[i] = lo[i];
 		bbx.hi[i] = hi[i];
@@ -3457,7 +3923,10 @@ static void bb_clasificar(const VFormat *f, const float (*pos)[3], int n){   //A
 	memcpy(bbx.world, ge.world, sizeof(bbx.world));
 	memcpy(bbx.view, ge.view, sizeof(bbx.view));
 	memcpy(bbx.proj, ge.proj, sizeof(bbx.proj));
-	bbx.pantalla = r == BBF_PANTALLA;
+	bbx.pantalla = r == BBF_PANTALLA || r == BBF_GUARDA;   //Arreglo
+	bbx.guarda = r == BBF_GUARDA;   //Arreglo
+	bbx.pantz[0] = ge.cmd[GE_VIEWPORTZSCALE];   //Arreglo
+	bbx.pantz[1] = ge.cmd[GE_VIEWPORTZCENTER];   //Arreglo
 	for(i = 0; i < 10; i++) bbx.pant[i] = ge.cmd[bb_pant_cmd[i]];
 	bbx.valida = 1;
 }
@@ -3496,6 +3965,7 @@ void ge_bounding_box(u32 count){
 	bbx.valida = 0;   //Arreglo
 	bbx.dudosa = 0;   //Arreglo
 	bbx.pantalla = 0;   //Arreglo
+	bbx.guarda = 0;   //Arreglo
 	ge_bbox_clase = 0;   //Arreglo
 	if(opt_on[OPT_GE_BBOX_RAPIDO]){   //Arreglo
 		if(!bbf.ok || bbf.vt != vt){ vformat_setup(&bbf.f, vt); bbf.vt = vt; bbf.ok = 1; }   //Arreglo
@@ -3532,6 +4002,7 @@ static void bb_reset(void){   //Arreglo
 	bbx.valida = 0;
 	bbx.dudosa = 0;   //Arreglo
 	bbx.pantalla = 0;   //Arreglo
+	bbx.guarda = 0;   //Arreglo
 	bbm.vp_ok = bbm.wvp_ok = 0;
 	bbp.ok = 0;   //Arreglo
 	bbf.ok = 0;

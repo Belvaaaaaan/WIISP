@@ -2743,6 +2743,30 @@ Qué mirar:
 - censo: las 12 capturas de siempre, los ms de probar la caja de cada
   llamada y cuánto de eso es leer las posiciones.
 
+### Resultado de la 0.5.23.1 en el Wii (DBZ: sin / con / nopant / censo)
+
+- Las 12 capturas de `censo`, las de siempre; las cuatro corridas ejecutan
+  las mismas 1343,1 M instrucciones, y sin y con saltan las mismas
+  llamadas en cada ventana (171.415 en la 4200-4800).
+- Escena de 93,2 a 92,4 s (−0,9 %); peleas −1,7 %, −1,3 % y −1,0 %. En la
+  4200-4800: ciclos de 16.466 a 16.248 M (−1,3 %), leer vértices de 559 a
+  519 ciclos por vértice, GE de 46,3 a 45,4 %.
+- Censo: probar la caja de cada llamada, de 1.031 a 739 ms por ventana
+  (−28 %; en el banco bajaba a la mitad). La mitad, 367 ms, es leer las
+  posiciones: 185.504 llamadas con 3,64 M vértices, ~73 ciclos por vértice
+  (en qemu ~25 instrucciones). Es la memoria: los vértices de una llamada
+  que se salta no se han leído nunca, y cada llamada (~240 bytes, 8
+  líneas) viene de la memoria a ~180 ciclos por línea. El resto de la
+  prueba, ~1.150 ciclos por llamada.
+- nopant: igual o un pelo más rápido que con (16.205 M ciclos) y salta
+  casi lo mismo (171.388). `ge_bbox_pantalla` no aporta nada en DBZ; se
+  queda encendido (cuesta muy poco; otros juegos pueden usarlo).
+- Quedan 3.164 objetos sin dibujar nada en la pelea; 2.617 son cajas
+  dudosas que cruzan el plano de la cámara (1,02 M vértices, ~355 ms por
+  ventana): el punto 2.
+- Idea para más adelante: pedir con `dcbt` las líneas siguientes mientras
+  se leen las posiciones de cada llamada.
+
 ### Para el siguiente chat (empezar aquí)
 
 Metodología acordada (detalle en `docs/HOJA_DE_RUTA.md`): primero medir

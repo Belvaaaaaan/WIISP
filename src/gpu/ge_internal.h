@@ -247,6 +247,7 @@ static inline void ge_vertex_mark_outside(GeVertex *v){
 void ge_draw_prim(u32 prim, u32 count);
 int ge_prim_datos_sobran(u32 vaddr_tras);   //Arreglo
 extern int ge_bbox_clase;   //Arreglo
+void ge_bbox_ll_censo(int nada);   //Arreglo
 void ge_draw_bezier(u32 arg);
 void ge_draw_spline(u32 arg);
 void ge_bounding_box(u32 count);

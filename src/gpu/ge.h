@@ -96,8 +96,11 @@ typedef struct {
 	u32 bx_pantalla, bx_vistas, bx_dentro, bx_dudosas, bx_cruzan;   //Arreglo
 	u32 bx_ll_probadas, bx_ll_vista, bx_ll_fuera, bx_ll_pantalla, bx_ll_saltadas, bx_ll_vertices, bx_cache_mal;   //Arreglo
 	u64 bx_ll_ticks;   //Arreglo
-	u64 bx_ll_caja_ticks;   //Arreglo
+	u64 bx_ll_caja_ticks, bx_t_ticks;   //Arreglo
 	u32 bx_ll_cajas, bx_ll_leidos;   //Arreglo
+	u32 bx_guarda, bx_ll_guarda, bx_g_probadas, bx_ll_tri, bx_t_probadas;   //Arreglo
+	u32 bx_nd_ll, bx_nd_vert, bx_nd_prof, bx_nd_razon[9], bx_nd_v[5];   //Arreglo
+	u32 bx_nd_t[5], bx_nd_tri, bx_nd_tri_vert;   //Arreglo
 	u32 ob_nada_clase[5], ob_nada_clase_vertices[5];   //Arreglo
 	u32 hu_datos, hu_iguales, hu_mat, hu_mat_iguales, hu_rachas, hu_racha_datos, hu_rachas_largas, hu_llamadas;   //Arreglo
 	u32 cm_verif, cm_verif_bad;   //Arreglo

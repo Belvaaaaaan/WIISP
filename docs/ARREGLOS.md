@@ -5,6 +5,65 @@ la 0.5.17.2; antes se marcaban con `//arreglo`). Aquí va, por versión, qué
 se arregló o cambió y una descripción breve. El detalle está en
 `docs/CONTINUAR.md`.
 
+## 0.5.23.2
+
+- `gpu/ge_vertex.c`: `ge_bbox_guarda` (encendido; necesita
+  `ge_bbox_orden` y `ge_bbox_pantalla`). Cuando la prueba de pantalla de
+  una caja no puede, se repite con las restricciones que de verdad cumple
+  todo vértice que el GE dibuja (`round_to_screen`, `triangle_rejected`):
+  - la banda de guarda: 0 ≤ sx ≤ 4095,97 y 0 ≤ sy < 4095,97;
+  - sin recorte de profundidad, el rango z: 0 ≤ sz < 65536;
+  - delante del plano cercano (con recorte) o w ≥ 0 (sin él).
+  Con w > 0 son lineales en coordenadas de recorte, con márgenes como los
+  de los bordes. Antes de calcular nada:
+  - solo cuentan las restricciones que algún vértice de Q incumple (las
+    demás no cambian nada);
+  - un vértice de Q que las cumple todas y está dentro de un borde es un
+    testigo: por ese borde no hay nada que hacer.
+  Para los bordes que quedan se buscan multiplicadores λ ≥ 0 con
+  g + mg + Σλ·b < 0 en toda la caja (el dual del programa lineal: los
+  vértices con 1 a 3 restricciones, y con Σλ = 4096 para el caso vacío),
+  y se comprueba con margen de redondeo. Las salidas tempranas (primer
+  vértice visto, una esquina dentro, esquinas a los lados) solo cuentan
+  vértices que están en la banda (y, con una escala z que no cubre el
+  frustum, en el rango z). La caja guarda también la escala y el centro z
+  si se salta por la banda.
+- `gpu/ge_vertex.c`: `ge_bbox_triangulos` (encendido; necesita
+  `ge_bbox_llamada` y `ge_bbox_pantalla`). Si la prueba de la caja de una
+  llamada (o su primer vértice) no la salta, se repasan sus posiciones
+  triángulo a triángulo (lista, tira o abanico) con las reglas de
+  descarte del GE. A cada vértice se le marca solo lo que es seguro con el
+  margen de 2^-9 de su magnitud:
+  - w < 0, detrás del plano cercano o delante de él;
+  - fuera de la banda o del rango z;
+  - más allá de un borde de la pantalla o fuera de un plano de recorte.
+  Un triángulo se descarta con seguridad si:
+  - los tres tienen w < 0, o están fuera del mismo plano;
+  - con recorte, los tres están detrás del plano cercano, o uno delante
+    está fuera de la banda, o los tres delante y más allá del mismo borde;
+  - sin recorte, uno tiene w < 0 o está fuera de la banda o de z, o los
+    tres están más allá del mismo borde.
+  Si todos se descartan, la llamada se salta como en `ge_bbox`. Al primer
+  triángulo que podría dibujarse, para. Un vértice dentro del frustum y de
+  la pantalla sale sin calcular su margen.
+- `gpu/ge.c`, `gpu/ge.h`, `hle/hle.c`: la línea `Cajas exactas` añade las
+  cajas y llamadas fuera por la banda y por sus triángulos (y cuántas se
+  probaron). El censo de cajas (`prof_bbox`) añade lo que cuesta repasar
+  los triángulos y, para las llamadas probadas por su caja que no dibujan
+  nada: con qué salida de la prueba se quedaron, cuántas tienen recorte de
+  profundidad, cómo son sus vértices (detrás de la cámara, detrás del
+  plano cercano o fuera de z, fuera de la banda, en la pantalla, fuera de
+  ella) y sus triángulos, y cuántas tienen todos sus triángulos
+  descartados con seguridad.
+- `core/opt.h`, `core/opt.c`: `ge_bbox_guarda` y `ge_bbox_triangulos`.
+- `tests/test_bbox.c`: las pruebas al azar tienen un modo más con los dos
+  interruptores (imagen y primitivas iguales a las de referencia). Pruebas
+  nuevas: llamadas que cruzan el plano de la cámara a su alrededor; un
+  vértice junto al límite de la banda, del rango z, del plano cercano o de
+  w = 0; y una escala z que deja fuera lo más cercano del frustum,
+  cambiada entre la caja y las llamadas.
+- `hle/hle.h`, `dist/apps/wiisp/meta.xml`: versión 0.5.23.2.
+
 ## 0.5.23.1
 
 - `gpu/ge_vertex.c`: `ge_bbox_orden` (encendido). La prueba exacta de una

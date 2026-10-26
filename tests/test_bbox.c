@@ -811,7 +811,7 @@ static u32 p_lista(int objetos){   //Arreglo
 static void bbox_pantalla_azar(void){   //Arreglo
 	static u8 vram_ref[0x200000];
 	u32 lista, ronda, distintas = 0, prims_mal = 0, verif = 0, verif_mal = 0, cache_mal = 0, i;
-	u32 pant = 0, dudosas = 0, cruzan = 0, salt = 0, ll_salt = 0, ll_prob = 0, orden_mal = 0;   //Arreglo
+	u32 pant = 0, dudosas = 0, cruzan = 0, salt = 0, ll_salt = 0, ll_prob = 0, orden_mal = 0, guarda = 0, g_salt = 0;   //Arreglo
 	static GeStats st1;   //Arreglo
 	u8 *tex = mem_ptr(R_TEX, 16 * 16 * 4), *vram = mem_ptr(0x04000000, 0x200000);
 	printf("Cajas exactas en pantalla (ge_bbox_pantalla, ge_bbox_llamada): listas al azar alrededor de la pantalla y de la camara\n");
@@ -826,7 +826,7 @@ static void bbox_pantalla_azar(void){   //Arreglo
 		if(brn(2)){ ge.cmd[GE_CULLFACEENABLE] = 1; ge.cmd[GE_CULL] = brn(2); }
 		memcpy(&ini, &ge, sizeof(ini));
 		lista = p_lista(4 + (int)brn(12));
-		for(modo = 0; modo < 4; modo++){   //Arreglo
+		for(modo = 0; modo < 5; modo++){   //Arreglo
 			ge_fast_math = (int)((ronda >> 2) & 1);
 			memcpy(&ge, &ini, sizeof(ge));
 			ge_vertex_reset();
@@ -838,7 +838,8 @@ static void bbox_pantalla_azar(void){   //Arreglo
 			opt_on[OPT_GE_BBOX_RAPIDO] = (u8)(brn(3) != 0);
 			opt_on[OPT_GE_BBOX_PANTALLA] = (u8)(combo != 1 && combo != 3);
 			opt_on[OPT_GE_BBOX_LLAMADA] = (u8)(combo < 2);
-			opt_on[OPT_GE_BBOX_ORDEN] = opt_on[OPT_GE_BBOX_AABB] = (u8)(((ronda >> 3) & 1) ^ (modo == 3));   //Arreglo
+			opt_on[OPT_GE_BBOX_ORDEN] = opt_on[OPT_GE_BBOX_AABB] = (u8)(modo == 4 || (((ronda >> 3) & 1) ^ (modo == 3)));   //Arreglo
+			opt_on[OPT_GE_BBOX_GUARDA] = opt_on[OPT_GE_BBOX_TRIANGULOS] = (u8)(modo == 2 || modo == 4);   //Arreglo
 			if(modo == 3) opt_on[OPT_GE_BBOX_RAPIDO] = rapido1;   //Arreglo
 			ge_test_run_list(R_LIST, lista, NULL);
 			if(modo == 3){   //Arreglo
@@ -860,13 +861,15 @@ static void bbox_pantalla_azar(void){   //Arreglo
 				rapido1 = opt_on[OPT_GE_BBOX_RAPIDO];   //Arreglo
 				pant += ge_stats.bx_pantalla; dudosas += ge_stats.bx_dudosas; cruzan += ge_stats.bx_cruzan;
 				salt += ge_stats.bx_saltadas; ll_salt += ge_stats.bx_ll_saltadas; ll_prob += ge_stats.bx_ll_probadas;
-			} else { verif += ge_stats.bx_verif; verif_mal += ge_stats.bx_verif_bad; cache_mal += ge_stats.bx_cache_mal; }
+			} else if(modo == 4){ guarda += ge_stats.bx_guarda + ge_stats.bx_ll_guarda + ge_stats.bx_ll_tri; g_salt += ge_stats.bx_saltadas; }   //Arreglo
+			else { verif += ge_stats.bx_verif; verif_mal += ge_stats.bx_verif_bad; cache_mal += ge_stats.bx_cache_mal; }   //Arreglo
 			if(memcmp(vram_ref, vram, sizeof(vram_ref))){
 				if(distintas++ < 8) printf("  ronda %u modo %d: imagen distinta\n", (unsigned)ronda, modo);
 			}
 		}
 	}
 	opt_on[OPT_GE_VERIF] = 0;
+	opt_on[OPT_GE_BBOX_GUARDA] = opt_on[OPT_GE_BBOX_TRIANGULOS] = 1;   //Arreglo
 	printf("  %u listas: cajas fuera de la pantalla %u, dudosas %u (%u cruzan la camara); "
 	       "%u llamadas saltadas (%u por su caja, de %u probadas); %u imagenes y %u cuentas de primitivas distintas; "
 	       "con ge_verificar %u comprobadas, %u distintas\n", (unsigned)ronda, (unsigned)pant, (unsigned)dudosas,
@@ -876,7 +879,8 @@ static void bbox_pantalla_azar(void){   //Arreglo
 	CHECK_EQ(prims_mal, 0u);
 	CHECK_EQ(verif_mal, 0u);
 	CHECK_EQ(cache_mal, 0u);
-	printf("  con y sin ge_bbox_orden y ge_bbox_aabb: %u rondas con cuentas distintas\n", (unsigned)orden_mal);   //Arreglo
+	printf("  con y sin ge_bbox_orden y ge_bbox_aabb: %u rondas con cuentas distintas; con ge_bbox_guarda y ge_bbox_triangulos %u cajas y llamadas mas fuera, "
+	       "%u llamadas saltadas\n", (unsigned)orden_mal, (unsigned)guarda, (unsigned)g_salt);   //Arreglo
 	CHECK_EQ(orden_mal, 0u);   //Arreglo
 	CHECK(pant > 10);
 	CHECK(cruzan > 200);
@@ -1082,7 +1086,7 @@ static void bbox_pantalla_bordes(void){   //Arreglo
 	CHECK(lejos_salt * 10 > lejos * 9);
 }
 
-typedef struct { u32 rondas, mal, distintas, probadas, pant, salt, ll_salt, verif, verif_mal, dibujo0, cache_mal, orden_mal; } PRes;   //Arreglo
+typedef struct { u32 rondas, mal, distintas, probadas, pant, salt, ll_salt, verif, verif_mal, dibujo0, cache_mal, orden_mal, guarda, g_salt, g_prob, nada, nada_ll, nada_s1, nada_s4, tri, t_prob; } PRes;   //Arreglo
 
 static int p_correr(const char *que, u32 ronda, u32 fin, int llamada, PRes *r){   //Arreglo
 	static u8 vram_ref[0x200000];
@@ -1093,7 +1097,7 @@ static int p_correr(const char *que, u32 ronda, u32 fin, int llamada, PRes *r){ 
 	int modo, salt = 0, nuevo = (int)(((ronda * 2654435761u) >> 30) & 1);   //Arreglo
 	memcpy(&ini, &ge, sizeof(ini));
 	r->rondas++;
-	for(modo = 0; modo < 4; modo++){   //Arreglo
+	for(modo = 0; modo < 5; modo++){   //Arreglo
 		memcpy(&ge, &ini, sizeof(ge));
 		ge_vertex_reset();
 		ge_raster_reset();
@@ -1104,7 +1108,8 @@ static int p_correr(const char *que, u32 ronda, u32 fin, int llamada, PRes *r){ 
 		opt_on[OPT_GE_BBOX_RAPIDO] = (u8)((ronda * 2654435761u) >> 31);
 		opt_on[OPT_GE_BBOX_PANTALLA] = 1;
 		opt_on[OPT_GE_BBOX_LLAMADA] = (u8)llamada;
-		opt_on[OPT_GE_BBOX_ORDEN] = opt_on[OPT_GE_BBOX_AABB] = (u8)(nuevo ^ (modo == 3));   //Arreglo
+		opt_on[OPT_GE_BBOX_ORDEN] = opt_on[OPT_GE_BBOX_AABB] = (u8)(modo == 4 || (nuevo ^ (modo == 3)));   //Arreglo
+		opt_on[OPT_GE_BBOX_GUARDA] = opt_on[OPT_GE_BBOX_TRIANGULOS] = (u8)(modo == 2 || modo == 4);   //Arreglo
 		ge_test_run_list(R_LIST, fin, NULL);
 		if(modo == 3){   //Arreglo
 			if(memcmp(&st1, &ge_stats, sizeof(st1)) && r->orden_mal++ < 8) printf("  %s ronda %u: cuentas distintas con ge_bbox_orden y ge_bbox_aabb\n", que, (unsigned)ronda);   //Arreglo
@@ -1114,12 +1119,16 @@ static int p_correr(const char *que, u32 ronda, u32 fin, int llamada, PRes *r){ 
 		if(modo == 0){
 			prims0 = ge_stats.primitives;
 			r->dibujo0 += prims0 != 0;
+			r->nada += prims0 == 0;   //Arreglo
+			r->nada_ll += prims0 == 0 ? ge_stats.draws : 0;   //Arreglo
 			memcpy(vram_ref, vram, sizeof(vram_ref));
 			continue;
 		}
 		if(ge_stats.primitives != prims0 && r->mal++ < 8)
 			printf("  %s ronda %u modo %d: primitivas %u/%u\n", que, (unsigned)ronda, modo, (unsigned)ge_stats.primitives, (unsigned)prims0);
 		if(memcmp(vram_ref, vram, sizeof(vram_ref)) && r->distintas++ < 8) printf("  %s ronda %u modo %d: imagen distinta\n", que, (unsigned)ronda, modo);
+		if(modo == 1 && !prims0) r->nada_s1 += ge_stats.bx_saltadas;   //Arreglo
+		if(modo == 4 && !prims0) r->nada_s4 += ge_stats.bx_saltadas;   //Arreglo
 		if(modo == 1){
 			st1 = ge_stats;   //Arreglo
 			r->probadas += ge_stats.bx_cajas != 0;
@@ -1127,9 +1136,16 @@ static int p_correr(const char *que, u32 ronda, u32 fin, int llamada, PRes *r){ 
 			r->salt += ge_stats.bx_saltadas;
 			r->ll_salt += ge_stats.bx_ll_saltadas;
 			salt = ge_stats.bx_saltadas != 0;
-		} else { r->verif += ge_stats.bx_verif; r->verif_mal += ge_stats.bx_verif_bad; r->cache_mal += ge_stats.bx_cache_mal; }
+		} else if(modo == 4){   //Arreglo
+			r->guarda += ge_stats.bx_guarda + ge_stats.bx_ll_guarda;   //Arreglo
+			r->g_salt += ge_stats.bx_saltadas;   //Arreglo
+			r->g_prob += ge_stats.bx_g_probadas;   //Arreglo
+			r->tri += ge_stats.bx_ll_tri;   //Arreglo
+			r->t_prob += ge_stats.bx_t_probadas;   //Arreglo
+		} else { r->verif += ge_stats.bx_verif; r->verif_mal += ge_stats.bx_verif_bad; r->cache_mal += ge_stats.bx_cache_mal; }   //Arreglo
 	}
 	opt_on[OPT_GE_VERIF] = 0;
+	opt_on[OPT_GE_BBOX_GUARDA] = opt_on[OPT_GE_BBOX_TRIANGULOS] = 1;   //Arreglo
 	ge = ini;
 	return salt;
 }
@@ -1360,6 +1376,259 @@ static void p_recta(const float *pa, const float *pb, float del, float *m){   //
 	for(k = 0; k < 3; k++) e1[k] /= le;
 	e2[0] = (u[1] * e1[2] - u[2] * e1[1]) / lu; e2[1] = (u[2] * e1[0] - u[0] * e1[2]) / lu; e2[2] = (u[0] * e1[1] - u[1] * e1[0]) / lu;
 	for(k = 0; k < 3; k++){ m[k] = u[k]; m[3 + k] = e1[k] * del; m[6 + k] = e2[k] * del; }
+}
+
+static void p_ojo_sx(float sx, float sy, float w, float *e){   //Arreglo
+	float xs = ge_f24(ge.cmd[GE_VIEWPORTXSCALE]), ys = ge_f24(ge.cmd[GE_VIEWPORTYSCALE]);
+	float xc = ge_f24(ge.cmd[GE_VIEWPORTXCENTER]), yc = ge_f24(ge.cmd[GE_VIEWPORTYCENTER]);
+	e[0] = (sx - xc) / xs * w / pp_a;
+	e[1] = (sy - yc) / ys * w / pp_b;
+	e[2] = -w;
+}
+
+static void bbox_triangulos_limites(void){   //Arreglo
+	static const float ds[12] = { -48.0f, -20.0f, -3.0f, -1.0f, -0.25f, 0.0f, 0.25f, 1.0f, 3.0f, 20.0f, 48.0f, 2560.0f };
+	u32 ronda, mal = 0, dibujados = 0, saltadas = 0, lejos = 0, lejos_salt = 0, probadas = 0;
+	printf("Repaso por triangulos (ge_bbox_triangulos): un vertice junto al limite de la banda, del rango z, del plano cercano o de w = 0\n");
+	ge_hw = NULL;
+	for(ronda = 0; ronda < 1600; ronda++){
+		const int tipo = (int)(ronda % 8);
+		int prof = tipo == 6 ? 1 : tipo == 4 || tipo == 5 ? 0 : (int)((ronda >> 3) & 1), di, j, k, modo;
+		float zs, zc, X0, Y0, sx1, sx2, sy1, sy2;
+		p_pantalla(prof);
+		p_perspectiva();
+		zs = ge_f24(ge.cmd[GE_VIEWPORTZSCALE]); zc = ge_f24(ge.cmd[GE_VIEWPORTZCENTER]);
+		X0 = (float)(ge.cmd[GE_OFFSETX] & 0xFFFF) / 16.0f; Y0 = (float)(ge.cmd[GE_OFFSETY] & 0xFFFF) / 16.0f;
+		sx1 = X0 + (float)(ge.cmd[GE_SCISSOR1] & 0x3FF) + 4.0f; sx2 = X0 + (float)(ge.cmd[GE_SCISSOR2] & 0x3FF) - 4.0f;
+		sy1 = Y0 + (float)((ge.cmd[GE_SCISSOR1] >> 10) & 0x3FF) + 4.0f; sy2 = Y0 + (float)((ge.cmd[GE_SCISSOR2] >> 10) & 0x3FF) - 4.0f;
+		if(sx2 > X0 + (float)(ge.cmd[GE_REGION2] & 0x3FF) - 4.0f) sx2 = X0 + (float)(ge.cmd[GE_REGION2] & 0x3FF) - 4.0f;
+		if(sy2 > Y0 + (float)((ge.cmd[GE_REGION2] >> 10) & 0x3FF) - 4.0f) sy2 = Y0 + (float)((ge.cmd[GE_REGION2] >> 10) & 0x3FF) - 4.0f;
+		for(di = 0; di < 12; di++){
+			GeState ini;
+			float v[3][3], mn[3], mx[3], d = ds[di], w0 = bfr(pp_n * 1.5f, pp_f * 0.5f);
+			u32 a, caja, salto, prims0 = 0;
+			for(j = 1; j < 3; j++) p_ojo_sx(bfr(sx1, sx2), bfr(sy1, sy2), bfr(pp_n * 1.5f, pp_f * 0.5f), v[j]);
+			if(tipo < 4){
+				const float lim = (tipo & 1) ? 4095.0f + 15.5f / 16.0f : 0.0f, sig = (tipo & 1) ? 1.0f : -1.0f;
+				if(tipo < 2) p_ojo_sx(lim + sig * d / 16.0f, bfr(sy1, sy2), w0, v[0]);
+				else p_ojo_sx(bfr(sx1, sx2), lim + sig * d / 16.0f, w0, v[0]);
+			} else if(tipo < 6){
+				const float sz = tipo == 4 ? -d : 65536.0f + d, q = (sz - zc) / zs;
+				const float ze = -ge.proj[14] / (ge.proj[10] + q);
+				p_ojo_sx(bfr(sx1, sx2), bfr(sy1, sy2), -ze, v[0]);
+			} else if(tipo == 6){
+				const float dl = d * (1.0f / 4096.0f) * w0, ze = (dl - ge.proj[14]) / (ge.proj[10] - 1.0f);
+				p_ojo_sx(bfr(sx1, sx2), bfr(sy1, sy2), -ze, v[0]);
+			} else {
+				const float wz = d * (1.0f / 2048.0f) * pp_n;
+				v[0][0] = bfr(-1.0f, 1.0f); v[0][1] = bfr(-1.0f, 1.0f); v[0][2] = -wz;
+			}
+			for(k = 0; k < 3; k++){ mn[k] = 1e30f; mx[k] = -1e30f; }
+			for(j = 0; j < 3; j++)
+				for(k = 0; k < 3; k++){ if(v[j][k] < mn[k]) mn[k] = v[j][k]; if(v[j][k] > mx[k]) mx[k] = v[j][k]; }
+			rl = R_LIST;
+			rv = R_DATA;
+			{
+				static const float m[12] = { 1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0 };
+				rcmd(GE_WORLDMATRIXNUMBER, 0);
+				for(k = 0; k < 12; k++) rcmd(GE_WORLDMATRIXDATA, f24(m[k]));
+			}
+			a = p_escribir(3, (const float (*)[3])v, 3);
+			caja = r_caja(mn, mx);
+			rcmd(GE_VERTEXTYPE, 0x180);
+			rbase(caja);
+			rcmd(GE_VADDR, caja & 0xFFFFFF);
+			rcmd(GE_BOUNDINGBOX, 8);
+			salto = rl + 4;
+			rbase(rl);
+			rl += 4;
+			r_dibujo((7u << 2) | (3u << 7), brn(2) ? GE_PRIM_TRIANGLES : GE_PRIM_TRIANGLE_STRIP, a, 3);
+			mem_write32(salto, (GE_BJUMP << 24) | (rl & 0xFFFFFF));
+			memcpy(&ini, &ge, sizeof(ini));
+			for(modo = 0; modo < 3; modo++){
+				ge_fast_math = (int)((ronda >> 4) & 1);
+				memcpy(&ge, &ini, sizeof(ge));
+				ge_vertex_reset();
+				ge_raster_reset();
+				memset(&ge_stats, 0, sizeof(ge_stats));
+				opt_on[OPT_GE_BBOX] = (u8)(modo != 0);
+				opt_on[OPT_GE_VERIF] = (u8)(modo == 2);
+				opt_on[OPT_GE_BBOX_RAPIDO] = (u8)((ronda >> 5) & 1);
+				opt_on[OPT_GE_BBOX_PANTALLA] = opt_on[OPT_GE_BBOX_LLAMADA] = opt_on[OPT_GE_BBOX_ORDEN] = 1;
+				opt_on[OPT_GE_BBOX_GUARDA] = opt_on[OPT_GE_BBOX_TRIANGULOS] = 1;
+				ge_test_run_list(R_LIST, rl, NULL);
+				if(modo == 0){ prims0 = ge_stats.primitives; dibujados += prims0 != 0; continue; }
+				if((ge_stats.primitives != prims0 || ge_stats.bx_verif_bad) && mal++ < 8)
+					printf("  ronda %u tipo %d a %g: primitivas %u/%u, verificacion %u\n", (unsigned)ronda, tipo, (double)d,
+					       (unsigned)ge_stats.primitives, (unsigned)prims0, (unsigned)ge_stats.bx_verif_bad);
+				if(modo == 1){
+					saltadas += ge_stats.bx_ll_tri;
+					probadas += ge_stats.bx_t_probadas;
+					if(di == 11 && tipo < 6){ lejos++; lejos_salt += ge_stats.bx_saltadas; }
+				}
+			}
+			opt_on[OPT_GE_VERIF] = 0;
+		}
+	}
+	printf("  %u triangulos (%u dibujados): %u probados por sus triangulos, %u saltados; %u cuentas distintas; "
+	       "con el vertice a 2560 fuera, %u de %u saltados\n", (unsigned)(ronda * 12), (unsigned)dibujados, (unsigned)probadas,
+	       (unsigned)saltadas, (unsigned)mal, (unsigned)lejos_salt, (unsigned)lejos);
+	CHECK_EQ(mal, 0u);
+	CHECK(dibujados > 4000);
+	CHECK(saltadas > 1000);
+	CHECK(lejos_salt * 10 > lejos * 9);
+}
+
+static void bbox_guarda_z(void){   //Arreglo
+	static u8 vram_ref[0x200000];
+	u8 *vram = mem_ptr(0x04000000, 0x200000);
+	u32 ronda, mal = 0, cajas = 0, llamadas = 0, cambio_dib = 0, cambio_salt = 0, nada = 0;
+	printf("Banda de guarda (ge_bbox_guarda): sin recorte, con una escala z que deja fuera de su rango lo mas cercano del frustum, "
+	       "y la escala z cambiada entre la caja y las llamadas\n");
+	ge_hw = NULL;
+	for(ronda = 0; ronda < 400; ronda++){
+		GeState ini;
+		float v[3][3], mn[3], mx[3], w = pp_n, cx, cy;
+		u32 a, caja, salto, prims0 = 0;
+		int j, k, modo, cambio = (int)(ronda & 1);
+		p_pantalla(0);
+		p_perspectiva();
+		ge.cmd[GE_VIEWPORTZSCALE] = f24(-60000.0f);
+		ge.cmd[GE_VIEWPORTZCENTER] = f24(32000.0f);
+		{
+			const float q = bfr(-0.95f, -0.65f);
+			w = ge.proj[14] / (ge.proj[10] + q);
+		}
+		cx = bfr(-0.3f, 0.3f); cy = bfr(-0.3f, 0.3f);
+		for(j = 0; j < 3; j++){
+			v[j][0] = (cx + (j == 1 ? 0.2f : 0.0f)) * w / pp_a;
+			v[j][1] = (cy + (j == 2 ? 0.2f : 0.0f)) * w / pp_b;
+			v[j][2] = -w * bfr(0.995f, 1.005f);
+		}
+		for(k = 0; k < 3; k++){ mn[k] = 1e30f; mx[k] = -1e30f; }
+		for(j = 0; j < 3; j++)
+			for(k = 0; k < 3; k++){ if(v[j][k] < mn[k]) mn[k] = v[j][k]; if(v[j][k] > mx[k]) mx[k] = v[j][k]; }
+		rl = R_LIST;
+		rv = R_DATA;
+		{
+			static const float m[12] = { 1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0 };
+			rcmd(GE_WORLDMATRIXNUMBER, 0);
+			for(k = 0; k < 12; k++) rcmd(GE_WORLDMATRIXDATA, f24(m[k]));
+		}
+		a = p_escribir(3, (const float (*)[3])v, 3);
+		caja = r_caja(mn, mx);
+		rcmd(GE_VERTEXTYPE, 0x180);
+		rbase(caja);
+		rcmd(GE_VADDR, caja & 0xFFFFFF);
+		rcmd(GE_BOUNDINGBOX, 8);
+		salto = rl + 4;
+		rbase(rl);
+		rl += 4;
+		if(cambio){
+			rcmd(GE_VIEWPORTZSCALE, f24(-32000.0f));
+			rcmd(GE_VIEWPORTZCENTER, f24(32000.0f));
+		}
+		r_dibujo((7u << 2) | (3u << 7), GE_PRIM_TRIANGLES, a, 3);
+		mem_write32(salto, (GE_BJUMP << 24) | (rl & 0xFFFFFF));
+		memcpy(&ini, &ge, sizeof(ini));
+		for(modo = 0; modo < 3; modo++){
+			ge_fast_math = (int)((ronda >> 1) & 1);
+			memcpy(&ge, &ini, sizeof(ge));
+			ge_vertex_reset();
+			ge_raster_reset();
+			memset(vram, 0x5A, 0x200000);
+			memset(&ge_stats, 0, sizeof(ge_stats));
+			opt_on[OPT_GE_BBOX] = (u8)(modo != 0);
+			opt_on[OPT_GE_VERIF] = (u8)(modo == 2);
+			opt_on[OPT_GE_BBOX_RAPIDO] = (u8)((ronda >> 2) & 1);
+			opt_on[OPT_GE_BBOX_PANTALLA] = opt_on[OPT_GE_BBOX_ORDEN] = opt_on[OPT_GE_BBOX_GUARDA] = 1;
+			opt_on[OPT_GE_BBOX_LLAMADA] = (u8)((ronda >> 3) & 1);
+			opt_on[OPT_GE_BBOX_TRIANGULOS] = 0;
+			ge_test_run_list(R_LIST, rl, NULL);
+			if(modo == 0){
+				prims0 = ge_stats.primitives;
+				memcpy(vram_ref, vram, sizeof(vram_ref));
+				nada += !cambio && !prims0;
+				cambio_dib += cambio && prims0;
+				continue;
+			}
+			if((ge_stats.primitives != prims0 || ge_stats.bx_verif_bad || memcmp(vram_ref, vram, sizeof(vram_ref))) && mal++ < 8)
+				printf("  ronda %u modo %d: primitivas %u/%u\n", (unsigned)ronda, modo, (unsigned)ge_stats.primitives, (unsigned)prims0);
+			if(modo == 1){
+				cajas += ge_stats.bx_guarda;
+				llamadas += !cambio && ge_stats.bx_saltadas;
+				cambio_salt += cambio && ge_stats.bx_saltadas;
+			}
+		}
+		opt_on[OPT_GE_VERIF] = 0;
+	}
+	opt_on[OPT_GE_BBOX_TRIANGULOS] = 1;
+	printf("  %u objetos sin dibujar nada: %u cajas fuera por la banda, %u con sus llamadas saltadas; con la escala z cambiada, "
+	       "%u dibujan y %u se saltan; %u cuentas e imagenes distintas\n", (unsigned)nada, (unsigned)cajas, (unsigned)llamadas,
+	       (unsigned)cambio_dib, (unsigned)cambio_salt, (unsigned)mal);
+	CHECK_EQ(mal, 0u);
+	CHECK(nada > 150);
+	CHECK(llamadas * 10 > nada * 9);
+	CHECK(cambio_dib > 150);
+	CHECK_EQ(cambio_salt, 0u);
+}
+
+static void bbox_guarda_azar(void){   //Arreglo
+	PRes rp, rs;
+	u32 ronda;
+	memset(&rp, 0, sizeof(rp)); memset(&rs, 0, sizeof(rs));
+	printf("Cajas exactas con la banda de guarda (ge_bbox_guarda): llamadas que cruzan el plano de la camara a su alrededor\n");
+	ge_hw = NULL;
+	for(ronda = 0; ronda < 1600; ronda++){
+		float cen[3], mn[3], mx[3], esc = bfr(0.2f, 6.0f), v[24][3];
+		int prof = (int)(ronda & 1), tipo = (int)brn(4), nc = 1 + (int)brn(4), d, i, k;
+		u32 cuerpo;
+		p_pantalla(prof);
+		p_perspectiva();
+		if(tipo == 0){ cen[0] = (brn(2) ? 1.0f : -1.0f) * bfr(0.2f, 5.0f); cen[1] = bfr(-2.0f, 2.0f); }
+		else if(tipo == 1){ cen[0] = bfr(-2.0f, 2.0f); cen[1] = (brn(2) ? 1.0f : -1.0f) * bfr(0.2f, 5.0f); }
+		else { cen[0] = bfr(-4.0f, 4.0f); cen[1] = bfr(-4.0f, 4.0f); }
+		cen[2] = tipo == 3 ? bfr(0.0f, 4.0f) : bfr(-4.0f, 2.0f);
+		rl = R_LIST;
+		rv = R_DATA;
+		p_mundo(cen[0], cen[1], cen[2], esc, bfr(0.0f, 6.28f));
+		cuerpo = rl + 6 * 4;
+		rl = cuerpo;
+		for(k = 0; k < 3; k++){ mn[k] = 1e30f; mx[k] = -1e30f; }
+		for(d = 0; d < nc; d++){
+			static const u32 pr[3] = { GE_PRIM_TRIANGLES, GE_PRIM_TRIANGLE_STRIP, GE_PRIM_TRIANGLE_FAN };
+			float c0[3], r0 = bfr(0.05f, 0.5f), q[3];
+			u32 pos = 1 + brn(3);
+			int nv = 3 + (int)brn(14);
+			for(k = 0; k < 3; k++) c0[k] = bfr(-1.0f + r0, 1.0f - r0);
+			for(i = 0; i < nv; i++){
+				for(k = 0; k < 3; k++) v[i][k] = c0[k] + r0 * bfr(-1.0f, 1.0f);
+				p_leida(pos, v[i], q);
+				for(k = 0; k < 3; k++){ if(q[k] < mn[k]) mn[k] = q[k]; if(q[k] > mx[k]) mx[k] = q[k]; }
+			}
+			r_dibujo((7u << 2) | (pos << 7), pr[brn(3)], p_escribir(pos, (const float (*)[3])v, nv), nv);
+		}
+		p_objeto(cuerpo, mn, mx);
+		ge_fast_math = (int)((ronda >> 1) & 1);
+		p_correr("guarda", ronda, rl, (int)((ronda >> 2) & 1), prof ? &rp : &rs);
+	}
+	printf("  con recorte de profundidad: %u objetos (%u dibujan algo); de los que no dibujan nada, %u llamadas calculadas: saltadas %u sin "
+	       "ge_bbox_guarda ni ge_bbox_triangulos y %u con ellos (%u por la banda de %u probadas, %u por sus triangulos de %u probadas)\n",
+	       (unsigned)rp.rondas, (unsigned)rp.dibujo0, (unsigned)rp.nada_ll, (unsigned)rp.nada_s1, (unsigned)rp.nada_s4, (unsigned)rp.guarda,
+	       (unsigned)rp.g_prob, (unsigned)rp.tri, (unsigned)rp.t_prob);
+	printf("  sin recorte: %u objetos (%u dibujan algo); de los que no dibujan nada, %u llamadas calculadas: saltadas %u sin ge_bbox_guarda ni "
+	       "ge_bbox_triangulos y %u con ellos (%u por la banda de %u probadas, %u por sus triangulos de %u probadas); %u cuentas y %u imagenes "
+	       "distintas; con ge_verificar %u comprobadas, %u distintas\n",
+	       (unsigned)rs.rondas, (unsigned)rs.dibujo0, (unsigned)rs.nada_ll, (unsigned)rs.nada_s1, (unsigned)rs.nada_s4, (unsigned)rs.guarda,
+	       (unsigned)rs.g_prob, (unsigned)rs.tri, (unsigned)rs.t_prob, (unsigned)(rp.mal + rs.mal), (unsigned)(rp.distintas + rs.distintas),
+	       (unsigned)(rp.verif + rs.verif), (unsigned)(rp.verif_mal + rs.verif_mal));
+	CHECK_EQ(rp.mal + rs.mal, 0u);
+	CHECK_EQ(rp.distintas + rs.distintas, 0u);
+	CHECK_EQ(rp.verif_mal + rs.verif_mal, 0u);
+	CHECK_EQ(rp.cache_mal + rs.cache_mal, 0u);
+	CHECK_EQ(rp.orden_mal + rs.orden_mal, 0u);
+	CHECK(rs.guarda >= 4);   //Arreglo
+	CHECK(rp.tri + rs.tri >= 50);   //Arreglo
 }
 
 static void bbox_cerca_camara(void){   //Arreglo
@@ -1635,6 +1904,12 @@ void test_bbox(void){
 	bbox_pantalla_rara();   //Arreglo
 	memset(&ge_stats, 0, sizeof(ge_stats));   //Arreglo
 	bbox_cerca_camara();   //Arreglo
+	memset(&ge_stats, 0, sizeof(ge_stats));   //Arreglo
+	bbox_guarda_azar();   //Arreglo
+	memset(&ge_stats, 0, sizeof(ge_stats));   //Arreglo
+	bbox_triangulos_limites();   //Arreglo
+	memset(&ge_stats, 0, sizeof(ge_stats));   //Arreglo
+	bbox_guarda_z();   //Arreglo
 	memset(&ge_stats, 0, sizeof(ge_stats));   //Arreglo
 	memcpy(opt_on, saved_opt, sizeof(saved_opt));
 	ge_hw = saved_hw;

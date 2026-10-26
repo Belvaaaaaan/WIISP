@@ -590,6 +590,7 @@ static void __attribute__((noinline)) censo_bbox_prim(DisplayList *l, u32 arg){
 	ge_draw_prim((arg >> 16) & 7, n);
 	dt = bb_reloj() - c0;
 	nada = ge_stats.primitives == p0;
+	ge_bbox_ll_censo(nada);   //Arreglo
 	fuera = nada && (ge_stats.bx_saltadas != s0 || (ge_stats.tris != t0 && ge_stats.tris - t0 == ge_stats.tris_outside - o0));   //Arreglo
 	dentro = bb_obj.abierto && l == bb_obj.l &&
 	         (l->stackptr > bb_obj.pila || (l->stackptr == bb_obj.pila && l->pc >= bb_obj.ini && l->pc < bb_obj.fin));
@@ -635,7 +636,13 @@ void ge_bbox_census_report(const GeStats *g, const GeStats *g0, u64 hz, char *bu
 	         "(%.1f ms), con huesos %u llamadas y %u vertices; enteras fuera de pantalla %u llamadas y %u vertices (%.1f ms)\n"
 	         "Censo de cajas: objetos sin dibujar nada por su caja: sin prueba exacta %u (%u vertices), fuera %u (%u), dentro %u (%u), "
 	         "dudosa %u (%u), dudosa que cruza el plano de la camara %u (%u); probar la caja de cada llamada %.1f ms "   //Arreglo
-	         "(de ellos leer sus posiciones %.1f ms: %u llamadas con %u vertices)",   //Arreglo
+	         "(de ellos leer sus posiciones %.1f ms: %u llamadas con %u vertices; repasar sus triangulos %.1f ms)\n"   //Arreglo
+	         "Censo de cajas: llamadas probadas por su caja que no dibujan nada %u (%u vertices; %u con recorte de profundidad); "   //Arreglo
+	         "por la salida de la prueba: primer vertice visto %u, sin caja %u, esquina dentro %u, sin pantalla %u, esquinas a los lados %u, "   //Arreglo
+	         "vertices de Q en la banda %u, w pequena %u, programa lineal %u, sin ge_bbox_orden %u; sus vertices: detras de la camara %u, "   //Arreglo
+	         "detras del plano cercano o fuera de z %u, fuera de la banda %u, en la pantalla %u, fuera de la pantalla %u; sus triangulos: "   //Arreglo
+	         "detras de la camara o del plano cercano %u, fuera de z %u, fuera de la banda %u, fuera de la pantalla %u, otros %u; "   //Arreglo
+	         "con todos sus triangulos asi %u llamadas (%u vertices)",   //Arreglo
 	         (unsigned)D(bb_cmds), (unsigned)D(bb_vertices), bb_ms(D(bb_ticks), hz), (unsigned)D(bb_huesos),
 	         (unsigned)D(bb_visibles), (unsigned)(D(bb_cmds) - D(bb_visibles) - D(bb_count0)), (unsigned)D(bb_count0),
 	         (unsigned)D(bb_sin_probar), (unsigned)D(bj_total), (unsigned)D(bj_sin_caja), (unsigned)D(bj_tomados),
@@ -652,7 +659,13 @@ void ge_bbox_census_report(const GeStats *g, const GeStats *g0, u64 hz, char *bu
 	         (unsigned)D(ob_nada_clase_vertices[1]), (unsigned)D(ob_nada_clase[2]), (unsigned)D(ob_nada_clase_vertices[2]),   //Arreglo
 	         (unsigned)D(ob_nada_clase[3]), (unsigned)D(ob_nada_clase_vertices[3]), (unsigned)D(ob_nada_clase[4]),   //Arreglo
 	         (unsigned)D(ob_nada_clase_vertices[4]), bb_ms(D(bx_ll_ticks), hz), bb_ms(D(bx_ll_caja_ticks), hz),   //Arreglo
-	         (unsigned)D(bx_ll_cajas), (unsigned)D(bx_ll_leidos));   //Arreglo
+	         (unsigned)D(bx_ll_cajas), (unsigned)D(bx_ll_leidos), bb_ms(D(bx_t_ticks), hz),   //Arreglo
+	         (unsigned)D(bx_nd_ll), (unsigned)D(bx_nd_vert), (unsigned)D(bx_nd_prof), (unsigned)D(bx_nd_razon[0]),   //Arreglo
+	         (unsigned)D(bx_nd_razon[1]), (unsigned)D(bx_nd_razon[2]), (unsigned)D(bx_nd_razon[3]), (unsigned)D(bx_nd_razon[4]),   //Arreglo
+	         (unsigned)D(bx_nd_razon[5]), (unsigned)D(bx_nd_razon[6]), (unsigned)D(bx_nd_razon[7]), (unsigned)D(bx_nd_razon[8]),   //Arreglo
+	         (unsigned)D(bx_nd_v[0]), (unsigned)D(bx_nd_v[1]), (unsigned)D(bx_nd_v[2]), (unsigned)D(bx_nd_v[3]), (unsigned)D(bx_nd_v[4]),   //Arreglo
+	         (unsigned)D(bx_nd_t[0]), (unsigned)D(bx_nd_t[1]), (unsigned)D(bx_nd_t[2]), (unsigned)D(bx_nd_t[3]), (unsigned)D(bx_nd_t[4]),   //Arreglo
+	         (unsigned)D(bx_nd_tri), (unsigned)D(bx_nd_tri_vert));   //Arreglo
 #undef D
 }   //Arreglo
 
