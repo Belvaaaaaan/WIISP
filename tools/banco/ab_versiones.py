@@ -20,7 +20,7 @@ tests = [l.strip() for l in open(lista) if l.strip() and not l.startswith('#') a
 
 
 def run(cli, t):
-    r = subprocess.run(['qemu-ppc', cli, '--run', '--quiet', '--frames', '2400', '--root', str(root),
+    r = subprocess.run(['qemu-ppc', '-E', 'MALLOC_PERTURB_=165', cli, '--run', '--quiet', '--frames', '2400', '--root', str(root),
                         str(root / 'tests' / (t + '.prx'))], capture_output=True, timeout=1200)
     return r.stdout
 

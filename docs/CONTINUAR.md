@@ -2767,6 +2767,132 @@ Qué mirar:
 - Idea para más adelante: pedir con `dcbt` las líneas siguientes mientras
   se leen las posiciones de cada llamada.
 
+### v0.5.23.2: banda de guarda (`ge_bbox_guarda`) y repaso por triángulos (`ge_bbox_triangulos`)
+
+Punto 2 del plan: rescatar las llamadas que cruzan el plano de la cámara.
+
+Análisis (en el código del emulador, `round_to_screen` y
+`triangle_rejected`). Un triángulo solo se dibuja si:
+- **sin recorte de profundidad:** sus tres vértices tienen w > 0,
+  0 ≤ sx ≤ 4095,97, 0 ≤ sy < 4095,97 y 0 ≤ sz < 65536;
+- **con recorte:** los vértices delante del plano cercano están en la
+  banda en x e y, y los puntos del corte con el plano también;
+- **en los dos casos:** no todos fuera del mismo plano, no todos con
+  w < 0, y luego `range_of`.
+El camino por lotes (`pantalla_lote`) solo se usa con el vértice dentro
+del rango; si no, va por `round_to_screen`, que lo marca fuera. Con w > 0
+las condiciones de banda y z son lineales en coordenadas de recorte, como
+los bordes de la pantalla.
+
+1. `ge_bbox_guarda`: el programa lineal de la caja con esas restricciones
+   (ver ARREGLOS). Lo que aprendí al probarlo:
+   - La proyección de la parte visible de la caja es convexa y la pantalla
+     está dentro de la banda. Así que la banda en x/y solo cambia algo si
+     esa proyección sale muy lejos (más de 2048 px) y "da la vuelta". La
+     prueba de objetos largos (desde 3000-9000 px fuera hasta cerca de la
+     pantalla) lo tiene: 212 y 173 rescates donde antes 5 y 1.
+   - Con la escala z de siempre, el rango z solo añade un ~5 % detrás del
+     plano cercano. Con una escala que no cubre el frustum, quita lo más
+     cercano o lo más lejano de él. Para eso las salidas tempranas (primer
+     vértice visto, una esquina dentro) también miran el rango z.
+   - En escenas al azar alrededor de la cámara rescata muy poco (0-9 de
+     cientos). Lo que mata a la mayoría de esas llamadas es que un solo
+     vértice fuera de la banda, o detrás de la cámara sin recorte, descarta
+     el triángulo entero, y eso la caja no lo puede ver.
+2. Por eso `ge_bbox_triangulos`: el repaso de las posiciones triángulo a
+   triángulo, con las mismas reglas y márgenes (ver ARREGLOS). En la
+   prueba al azar alrededor de la cámara, el censo decía que en 79 de 90
+   llamadas que no dibujaban nada todos sus triángulos se descartaban; el
+   repaso se queda con las que puede probar con margen. Se intenta también
+   en las llamadas vistas por su primer vértice (en una visible para en el
+   primer triángulo).
+3. Censo nuevo (`prof_bbox`), para saber qué pasa en DBZ: lo que cuesta el
+   repaso y, para las llamadas probadas por su caja que no dibujan nada,
+   con qué salida se quedaron, si tienen recorte, cómo son sus vértices y
+   sus triángulos, y cuántas tienen todos los triángulos descartados.
+
+Banco (instrucciones por llamada sin el psq_l emulado, sin / con los dos;
+el banco no tiene llamadas que crucen la cámara, solo mide el coste):
+4: 22.341 / 23.161; 7: 8.111 / 8.130; 8: 10.432 / 10.659; 9: 23.134 /
+24.331; 10: 8.485 / 8.515. La banda casi no cuesta (solo hace algo cuando
+la prueba de la caja ya falló, y las salidas tempranas miran la banda solo
+de los testigos). El repaso cuesta ~800-1.200 en las llamadas visibles (3-7
+vértices de media): lo dirá el censo.
+
+Verificación:
+- Pruebas (x86, PowerPC y devkitPPC bajo qemu): 166.533 comprobaciones,
+  0 fallos. Huellas de test_vdec las de siempre: 4D4A1D8B, 0657B177 y
+  B3A2BCD3.
+- `tests/test_bbox.c`:
+  - las pruebas al azar tienen un modo con los dos interruptores (imagen y
+    primitivas iguales a las de referencia);
+  - la igualdad con y sin `ge_bbox_orden` se mira con los dos apagados;
+  - pruebas nuevas, todas con 0 cuentas e imágenes distintas:
+    - llamadas que cruzan la cámara a su alrededor;
+    - objetos largos desde muy fuera de la banda, con mínimos de rescate
+      por cada lado;
+    - un vértice junto al límite de la banda, del rango z (por los dos
+      lados), del plano cercano o de w = 0, y uno en pantalla justo detrás
+      del plano cercano sin recorte;
+    - una escala z que deja fuera lo más cercano o lo más lejano del
+      frustum, cambiada entre la caja y las llamadas (0 saltos de las que
+      dibujan).
+- Mutaciones del código nuevo (36):
+  - **Detectadas, 25:**
+    - en la banda: el límite x a 2048, los signos de x ≤ límite, y ≥ 0 y
+      z ≥ 0, z < 32768;
+    - en el certificado: λ < 0, sin valor absoluto, la caja a la mitad;
+    - los testigos siempre (los tres sitios);
+    - sin comparar la escala z guardada, las dos salidas tempranas sin el
+      rango z;
+    - en el repaso: banda, borde, z y traslación del margen; banda sin
+      "delante"; plano de un solo vértice; reglas sin recorte siempre;
+      tira, abanico y lista mal.
+  - **No detectadas:**
+    - de margen de redondeo, 7: x ≥ 0 y h sin margen, el certificado sin
+      holgura, la caja sin agrandar, w < 0, "cerca" y "delante" sin margen
+      en el repaso (los márgenes tienen de 32 a 128 veces de holgura);
+    - equivalente, 1: todas las restricciones activas;
+    - solo quitan poder, 2: h sin z con recorte (Q más grande) y el atajo
+      del repaso sin mirar los bordes (dentro del frustum y fuera del
+      scissor, que la caja ya salta).
+  - **Adoptada como mejora:** "los tres más allá del mismo borde" no
+    necesita que estén delante del plano cercano.
+- pspautotests 275/275; tests/guest 22/22.
+- A/B en las 572 (exacto y MR) de `ge_bbox_guarda`, de
+  `ge_bbox_triangulos` y de los dos: solo `malloc`, `io/file`,
+  savedata y una vez `gpu/complex`, que cambian también con el mismo
+  binario.
+- A/B del renderizador de GX bajo qemu en las 110 de `gpu/` (exacto y MR):
+  0 distintos.
+- La 0.5.23.1 contra la 0.5.23.2 con todo encendido: primero salió
+  `gpu/exact/pixel` distinto, también con `ge_bbox=0`. El stub de GX no
+  escribe en los destinos de las copias y se leía basura de la memoria
+  (determinista con cada binario, distinta entre binarios). Con
+  `MALLOC_PERTURB_` (ahora siempre en `ab_versiones.py`): 555 programas, 0
+  distintos.
+- `ge_verificar` en las 110 de `gpu/` (exacto y MR): 0 líneas `[VERIF]`.
+- Recarga con ASan: la primera vez, 3 de 572 con 336 bytes más en la
+  tercera vuelta (con la máquina cargada; ya pasó en la 0.5.23.1 con otro
+  programa). Solos, 12 de 12 bien, y la recarga entera otra vez, 0.
+- Compilación para el Wii: `wiisp.dol` 0.5.23.2.
+
+Autotest (4 registros y un `.capturas.txt`; todas con `prof_pmc`,
+`prof_tirones`, `prof_ventana_juego` y `ventana 600`):
+- sin: `ge_bbox_guarda` y `ge_bbox_triangulos` a 0 (como la 0.5.23.1);
+- con: los dos a 1;
+- verif: con `ge_verificar` (camino nuevo que salta llamadas);
+- censo: `prof_bbox` y `capturas 400`.
+
+Qué mirar:
+- con frente a sin (`ventanas.py`): velocidad de las peleas; llamadas
+  fuera por la banda y por sus triángulos (línea `Cajas exactas`);
+- verif: 0 distintos en "Verificacion de ge_bbox";
+- censo: las 12 capturas; los ms de repasar los triángulos; y, de las
+  llamadas probadas que no dibujan nada, la salida de la prueba, el
+  recorte, cómo son sus vértices y triángulos, y cuántas tienen todos sus
+  triángulos descartados (lo que el repaso podría saltar todavía).
+
 ### Para el siguiente chat (empezar aquí)
 
 Metodología acordada (detalle en `docs/HOJA_DE_RUTA.md`): primero medir
@@ -2790,22 +2916,24 @@ Metodología acordada (detalle en `docs/HOJA_DE_RUTA.md`): primero medir
   (0.5.21), 1.3 a `ge_bbox_rapido`, 1.3 b `ge_bbox`, `ge_cmd_matrices` y
   el censo `prof_comandos` (0.5.22), 1.3 c `ge_bbox_pantalla`, 1.3 d
   `ge_bbox_llamada` y el censo `prof_huesos` (0.5.23) y la prueba de cada
-  llamada más barata (`ge_bbox_orden`, `ge_bbox_aabb`, 0.5.23.1).
+  llamada más barata (`ge_bbox_orden`, `ge_bbox_aabb`, 0.5.23.1) y la
+  banda de guarda y el repaso por triángulos (`ge_bbox_guarda`,
+  `ge_bbox_triangulos`, 0.5.23.2).
 - Herramientas para medir sin el Wii (banco de qemu con el código de
   devkitPPC, perfil por función, psq_l emulado, A/B) y para leer los
   registros del Wii (`ventanas.py`): `tools/banco/LEEME.md`. El entorno
   (devkitPPC, qemu, pspautotests, PPSSPP): `tools/setup_entorno.sh`.
-- **Siguiente:** leer los registros de la 0.5.23.1 (`ventanas.py sin=...
-  con=... nopant=... censo=...`):
-  - con frente a sin: velocidad de las peleas;
-  - nopant frente a con: si `ge_bbox_pantalla` aporta algo en DBZ;
-  - censo: las 12 capturas, los ms de probar la caja de cada llamada y
-    cuánto es leer las posiciones.
-  Después, el punto 2 (0.5.23.2): rescatar las llamadas que cruzan el
-  plano de la cámara (banda de guarda de 4096 y, sin recorte, el rango z
-  de pantalla en Q; hace falta un programa lineal más general). Luego el
-  3 (0.5.23.3, rachas de huesos) y el 4 (0.5.23.4, `ge_charolas` y el
-  diseño del IR). Lo que sigue es de antes de la 0.5.23:
+- **Siguiente:** leer los registros de la 0.5.23.2 (`ventanas.py sin=...
+  con=... verif=... censo=...`):
+  - con frente a sin: velocidad de las peleas y las llamadas fuera por la
+    banda y por sus triángulos;
+  - verif: 0 distintos;
+  - censo: los ms del repaso y el reparto de las llamadas que no dibujan
+    nada. Si el repaso cuesta más de lo que salta, se apaga (su
+    interruptor) o se deja solo para las que no se ven por su primer
+    vértice.
+  Después, el punto 3 (0.5.23.3, rachas de huesos) y el 4 (0.5.23.4,
+  `ge_charolas` y el diseño del IR). Lo que sigue es de antes de la 0.5.23:
   Si la prueba de cada llamada cuesta más de lo que salta, se apaga
   `ge_bbox_llamada` (su interruptor) o se limita a las cajas dudosas
   grandes. Después, 1.4 `ge_charolas` (juntar llamadas: lo que queda

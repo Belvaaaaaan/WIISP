@@ -40,7 +40,9 @@ se arregló o cambió y una descripción breve. El detalle está en
   Un triángulo se descarta con seguridad si:
   - los tres tienen w < 0, o están fuera del mismo plano;
   - con recorte, los tres están detrás del plano cercano, o uno delante
-    está fuera de la banda, o los tres delante y más allá del mismo borde;
+    está fuera de la banda, o los tres (con w > 0) más allá del mismo
+    borde: el polígono recortado también lo está, porque los puntos del
+    corte son combinaciones de los vértices;
   - sin recorte, uno tiene w < 0 o está fuera de la banda o de z, o los
     tres están más allá del mismo borde.
   Si todos se descartan, la llamada se salta como en `ge_bbox`. Al primer
@@ -62,6 +64,11 @@ se arregló o cambió y una descripción breve. El detalle está en
   vértice junto al límite de la banda, del rango z, del plano cercano o de
   w = 0; y una escala z que deja fuera lo más cercano del frustum,
   cambiada entre la caja y las llamadas.
+- `tools/banco/ab_versiones.py`: qemu con `MALLOC_PERTURB_=165`. El stub de
+  GX no escribe en los destinos de `GX_CopyTex`/`GX_CopyDisp`, y lo que el
+  emulador lee de ahí es lo que hubiera en la memoria: cambiaba con cada
+  binario (`gpu/exact/pixel` salía distinto entre versiones sin que
+  cambiara nada; ya estaba anotado en `tools/banco/LEEME.md`).
 - `hle/hle.h`, `dist/apps/wiisp/meta.xml`: versión 0.5.23.2.
 
 ## 0.5.23.1

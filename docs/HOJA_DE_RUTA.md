@@ -64,8 +64,9 @@ volver a medir tras cada paso.
     0.5.22, 1.3 a (`ge_bbox_rapido`), 1.3 b (`ge_bbox`) y
     `ge_cmd_matrices`; en la 0.5.23, 1.3 c (`ge_bbox_pantalla`), 1.3 d
     (`ge_bbox_llamada`) y el censo `prof_huesos`; en la 0.5.23.1, la
-    prueba de cada llamada más barata (`ge_bbox_orden`, `ge_bbox_aabb`).
-    Falta 1.4.
+    prueba de cada llamada más barata (`ge_bbox_orden`, `ge_bbox_aabb`);
+    en la 0.5.23.2, la banda de guarda (`ge_bbox_guarda`) y el repaso por
+    triángulos (`ge_bbox_triangulos`). Falta 1.4.
 11. Decidir el diseño del IR y hacer 2.2 y 2.3 como IR, junto con 2.5
     (BAT). Las fases 3, 4 y 5 vienen después.
 
@@ -302,6 +303,21 @@ A/B; la 0.5.23 contra la 0.5.23.1). Siguen, por este orden: 0.5.23.2
 (llamadas que cruzan el plano de la cámara), 0.5.23.3 (rachas de huesos)
 y 0.5.23.4 (1.4 y el diseño del IR).
 
+Hecha (v0.5.23.2): rescatar las llamadas que cruzan el plano de la
+cámara. `ge_bbox_guarda`: la prueba de pantalla de la caja con las
+restricciones que cumple todo vértice que el GE dibuja (la banda de guarda
+y, sin recorte, el rango z), con un certificado (multiplicadores del dual
+del programa lineal) comprobado con margen. Solo cambia algo cuando lo
+visible de la caja se sale muy lejos y da la vuelta, o con una escala z
+que no cubre el frustum. `ge_bbox_triangulos`: si la caja de una llamada
+no la salta, se repasan sus posiciones triángulo a triángulo con las
+reglas de descarte del GE (un vértice detrás de la cámara o fuera de la
+banda descarta el triángulo entero, y eso la caja no lo ve). Idéntico:
+pruebas con un vértice en cada límite, 36 mutaciones (25 detectadas, el
+resto de margen, equivalentes o solo de poder), A/B, 0.5.23.1 contra
+0.5.23.2. Censo nuevo de por qué no se saltan las llamadas que no dibujan
+nada. Siguen 0.5.23.3 (rachas de huesos) y 0.5.23.4 (1.4 y el IR).
+
 Primera tanda acordada (todas "más barato", verificables en el PC):
 0.1 `prof_espera`, **skinning rápido** (`ge_skin_rapido`), **matrices al
 cambiar** (`ge_mtx_cache`), **color constante** (`ge_color_const`), 2.1
@@ -322,7 +338,8 @@ cambiar** (`ge_mtx_cache`), **color constante** (`ge_color_const`), 2.1
   (`ge_vdec_psq`); 1.3 caja envolvente, primero con los BBOX del juego
   (`ge_bbox_rapido`, la prueba de siempre más barata; `ge_bbox`, saltarse
   las llamadas de cajas enteras fuera; `ge_bbox_pantalla`, también fuera
-  de la pantalla; `ge_bbox_llamada`, la caja de cada llamada; ojo: con
+  de la pantalla; `ge_bbox_llamada`, la caja de cada llamada; `ge_bbox_guarda`, la banda de
+  guarda; `ge_bbox_triangulos`, el repaso por triángulos; ojo: con
   huesos los vértices salen de la caja; censos `prof_bbox` y
   `prof_huesos`); 1.4 agrupar llamadas con dirty flags
   (`ge_charolas`); comandos de la lista con un puntero (`ge_cmd_puntero`)

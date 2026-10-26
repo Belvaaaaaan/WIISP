@@ -54,6 +54,10 @@ al repositorio), `gcc-powerpc-linux-gnu` y `qemu-user`. Las salidas van a
   0.5.23.1, total menos `on_sigill`, `__scalbn` y `ldexp`, sin / con
   `ge_bbox_orden` y `ge_bbox_aabb`: 4: 22313 / 22313; 7: 8130 / 8059; 8:
   10925 / 10159; 9: 23215 / 23047; 10: 10371 / 8388.
+  0.5.23.2, igual, sin / con `ge_bbox_guarda` y `ge_bbox_triangulos`: 4:
+  22341 / 23161; 7: 8111 / 8130; 8: 10432 / 10659; 9: 23134 / 24331; 10:
+  8485 / 8515 (ninguna escena tiene llamadas que crucen la cámara: solo el
+  coste).
 - `qprof.py`: instrucciones PowerPC por función (y por unidad) a partir de
   `qemu-ppc -d in_asm,exec,nochain -D grande.log` menos una corrida corta:
   `qprof.py grande.log corta.log UNIDADES [FUNCIONES]` (lista las 25 que
@@ -82,8 +86,9 @@ al repositorio), `gcc-powerpc-linux-gnu` y `qemu-user`. Las salidas van a
   diff entre dos versiones se ve en qué dibujo y qué función cambia.
 - `ab_versiones.py`: dos `wiisp-cli-gx` (por ejemplo del commit anterior,
   con `git worktree`) en las pspautotests: misma salida y misma huella de
-  GX. Ojo: `gpu/exact/pixel` lee memoria que la GPU de mentira no escribe;
-  con `GLIBC_TUNABLES=glibc.malloc.perturb=85` en las dos sale igual.
+  GX. `gpu/exact/pixel` lee memoria que la GPU de mentira no escribe (los
+  destinos de `GX_CopyTex`/`GX_CopyDisp`): desde la 0.5.23.2 el script
+  corre qemu con `MALLOC_PERTURB_=165` y sale igual en las dos.
 - `gevert.sh DIR_BANCO [opcion=valor...]`: instrucciones por vértice
   (total y `batch_range`) en el banco del GE para los formatos de DBZ.
 - `ventanas.py sin=a.log con=b.log ...`: compara los registros del
