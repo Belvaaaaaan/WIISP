@@ -377,6 +377,9 @@ typedef struct {
 } GeHwRenderer;
 
 extern int ge_charola_tris;   //Arreglo
+#define GE_CH_TRIS 128
+extern GeTriCharola ge_ch_tris[GE_CH_TRIS];   //Arreglo
+extern int ge_ch_n;   //Arreglo
 void ge_raster_charola_vaciar(void);   //Arreglo
 void ge_raster_triangle_c(const GeVertex *v0, const GeVertex *v1, const GeVertex *v2, const GeVertex *col);   //Arreglo
 int ge_raster_triangle_ccw_c(const GeVertex *v0, const GeVertex *v1, const GeVertex *v2, const GeVertex *col);   //Arreglo

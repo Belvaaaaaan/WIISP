@@ -2107,6 +2107,8 @@ static void tira_charola(const VSource *vr, const GeClipVertex **w, int start, i
 	const u32 fuera_todos = cull_xy ? GE_CF_XP | GE_CF_XN | GE_CF_YP | GE_CF_YN | GE_CF_ZP | GE_CF_ZN : GE_CF_ZP | GE_CF_ZN;
 	const u32 m = GE_CF_OUTSIDE | GE_CF_NEAR;
 	const int verif = opt_on[OPT_GE_VERIF];
+	const GeRasterState *r = ge_raster_state();
+	const int sx1 = r->sc_x1, sy1 = r->sc_y1, sx2 = r->sc_x2, sy2 = r->sc_y2;
 	u32 tris = 0, dibujados = 0, fuera = 0, espaldas = 0;
 	int vtx, flags = ge_tri_flags;
 	for(vtx = start; vtx < vertex_count; vtx++){
@@ -2128,7 +2130,7 @@ static void tira_charola(const VSource *vr, const GeClipVertex **w, int start, i
 			if(depth_clip && (any & GE_CF_NEAR)){
 				if(verif) tira_verif(v0, v1, v2, 0, 1);
 				ge_stats.tris += tris; ge_stats.tris_cull_off += tris; ge_stats.tris_drawn += dibujados;
-				ge_stats.tris_outside += fuera; ge_stats.tris_back += espaldas;
+				ge_stats.tris_outside += fuera; ge_stats.tris_back += espaldas; ge_stats.primitives += dibujados;
 				tris = dibujados = fuera = espaldas = 0;
 				send_triangle(CULL_OFF, w, provoking, wind != 0);
 				flags = ge_tri_flags;
@@ -2141,11 +2143,29 @@ static void tira_charola(const VSource *vr, const GeClipVertex **w, int start, i
 		sign = triangle_area_sign(&v0->v, &v1->v, &v2->v);
 		if(!sign){ espaldas++; continue; }
 		if(sign < 0){ const GeClipVertex *t = v0; v0 = v2; v2 = t; }
-		if(ge_raster_triangle_ccw_c(&v0->v, &v1->v, &v2->v, plano ? &w[provoking]->v : &v2->v)) dibujados++;
-		else { fuera++; flags = GE_TRI_OUTSIDE; }
+		{
+			int x0 = v0->v.x, x1 = v1->v.x, x2 = v2->v.x, y0 = v0->v.y, y1 = v1->v.y, y2 = v2->v.y;
+			int mnx = x0 < x1 ? x0 : x1, mxx = x0 < x1 ? x1 : x0, mny = y0 < y1 ? y0 : y1, mxy = y0 < y1 ? y1 : y0;
+			GeTriCharola *t;
+			if(x2 < mnx) mnx = x2;
+			if(x2 > mxx) mxx = x2;
+			if(y2 < mny) mny = y2;
+			if(y2 > mxy) mxy = y2;
+			mnx &= ~15; mny &= ~15; mxx |= 15; mxy |= 15;
+			if((mxx < sx2 ? mxx : sx2) < (mnx > sx1 ? mnx : sx1) || (mxy < sy2 ? mxy : sy2) < (mny > sy1 ? mny : sy1)){
+				fuera++;
+				flags = GE_TRI_OUTSIDE;
+				continue;
+			}
+			t = &ge_ch_tris[ge_ch_n];
+			t->v[0] = &v0->v; t->v[1] = &v1->v; t->v[2] = &v2->v;
+			t->col = plano ? &w[provoking]->v : &v2->v;
+			dibujados++;
+			if(++ge_ch_n == GE_CH_TRIS) ge_raster_charola_vaciar();
+		}
 	}
 	ge_stats.tris += tris; ge_stats.tris_cull_off += tris; ge_stats.tris_drawn += dibujados;
-	ge_stats.tris_outside += fuera; ge_stats.tris_back += espaldas;
+	ge_stats.tris_outside += fuera; ge_stats.tris_back += espaldas; ge_stats.primitives += dibujados;
 	ge_tri_flags = flags;
 }
 

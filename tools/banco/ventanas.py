@@ -40,6 +40,10 @@ def parse(path):
         if m: w['mciclos'] = int(m.group(1))
         m = re.search(r'Rachas de huesos \(ge_cmd_huesos\): (\d+) rachas con (\d+) comandos', l)
         if m: w.update(hu_rachas=int(m.group(1)), hu_cmds=int(m.group(2)) / 1000.0)
+        m = re.search(r'Charolas \(ge_charolas\): (\d+) llamadas, (\d+)% ', l)
+        if m: w.update(ch_ll=int(m.group(1)), ch_pct=int(m.group(2)))
+        m = re.search(r'Envio por charolas \(ge_charolas_envio\): (\d+) tandas, (\d+) triangulos.*?y (\d+) por el camino', l)
+        if m: w.update(ce_tandas=int(m.group(1)), ce_juntos=int(m.group(2)) / 1000.0, ce_sueltos=int(m.group(3)) / 1000.0)
         m = re.search(r'probar la caja de cada llamada ([\d.]+) ms \(de ellos leer sus posiciones ([\d.]+) ms.*?repasar sus triangulos ([\d.]+) ms', l)
         if m: w.update(ms_ll=num(m.group(1)), ms_tri=num(m.group(3)))
     return wins
@@ -61,7 +65,10 @@ cols = [('real', 's reales', '{:7.1f}'), ('vel', '% velocidad', '{:7.1f}'), ('ti
         ('bx_gu_caj', 'cajas fuera por la banda', '{:7d}'), ('bx_gu_ll', 'llamadas fuera por la banda', '{:7d}'),
         ('bx_tri_prob', 'llamadas repasadas por triangulos', '{:7d}'), ('bx_tri', 'fuera por sus triangulos', '{:7d}'),
         ('ms_ll', 'ms probando la caja de cada llamada', '{:7.0f}'), ('ms_tri', 'ms repasando triangulos', '{:7.0f}'),
-        ('hu_rachas', 'rachas de huesos (ge_cmd_huesos)', '{:7d}'), ('hu_cmds', 'miles de comandos en rachas', '{:7.0f}')]
+        ('hu_rachas', 'rachas de huesos (ge_cmd_huesos)', '{:7d}'), ('hu_cmds', 'miles de comandos en rachas', '{:7.0f}'),
+        ('ch_ll', 'llamadas (ge_charolas)', '{:7d}'), ('ch_pct', '% que siguen la charola', '{:7d}'),
+        ('ce_tandas', 'tandas (ge_charolas_envio)', '{:7d}'), ('ce_juntos', 'miles de triangulos juntos', '{:7.0f}'),
+        ('ce_sueltos', 'miles de triangulos sueltos', '{:7.0f}')]
 print('ventana     ' + ''.join(f'{k[:7]:>7}' for k, _ in runs))
 for i in range(min(len(w) for _, w in runs)):
     w0 = runs[0][1][i]

@@ -3031,6 +3031,20 @@ Qué mirar:
 - verif: 0 distintas en "Verificacion de las rachas de huesos";
 - imagenes: las 12 capturas de siempre.
 
+### Resultado de la 0.5.23.3 en el Wii (DBZ: sin / con / verif / imagenes)
+
+- Las 12 capturas de `imagenes`, las de siempre (9E8BC705 ... E9392291);
+  las cuatro corridas ejecutan las mismas 1343,1 M instrucciones.
+- verif: "Verificacion de las rachas de huesos" 0 distintas (109.725
+  rachas con 4,18 M comandos en la 3600-4200, 117.450 con 4,45 M en la
+  4200-4800, 29.884 con 1,13 M al final); todo lo demás, 0.
+- con frente a sin (ciclos del PMC): 3600-4200 de 16.965 a 16.546 M
+  (−2,5 %), 4200-4800 de 16.321 a 15.846 M (−2,9 %), final de 7.313 a
+  7.145 M (−2,3 %). Comandos por llamada de 3.402 a 2.931 ciclos (−14 %),
+  134 ciclos por comando (antes 156). Escena de 92,6 a 91,2 s (−1,5 %).
+  Más de lo previsto (~1,5 %): las rachas (~38 comandos, como decía el
+  censo de la 0.5.23) se quedan enteras en el bucle propio.
+
 ### Para el siguiente chat (empezar aquí)
 
 Metodología acordada (detalle en `docs/HOJA_DE_RUTA.md`): primero medir

@@ -5,6 +5,75 @@ la 0.5.17.2; antes se marcaban con `//arreglo`). Aquí va, por versión, qué
 se arregló o cambió y una descripción breve. El detalle está en
 `docs/CONTINUAR.md`.
 
+## 0.5.23.4
+
+- `wii/gx_ge.c`: `ge_charolas` (encendido; 1.4). Los destinos (búferes en
+  el EFB), la textura y el estado de GX de una llamada de dibujo valen para
+  la siguiente mientras nada de lo que leen cambie: `gx_begin` ya no marca
+  `targets_dirty` en cada llamada. La charola se apunta tras un
+  `setup_targets` del camino de los triángulos cuando su resultado se puede
+  repetir sin efectos: dibuja, sin texturas sobre un framebuffer (ni copia
+  directa ni paleta desde la GPU, ni censo de esas texturas) y con la
+  textura y todos sus niveles en la RAM. Sigue si no subió
+  `ge_raster_gen`, ni `clut_gen`, ni hay marcas del grupo nuevo de destinos
+  (ver `ge.c`). La corta todo lo que ya quitaba `tri_listo` o marcaba los
+  destinos o el estado de GX (VRAM, presentar, `set_pf`, copias, sprites,
+  líneas, puntos, borrados, vuelta a la CPU de las paletas, reiniciar).
+  - La textura se vuelve a buscar en el primer triángulo de la llamada,
+    como en el camino de siempre: con `tc_again` (la misma comprobación que
+    `tc_lookup` sobre la entrada que ya era la buena) o, si desde la última
+    no hubo ningún aviso de escritura, la entrada se comprobó en este mismo
+    periodo y es contigua, solo con lo que `tc_lookup` apuntaría (`tc_hit`).
+    Si cambió, `setup_targets` entero.
+  - Con `ge_verificar` se hace todo como antes y, cuando la llamada habría
+    seguido la charola, se compara lo que deja `setup_targets` con lo
+    guardado, que la textura salga de una búsqueda rápida, que el estado de
+    GX no haga falta emitirlo y, si el estado estaba listo, que lo siga.
+- `gpu/ge_raster.c`, `gpu/ge_vertex.c`, `wii/gx_ge.c`:
+  `ge_charolas_envio` (encendido). Los triángulos aceptados de una llamada
+  (con los vértices en el caché de la llamada, para que los punteros sigan
+  valiendo) van a una lista (`ge_raster_triangle_ccw_c`: los tres vértices y
+  de cuál sale el color con sombreado plano, sin la copia `c2`) y se mandan
+  juntos al acabar el ensamblado, antes de cualquier otra primitiva, del
+  recorte o de `window_keep`. GX (`gx_triangles`) hace los primeros por
+  `gx_triangle` hasta que el estado está listo y el resto con un solo
+  `GX_Begin`, las mismas palabras y en el mismo orden.
+- `gpu/ge_vertex.c`: `ge_charolas_tiras` (encendido). Las tiras sin
+  descarte de caras se ensamblan en un bucle propio (`tira_charola`) con
+  las reglas de `send_triangle` + `triangle_rejected_flags` + el rango de
+  `range_of`, lo de la llamada en registros y los contadores sumados al
+  final; un triángulo que hay que recortar con el plano cercano va por
+  `send_triangle`. Con `ge_verificar`, cada decisión se compara con
+  `triangle_rejected`.
+- `gpu/ge_vertex.c`: `ge_charolas_ge` (encendido). Por llamada: el formato
+  de vértice por puntero al guardado (sin copiar sus 76 bytes) y
+  `vsource_init` sin `memset`.
+- `gpu/ge.c`, `gpu/ge_internal.h`: grupo nuevo de `ge_sucio`, D (destinos):
+  FRAMEBUFPTR, FRAMEBUFWIDTH, ZBUFPTR, ZBUFWIDTH, FRAMEBUFPIXFORMAT,
+  MASKRGB, MASKALPHA y LIGHTMODE (lo que `setup_targets` y `apply_gx` leen
+  sin pasar por el rasterizador). `GE_SUCIO_TODO` = 63.
+- `gpu/texcache.c`: `tc_again` y `tc_hit`. `core/memory.c`:
+  `mem_write_notes` (cuenta los avisos de escritura).
+- `hle/hle.c`, `gpu/ge.h`: líneas `[TIEMPOS] Charolas`, `Envio por
+  charolas` y `Verificacion de las charolas`.
+- `core/opt.h`, `core/opt.c`: `ge_charolas` (estaba reservado),
+  `ge_charolas_envio`, `ge_charolas_tiras` y `ge_charolas_ge`.
+- `tests/test_vdec.c`: el renderizador que lo apunta todo recibe también
+  las tandas; vueltas nuevas sin el envío por charolas y sin las tiras,
+  iguales a la referencia y entre sí (contadores incluidos).
+- `tools/banco/bench_charolas.c` y `banco_charolas.sh`: listas al azar con
+  cambios entre llamadas y entre tramos (lo que haría la CPU), corridas con
+  y sin los interruptores sobre la libogc que guarda el estado.
+  `stub_estado.c`: huella del FIFO (cada triángulo con el estado de su
+  `GX_Begin`; igual con uno por triángulo o uno para muchos), con
+  `gx_ge.c` compilado con `-DWIISP_FIFO_TRAZA`. `ab_versiones.py`: `--a`,
+  `--b` y `--fifo`. `bench_lista.c`: escena 11, como una pelea de DBZ.
+  `mutar_gx.py`: mutaciones de GX contra el banco de las charolas.
+  `build_tests_dkp.sh`: también `ge_raster.c`.
+- `tests/test_bbox.c`, `test_censo.c`, `test_listas.c` y `frontend/app.c`: el miembro nuevo
+  `triangles` de `GeHwRenderer`.
+- `hle/hle.h`, `dist/apps/wiisp/meta.xml`: versión 0.5.23.4.
+
 ## 0.5.23.3
 
 - `gpu/ge.c`: `ge_cmd_huesos` (encendido). En el bucle de comandos con

@@ -1,0 +1,218 @@
+=== clave sin los comandos de destino
+@ src/wii/gx_ge.c
+<<<
+	return !(ge_sucio & GE_SUCIO_D) && ch.rgen == ge_raster_gen && ch.clut_gen == ge.clut_gen;
+>>>
+	return ch.rgen == ge_raster_gen && ch.clut_gen == ge.clut_gen;
+===
+=== clave sin el estado del rasterizador
+@ src/wii/gx_ge.c
+<<<
+	return !(ge_sucio & GE_SUCIO_D) && ch.rgen == ge_raster_gen && ch.clut_gen == ge.clut_gen;
+>>>
+	return !(ge_sucio & GE_SUCIO_D) && ch.clut_gen == ge.clut_gen;
+===
+=== clave sin la paleta
+@ src/wii/gx_ge.c
+<<<
+	return !(ge_sucio & GE_SUCIO_D) && ch.rgen == ge_raster_gen && ch.clut_gen == ge.clut_gen;
+>>>
+	return !(ge_sucio & GE_SUCIO_D) && ch.rgen == ge_raster_gen;
+===
+=== charola tambien sin dibujar
+@ src/wii/gx_ge.c
+<<<
+	if(skip_draws || use_rtt || use_clut_gpu || rtt_cur) return;
+>>>
+	if(use_rtt || use_clut_gpu || rtt_cur) return;
+===
+=== charola tambien con texturas en la VRAM
+@ src/wii/gx_ge.c
+<<<
+		for(i = 0; i < e->key.levels; i++) if((e->lv_addr[i] & PSP_ADDR_MASK) < PSP_RAM_BASE) return;
+>>>
+		(void)i; (void)e;
+===
+=== charola sin borrar las marcas de destino
+@ src/wii/gx_ge.c
+<<<
+	ge_sucio &= ~(core_u32)GE_SUCIO_D;
+	ch_salida(&ch_sal);
+>>>
+	ch_salida(&ch_sal);
+===
+=== charola sin volver a buscar la textura
+@ src/wii/gx_ge.c
+<<<
+			ch_pend = ch.tex >= 0;   //Arreglo
+>>>
+			ch_pend = 0;   //Arreglo
+===
+=== textura: atajo sin mirar el periodo de su comprobacion
+@ src/wii/gx_ge.c
+<<<
+	if(ch.notas == mem_write_notes && ch.avisos == mem_write_all_hints && tcache.e[ch.tex].domain == ge_sync_domain &&
+>>>
+	if(ch.notas == mem_write_notes && ch.avisos == mem_write_all_hints &&
+===
+=== textura: atajo sin mirar los avisos de escritura
+@ src/wii/gx_ge.c
+<<<
+	if(ch.notas == mem_write_notes && ch.avisos == mem_write_all_hints && tcache.e[ch.tex].domain == ge_sync_domain &&
+>>>
+	if(ch.avisos == mem_write_all_hints && tcache.e[ch.tex].domain == ge_sync_domain &&
+===
+=== textura: sin rehacer los destinos si cambio
+@ src/wii/gx_ge.c
+<<<
+	if(tc_again(&tcache, ch.tex, 0)){ ch_textura_vista(); return; }
+	targets_dirty = 1;
+>>>
+	if(tc_again(&tcache, ch.tex, 0)){ ch_textura_vista(); return; }
+===
+=== textura: tc_again siempre bien
+@ src/wii/gx_ge.c
+<<<
+	if(tc_again(&tcache, ch.tex, 0)){ ch_textura_vista(); return; }
+>>>
+	if(1){ tc_again(&tcache, ch.tex, 0); ch_textura_vista(); return; }
+===
+=== gx_begin: sigue aunque haya que rehacer los destinos
+@ src/wii/gx_ge.c
+<<<
+		if(!charola || targets_dirty) ge_stats.ch_sin++;   //Arreglo
+>>>
+		if(!charola) ge_stats.ch_sin++;   //Arreglo
+===
+=== set_pf no corta la charola
+@ src/wii/gx_ge.c
+<<<
+	efb_fmt = pf;
+	gx_tocado = 1;
+	tri_listo = 0;
+	charola = 0;   //Arreglo
+>>>
+	efb_fmt = pf;
+	gx_tocado = 1;
+	tri_listo = 0;
+===
+=== blit no corta la charola
+@ src/wii/gx_ge.c
+<<<
+	gx_dirty = 1;
+	gx_tocado = 1;
+	charola = 0;   //Arreglo
+}
+>>>
+	gx_dirty = 1;
+	gx_tocado = 1;
+}
+===
+=== sprites no cortan la charola
+@ src/wii/gx_ge.c
+<<<
+static void gx_rect(const GeVertex *v0, const GeVertex *v1){
+	int ok;
+	tri_listo = 0;
+	charola = 0;   //Arreglo
+>>>
+static void gx_rect(const GeVertex *v0, const GeVertex *v1){
+	int ok;
+	tri_listo = 0;
+===
+=== sprites sin la comprobacion pendiente de la textura
+@ src/wii/gx_ge.c
+<<<
+static void gx_rect(const GeVertex *v0, const GeVertex *v1){
+	int ok;
+	tri_listo = 0;
+	charola = 0;   //Arreglo
+	if(ch_pend){ ch_pend = 0; targets_dirty = 1; }   //Arreglo
+>>>
+static void gx_rect(const GeVertex *v0, const GeVertex *v1){
+	int ok;
+	tri_listo = 0;
+	charola = 0;   //Arreglo
+===
+=== charola apuntada tambien desde los sprites
+@ src/wii/gx_ge.c
+<<<
+	if(!ch_tri || !opt_on[OPT_GE_CHAROLAS] || !opt_on[OPT_GE_ESTADO_SUCIO] || opt_on[OPT_PROF_ESTADO]) return;
+>>>
+	if(!opt_on[OPT_GE_CHAROLAS] || !opt_on[OPT_GE_ESTADO_SUCIO] || opt_on[OPT_PROF_ESTADO]) return;
+===
+=== envio: sin esperar a que el estado este listo
+@ src/wii/gx_ge.c
+<<<
+		if(!ch_pend && tri_listo && opt_on[OPT_GE_ESTADO_SUCIO] && opt_on[OPT_GX_ENVIO] && !opt_on[OPT_PROF_ESTADO] &&
+>>>
+		if(!ch_pend && opt_on[OPT_GE_ESTADO_SUCIO] && opt_on[OPT_GX_ENVIO] && !opt_on[OPT_PROF_ESTADO] &&
+===
+=== envio: sin comprobar la textura al empezar
+@ src/wii/gx_ge.c
+<<<
+	ge_stats.ce_tandas++;
+	if(ch_pend) ch_textura();
+>>>
+	ge_stats.ce_tandas++;
+	ch_pend = 0;
+===
+=== envio: sombreado plano con los colores de cada vertice
+@ src/wii/gx_ge.c
+<<<
+			w = gx_vertex_fast(a, fl ? col : a, &l); put_words(&w);
+>>>
+			w = gx_vertex_fast(a, a, &l); put_words(&w);
+===
+=== envio: el tercero con sus colores
+@ src/wii/gx_ge.c
+<<<
+			w = gx_vertex_fast(c, col, &l); put_words(&w);
+>>>
+			w = gx_vertex_fast(c, c, &l); put_words(&w);
+===
+=== envio: sin normalizar por la w mas cercana
+@ src/wii/gx_ge.c
+<<<
+			l.k = norm ? gx_tex_scale3(a, b, c) : 1.0f;
+>>>
+			l.k = 1.0f;
+===
+=== envio: GX_Begin con un vertice por triangulo
+@ src/wii/gx_ge.c
+<<<
+	GX_Begin(GX_TRIANGLES, GX_VTXFMT0, (u16)(3 * m));
+>>>
+	GX_Begin(GX_TRIANGLES, GX_VTXFMT0, (u16)m);
+===
+=== envio: los primeros sin rehacer el color del tercero
+@ src/wii/gx_ge.c
+<<<
+		if(x->col == x->v[2]) gx_triangle(x->v[0], x->v[1], x->v[2]);
+>>>
+		if(1) gx_triangle(x->v[0], x->v[1], x->v[2]);
+===
+=== texcache: tc_hit sin contar
+@ src/gpu/texcache.c
+<<<
+	tc->stats.lookups++;
+	tc->stats.quick++;
+	tc->e[idx].used_frame = tc->frame;
+>>>
+	tc->e[idx].used_frame = tc->frame;
+===
+=== texcache: tc_again sin need_check
+@ src/gpu/texcache.c
+<<<
+	if(!e->used || !e->current || need_check(tc, e) != TC_OK) return 0;
+>>>
+	if(!e->used || !e->current) return 0;
+===
+=== memory: los avisos sin contar
+@ src/core/memory.c
+<<<
+	mem_write_notes++;   //Arreglo
+	if(!page_span(addr, len, &first, &last)) return;
+>>>
+	if(!page_span(addr, len, &first, &last)) return;
+===

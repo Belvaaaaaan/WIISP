@@ -2982,6 +2982,7 @@ static void gx_triangles(const GeTriCharola *t, int n){   //Arreglo
 	GxEmitLocal l;
 	int i = 0, m;
 	ge_stats.ce_tandas++;
+	if(ch_pend) ch_textura();
 	while(i < n){
 		const GeTriCharola *x = &t[i];
 		if(!ch_pend && tri_listo && opt_on[OPT_GE_ESTADO_SUCIO] && opt_on[OPT_GX_ENVIO] && !opt_on[OPT_PROF_ESTADO] &&

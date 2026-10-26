@@ -1,0 +1,213 @@
+=== tira: sin recortar con el plano cercano
+@ src/gpu/ge_vertex.c
+<<<
+			if(depth_clip && (any & GE_CF_NEAR)){
+				if(verif) tira_verif(v0, v1, v2, 0, 1);
+>>>
+			if(0 && depth_clip && (any & GE_CF_NEAR)){
+				if(verif) tira_verif(v0, v1, v2, 0, 1);
+===
+=== tira: fuera sin mirar el tercer vertice
+@ src/gpu/ge_vertex.c
+<<<
+			                               (f2 & m) == GE_CF_OUTSIDE)) || (all & GE_CF_WNEG) || (all & fuera_todos) ||
+>>>
+			                               0)) || (all & GE_CF_WNEG) || (all & fuera_todos) ||
+===
+=== tira: sin el descarte de w negativa
+@ src/gpu/ge_vertex.c
+<<<
+			                               (f2 & m) == GE_CF_OUTSIDE)) || (all & GE_CF_WNEG) || (all & fuera_todos) ||
+>>>
+			                               (f2 & m) == GE_CF_OUTSIDE)) || (all & fuera_todos) ||
+===
+=== tira: planos siempre con x e y
+@ src/gpu/ge_vertex.c
+<<<
+	const u32 fuera_todos = cull_xy ? GE_CF_XP | GE_CF_XN | GE_CF_YP | GE_CF_YN | GE_CF_ZP | GE_CF_ZN : GE_CF_ZP | GE_CF_ZN;
+>>>
+	const u32 fuera_todos = GE_CF_ZP | GE_CF_ZN;
+===
+=== tira: sin recorte de profundidad no exige w positiva
+@ src/gpu/ge_vertex.c
+<<<
+			   (!depth_clip && !(all & GE_CF_WPOS))){
+>>>
+			   0){
+===
+=== tira: sin dar la vuelta con area negativa
+@ src/gpu/ge_vertex.c
+<<<
+		if(sign < 0){ const GeClipVertex *t = v0; v0 = v2; v2 = t; }
+		{
+>>>
+		{
+===
+=== tira: sombreado plano con el color del tercero
+@ src/gpu/ge_vertex.c
+<<<
+			t->col = plano ? &w[provoking]->v : &v2->v;
+>>>
+			t->col = &v2->v;
+===
+=== tira: tijera sin redondear a pixeles
+@ src/gpu/ge_vertex.c
+<<<
+			mnx &= ~15; mny &= ~15; mxx |= 15; mxy |= 15;
+>>>
+			mny &= ~15; mxx |= 15; mxy |= 15;
+===
+=== tira: sin contar las primitivas
+@ src/gpu/ge_vertex.c
+<<<
+	ge_stats.tris_outside += fuera; ge_stats.tris_back += espaldas; ge_stats.primitives += dibujados;
+	ge_tri_flags = flags;
+>>>
+	ge_stats.tris_outside += fuera; ge_stats.tris_back += espaldas;
+	ge_tri_flags = flags;
+===
+=== tira: area cero como dibujado
+@ src/gpu/ge_vertex.c
+<<<
+		if(!sign){ espaldas++; continue; }
+>>>
+		if(!sign){ fuera++; continue; }
+===
+=== tira: contadores sin escribir antes del recorte
+@ src/gpu/ge_vertex.c
+<<<
+				ge_stats.tris_outside += fuera; ge_stats.tris_back += espaldas; ge_stats.primitives += dibujados;
+				tris = dibujados = fuera = espaldas = 0;
+>>>
+				tris = dibujados = fuera = espaldas = 0;
+===
+=== tira: tambien con descarte de caras
+@ src/gpu/ge_vertex.c
+<<<
+		if(ge_charola_tris && cull == CULL_OFF && opt_on[OPT_GE_CHAROLAS_TIRAS] && opt_on[OPT_GE_TRI_RAPIDO])   //Arreglo
+>>>
+		if(ge_charola_tris && opt_on[OPT_GE_CHAROLAS_TIRAS] && opt_on[OPT_GE_TRI_RAPIDO])   //Arreglo
+===
+=== charola sin vertices en el cache
+@ src/gpu/ge_vertex.c
+<<<
+	ge_charola_tris = refs && (vr->batch || vr->use_cache) && ge_hw && ge_hw->triangles && opt_on[OPT_GE_CHAROLAS_ENVIO];   //Arreglo
+>>>
+	ge_charola_tris = refs && ge_hw && ge_hw->triangles && opt_on[OPT_GE_CHAROLAS_ENVIO];   //Arreglo
+===
+=== charola sin vaciar antes de window_keep
+@ src/gpu/ge_vertex.c
+<<<
+	int i;
+	if(ge_charola_tris) ge_raster_charola_vaciar();   //Arreglo
+>>>
+	int i;
+===
+=== charola sin vaciar al recortar
+@ src/gpu/ge_vertex.c
+<<<
+	ge_tri_flags |= GE_TRI_CLIPPED;
+	if(ge_charola_tris) ge_raster_charola_vaciar();   //Arreglo
+>>>
+	ge_tri_flags |= GE_TRI_CLIPPED;
+===
+=== charola tambien con los recortados
+@ src/gpu/ge_vertex.c
+<<<
+		int charola = ge_charola_tris;   //Arreglo
+		ge_charola_tris = 0;   //Arreglo
+>>>
+		int charola = ge_charola_tris;   //Arreglo
+===
+=== add_tri_ccw en charola con el color del provocador siempre
+@ src/gpu/ge_vertex.c
+<<<
+		ge_raster_triangle_ccw_c(&a->v, &b->v, &c->v, (ge.cmd[GE_SHADEMODE] & 1) ? &c->v : &provoking->v);   //Arreglo
+>>>
+		ge_raster_triangle_ccw_c(&a->v, &b->v, &c->v, &provoking->v);   //Arreglo
+===
+=== add_tri_flat en charola sin mirar el area
+@ src/gpu/ge_vertex.c
+<<<
+		ge_raster_triangle_c(&a->v, &b->v, &c->v, (ge.cmd[GE_SHADEMODE] & 1) ? &c->v : &provoking->v);   //Arreglo
+>>>
+		ge_raster_triangle_ccw_c(&a->v, &b->v, &c->v, (ge.cmd[GE_SHADEMODE] & 1) ? &c->v : &provoking->v);   //Arreglo
+===
+=== charola sin vaciar al final del ensamblado
+@ src/gpu/ge_vertex.c
+<<<
+	if(ge_charola_tris){ ge_raster_charola_vaciar(); ge_charola_tris = 0; }   //Arreglo
+>>>
+	ge_charola_tris = 0;   //Arreglo
+===
+=== raster: lineas sin vaciar la charola
+@ src/gpu/ge_raster.c
+<<<
+void ge_raster_line(const GeVertex *v0, const GeVertex *v1){
+	const GeVertex *v[2] = { v0, v1 };
+	int x1, y1, x2, y2;
+	if(ge_ch_n) ge_raster_charola_vaciar();   //Arreglo
+>>>
+void ge_raster_line(const GeVertex *v0, const GeVertex *v1){
+	const GeVertex *v[2] = { v0, v1 };
+	int x1, y1, x2, y2;
+===
+=== raster: triangulo suelto sin vaciar la charola
+@ src/gpu/ge_raster.c
+<<<
+	const GeVertex *v[3] = { v0, v1, v2 };
+	int x1, y1, x2, y2;
+	if(ge_ch_n) ge_raster_charola_vaciar();   //Arreglo
+>>>
+	const GeVertex *v[3] = { v0, v1, v2 };
+	int x1, y1, x2, y2;
+===
+=== raster: charola sin la tijera en y
+@ src/gpu/ge_raster.c
+<<<
+	if(imin(mxx | (SSF - 1), rs.sc_x2) < imax(mnx & ~(SSF - 1), rs.sc_x1) ||
+	   imin(mxy | (SSF - 1), rs.sc_y2) < imax(mny & ~(SSF - 1), rs.sc_y1)){ ge_tri_flags |= GE_TRI_OUTSIDE; return 0; }
+>>>
+	if(imin(mxx | (SSF - 1), rs.sc_x2) < imax(mnx & ~(SSF - 1), rs.sc_x1)){ ge_tri_flags |= GE_TRI_OUTSIDE; return 0; }
+===
+=== raster: area cero en la charola
+@ src/gpu/ge_raster.c
+<<<
+	if(d01x * d02y - d01y * d02x <= 0) return;
+	ge_raster_triangle_ccw_c(v0, v1, v2, col);
+>>>
+	if(d01x * d02y - d01y * d02x < 0) return;
+	ge_raster_triangle_ccw_c(v0, v1, v2, col);
+===
+=== raster: vaciar sin poner a cero
+@ src/gpu/ge_raster.c
+<<<
+	ge_hw->triangles(ge_ch_tris, ge_ch_n);
+	prof_ge_leave(phase);
+	ge_ch_n = 0;
+>>>
+	ge_hw->triangles(ge_ch_tris, ge_ch_n);
+	prof_ge_leave(phase);
+===
+=== formato: sin rehacer al cambiar el tipo de vertice
+@ src/gpu/ge_vertex.c
+<<<
+		if(!(sucio && es.f_ok && es.f_vt == vt)){   //Arreglo
+>>>
+		if(!(sucio && es.f_ok)){   //Arreglo
+===
+=== vsource_init sin poner batch a cero
+@ src/gpu/ge_vertex.c
+<<<
+		s->use_cache = s->zero = s->batch = 0;   //Arreglo
+>>>
+		s->use_cache = s->zero = 0;   //Arreglo
+===
+=== vsource_init sin poner list a cero
+@ src/gpu/ge_vertex.c
+<<<
+		s->list = NULL;   //Arreglo
+		s->idx_list = NULL;   //Arreglo
+>>>
+		s->idx_list = NULL;   //Arreglo
+===

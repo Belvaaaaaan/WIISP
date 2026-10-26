@@ -34,9 +34,8 @@
 #include "core/opt.h"
 
 int ge_charola_tris;   //Arreglo
-#define CH_TRIS 128
-static GeTriCharola ch_tris[CH_TRIS];
-static int ch_n;
+GeTriCharola ge_ch_tris[GE_CH_TRIS];   //Arreglo
+int ge_ch_n;   //Arreglo
 
 #define SSF 16  /* SCREEN_SCALE_FACTOR */
 
@@ -413,7 +412,7 @@ static void __attribute__((noinline)) raster_verif(void){
 
 void ge_raster_begin(void){
 	u32 through = ge.cmd[GE_VERTEXTYPE] & 0x800000u;
-	if(ch_n) ge_raster_charola_vaciar();   //Arreglo
+	if(ge_ch_n) ge_raster_charola_vaciar();   //Arreglo
 	int clean = rs_ok && rs_through == through && !(ge_sucio & GE_SUCIO_R);
 	memset(rs.snap, 0, sizeof(rs.snap));
 	if(opt_on[OPT_GE_ESTADO_SUCIO] && clean){
@@ -448,7 +447,7 @@ static struct {
 } st;
 
 void ge_raster_tex_flush(void){
-	if(ch_n) ge_raster_charola_vaciar();   //Arreglo
+	if(ge_ch_n) ge_raster_charola_vaciar();   //Arreglo
 	tex_flush_gen++;
 	if(ge_hw) ge_hw->tex_flush();
 }
@@ -2168,11 +2167,11 @@ static int range_of(const GeVertex *const *v, int n, int *x1, int *y1, int *x2, 
 
 void ge_raster_charola_vaciar(void){   //Arreglo
 	int phase;
-	if(!ch_n) return;
+	if(!ge_ch_n) return;
 	phase = prof_ge_enter(GEF_ENVIAR);
-	ge_hw->triangles(ch_tris, ch_n);
+	ge_hw->triangles(ge_ch_tris, ge_ch_n);
 	prof_ge_leave(phase);
-	ch_n = 0;
+	ge_ch_n = 0;
 }
 
 int ge_raster_triangle_ccw_c(const GeVertex *v0, const GeVertex *v1, const GeVertex *v2, const GeVertex *col){   //Arreglo
@@ -2182,10 +2181,10 @@ int ge_raster_triangle_ccw_c(const GeVertex *v0, const GeVertex *v1, const GeVer
 	if(imin(mxx | (SSF - 1), rs.sc_x2) < imax(mnx & ~(SSF - 1), rs.sc_x1) ||
 	   imin(mxy | (SSF - 1), rs.sc_y2) < imax(mny & ~(SSF - 1), rs.sc_y1)){ ge_tri_flags |= GE_TRI_OUTSIDE; return 0; }
 	ge_stats.primitives++;
-	t = &ch_tris[ch_n];
+	t = &ge_ch_tris[ge_ch_n];
 	t->v[0] = v0; t->v[1] = v1; t->v[2] = v2;
 	t->col = col;
-	if(++ch_n == CH_TRIS) ge_raster_charola_vaciar();
+	if(++ge_ch_n == GE_CH_TRIS) ge_raster_charola_vaciar();
 	return 1;
 }
 
@@ -2208,7 +2207,7 @@ void ge_raster_triangle(const GeVertex *v0, const GeVertex *v1, const GeVertex *
 void ge_raster_triangle_ccw(const GeVertex *v0, const GeVertex *v1, const GeVertex *v2){
 	const GeVertex *v[3] = { v0, v1, v2 };
 	int x1, y1, x2, y2;
-	if(ch_n) ge_raster_charola_vaciar();   //Arreglo
+	if(ge_ch_n) ge_raster_charola_vaciar();   //Arreglo
 	if(!range_of(v, 3, &x1, &y1, &x2, &y2)){ ge_tri_flags |= GE_TRI_OUTSIDE; return; }
 	ge_stats.primitives++;
 	if(ge_hw){
@@ -2229,7 +2228,7 @@ void ge_raster_triangle_ccw(const GeVertex *v0, const GeVertex *v1, const GeVert
 void ge_raster_rect(const GeVertex *v0, const GeVertex *v1){
 	const GeVertex *v[2] = { v0, v1 };
 	int x1, y1, x2, y2;
-	if(ch_n) ge_raster_charola_vaciar();   //Arreglo
+	if(ge_ch_n) ge_raster_charola_vaciar();   //Arreglo
 	if(!range_of(v, 2, &x1, &y1, &x2, &y2)) return;
 	ge_stats.primitives++;
 	if(ge_hw){
@@ -2249,7 +2248,7 @@ void ge_raster_rect(const GeVertex *v0, const GeVertex *v1){
 void ge_raster_clear_rect(const GeVertex *v0, const GeVertex *v1){
 	const GeVertex *v[2] = { v0, v1 };
 	int x1, y1, x2, y2;
-	if(ch_n) ge_raster_charola_vaciar();   //Arreglo
+	if(ge_ch_n) ge_raster_charola_vaciar();   //Arreglo
 	if(!range_of(v, 2, &x1, &y1, &x2, &y2)) return;
 	ge_stats.primitives++;
 	if(ge_hw){ int phase = prof_ge_enter(GEF_ENVIAR); ge_hw->clear_rect(v0, v1); prof_ge_leave(phase); return; }
@@ -2263,7 +2262,7 @@ void ge_raster_clear_rect(const GeVertex *v0, const GeVertex *v1){
 void ge_raster_line(const GeVertex *v0, const GeVertex *v1){
 	const GeVertex *v[2] = { v0, v1 };
 	int x1, y1, x2, y2;
-	if(ch_n) ge_raster_charola_vaciar();   //Arreglo
+	if(ge_ch_n) ge_raster_charola_vaciar();   //Arreglo
 	if(!range_of(v, 2, &x1, &y1, &x2, &y2)) return;
 	ge_stats.primitives++;
 	if(ge_hw){ int phase = prof_ge_enter(GEF_ENVIAR); ge_hw->line(v0, v1); prof_ge_leave(phase); return; }
@@ -2278,7 +2277,7 @@ void ge_raster_line(const GeVertex *v0, const GeVertex *v1){
 void ge_raster_point(const GeVertex *v0){
 	const GeVertex *v[1] = { v0 };
 	int x1, y1, x2, y2;
-	if(ch_n) ge_raster_charola_vaciar();   //Arreglo
+	if(ge_ch_n) ge_raster_charola_vaciar();   //Arreglo
 	if(!range_of(v, 1, &x1, &y1, &x2, &y2)) return;
 	ge_stats.primitives++;
 	if(ge_hw){ int phase = prof_ge_enter(GEF_ENVIAR); ge_hw->point(v0); prof_ge_leave(phase); return; }
