@@ -1388,12 +1388,12 @@ static void p_ojo_sx(float sx, float sy, float w, float *e){   //Arreglo
 
 static void bbox_triangulos_limites(void){   //Arreglo
 	static const float ds[12] = { -48.0f, -20.0f, -3.0f, -1.0f, -0.25f, 0.0f, 0.25f, 1.0f, 3.0f, 20.0f, 48.0f, 2560.0f };
-	u32 ronda, mal = 0, dibujados = 0, saltadas = 0, lejos = 0, lejos_salt = 0, probadas = 0;
+	u32 ronda, mal = 0, dibujados = 0, saltadas = 0, lejos = 0, lejos_salt = 0, probadas = 0, franja = 0, franja_dib = 0;
 	printf("Repaso por triangulos (ge_bbox_triangulos): un vertice junto al limite de la banda, del rango z, del plano cercano o de w = 0\n");
 	ge_hw = NULL;
-	for(ronda = 0; ronda < 1600; ronda++){
-		const int tipo = (int)(ronda % 8);
-		int prof = tipo == 6 ? 1 : tipo == 4 || tipo == 5 ? 0 : (int)((ronda >> 3) & 1), di, j, k, modo;
+	for(ronda = 0; ronda < 1800; ronda++){
+		const int tipo = (int)(ronda % 9);
+		int prof = tipo == 6 ? 1 : tipo == 4 || tipo == 5 || tipo == 8 ? 0 : (int)((ronda >> 3) & 1), di, j, k, modo;
 		float zs, zc, X0, Y0, sx1, sx2, sy1, sy2;
 		p_pantalla(prof);
 		p_perspectiva();
@@ -1408,7 +1408,16 @@ static void bbox_triangulos_limites(void){   //Arreglo
 			float v[3][3], mn[3], mx[3], d = ds[di], w0 = bfr(pp_n * 1.5f, pp_f * 0.5f);
 			u32 a, caja, salto, prims0 = 0;
 			for(j = 1; j < 3; j++) p_ojo_sx(bfr(sx1, sx2), bfr(sy1, sy2), bfr(pp_n * 1.5f, pp_f * 0.5f), v[j]);
-			if(tipo < 4){
+			if(tipo == 8){
+				const int lado = (int)((ronda / 9) & 3);
+				const float fuera = 40.0f + 8.0f * (float)di, sz = 64100.0f + 110.0f * (float)di, q = (sz - zc) / zs;
+				for(j = 1; j < 3; j++){
+					float x = bfr(sx1, sx2), y = bfr(sy1, sy2);
+					if(lado == 0) x = sx1 - fuera; else if(lado == 1) x = sx2 + fuera; else if(lado == 2) y = sy1 - fuera; else y = sy2 + fuera;
+					p_ojo_sx(x, y, bfr(pp_n * 1.5f, pp_f * 0.5f), v[j]);
+				}
+				p_ojo_sx(bfr(sx1, sx2), bfr(sy1, sy2), ge.proj[14] / (ge.proj[10] + q), v[0]);
+			} else if(tipo < 4){
 				const float lim = (tipo & 1) ? 4095.0f + 15.5f / 16.0f : 0.0f, sig = (tipo & 1) ? 1.0f : -1.0f;
 				if(tipo < 2) p_ojo_sx(lim + sig * d / 16.0f, bfr(sy1, sy2), w0, v[0]);
 				else p_ojo_sx(bfr(sx1, sx2), lim + sig * d / 16.0f, w0, v[0]);
@@ -1465,18 +1474,21 @@ static void bbox_triangulos_limites(void){   //Arreglo
 					saltadas += ge_stats.bx_ll_tri;
 					probadas += ge_stats.bx_t_probadas;
 					if(di == 11 && tipo < 6){ lejos++; lejos_salt += ge_stats.bx_saltadas; }
+					if(tipo == 8){ franja++; franja_dib += prims0 != 0; }
 				}
 			}
 			opt_on[OPT_GE_VERIF] = 0;
 		}
 	}
 	printf("  %u triangulos (%u dibujados): %u probados por sus triangulos, %u saltados; %u cuentas distintas; "
-	       "con el vertice a 2560 fuera, %u de %u saltados\n", (unsigned)(ronda * 12), (unsigned)dibujados, (unsigned)probadas,
-	       (unsigned)saltadas, (unsigned)mal, (unsigned)lejos_salt, (unsigned)lejos);
+	       "con el vertice a 2560 fuera, %u de %u saltados; sin recorte, con un vertice en pantalla justo detras del plano cercano "
+	       "(z de 64100 a 65310) y los otros fuera, %u de %u dibujan\n", (unsigned)(ronda * 12), (unsigned)dibujados, (unsigned)probadas,
+	       (unsigned)saltadas, (unsigned)mal, (unsigned)lejos_salt, (unsigned)lejos, (unsigned)franja_dib, (unsigned)franja);
 	CHECK_EQ(mal, 0u);
 	CHECK(dibujados > 4000);
 	CHECK(saltadas > 1000);
 	CHECK(lejos_salt * 10 > lejos * 9);
+	CHECK(franja_dib * 2 > franja);
 }
 
 static void bbox_guarda_z(void){   //Arreglo
