@@ -442,6 +442,46 @@ void test_listas(void){
 		opt_on[OPT_PROF_HUESOS] = 0;
 	}
 
+	{   //Arreglo
+		u8 *pal = mem_ptr(0x08D80000u, 1024);
+		u32 g, k, sube[2][6];
+		printf("Paletas iguales (ge_clut_igual)\n");
+		for(i = 0; i < 1024; i++) pal[i] = (u8)lrnd();
+		ge.cmd[GE_CLUTADDR] = 0xD80000u;
+		ge.cmd[GE_CLUTADDRUPPER] = 0x080000u;
+		for(k = 0; k < 2; k++){
+			opt_on[OPT_GE_CLUT_IGUAL] = (u8)(k == 0);
+			ge_load_clut(4);
+			g = ge.clut_gen;
+			ge_load_clut(4);                       /* la misma */
+			sube[k][0] = ge.clut_gen - g;
+			ge_load_clut(8);                       /* más grande */
+			sube[k][1] = ge.clut_gen - g;
+			ge_load_clut(8);                       /* la misma */
+			sube[k][2] = ge.clut_gen - g;
+			pal[200] ^= 1;                         /* dentro de lo que se carga */
+			ge_load_clut(8);
+			sube[k][3] = ge.clut_gen - g;
+			pal[300] ^= 1;                         /* fuera */
+			ge_load_clut(8);
+			sube[k][4] = ge.clut_gen - g;
+			ge_load_clut(4);                       /* más pequeña */
+			sube[k][5] = ge.clut_gen - g;
+			CHECK(memcmp(ge.clut, pal, 128) == 0);
+			CHECK_EQ(ge.clut_bytes, 128u);
+		}
+		printf("  clut_gen con / sin: %u %u %u %u %u %u / %u %u %u %u %u %u\n", (unsigned)sube[0][0], (unsigned)sube[0][1],
+		       (unsigned)sube[0][2], (unsigned)sube[0][3], (unsigned)sube[0][4], (unsigned)sube[0][5], (unsigned)sube[1][0],
+		       (unsigned)sube[1][1], (unsigned)sube[1][2], (unsigned)sube[1][3], (unsigned)sube[1][4], (unsigned)sube[1][5]);
+		CHECK_EQ(sube[0][0], 0u);
+		CHECK_EQ(sube[0][1], 1u);
+		CHECK_EQ(sube[0][2], 1u);
+		CHECK_EQ(sube[0][3], 2u);
+		CHECK_EQ(sube[0][4], 2u);
+		CHECK_EQ(sube[0][5], 3u);
+		for(k = 0; k < 6; k++) CHECK_EQ(sube[1][k], k + 1);
+	}
+
 	memcpy(opt_on, saved_opt, sizeof(saved_opt));
 	memset(&ge_stats, 0, sizeof(ge_stats));
 	ge_hw = saved_hw;

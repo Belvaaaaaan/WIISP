@@ -68,7 +68,8 @@ volver a medir tras cada paso.
     en la 0.5.23.2, la banda de guarda (`ge_bbox_guarda`) y el repaso por
     triángulos (`ge_bbox_triangulos`, apagado desde la 0.5.23.3: en DBZ
     cuesta más de lo que salta); en la 0.5.23.3, las rachas de huesos
-    (`ge_cmd_huesos`). Falta 1.4.
+    (`ge_cmd_huesos`); en la 0.5.23.4, 1.4 (`ge_charolas` y los suyos) y
+    `ge_clut_igual`.
 11. Decidir el diseño del IR y hacer 2.2 y 2.3 como IR, junto con 2.5
     (BAT). Las fases 3, 4 y 5 vienen después.
 
@@ -332,6 +333,24 @@ parada o el final de la RAM. De ~62 a ~15 instrucciones por comando de
 hueso; banco con 8 huesos, −7,2 % por llamada. Mutaciones con
 `tools/banco/mutar.py` (rápidas, mismo resultado). Sigue 0.5.23.4 (1.4
 `ge_charolas` y el diseño del IR).
+
+Hecha (v0.5.23.4): 1.4, juntar llamadas. `ge_charolas`: los destinos, la
+textura y el estado de GX de una llamada valen para la siguiente mientras
+no cambie nada de lo que leen (clave: el estado del rasterizador, la
+paleta y los búferes); la textura se vuelve a comprobar con lo mismo que
+`tc_lookup`. `ge_charolas_sprites`: también entre sprites.
+`ge_charolas_envio`: los triángulos de una llamada con un solo `GX_Begin`.
+`ge_charolas_tiras`: las tiras en un bucle propio. `ge_charolas_ge`: el
+formato de vértice por puntero. `ge_clut_igual`: un LOADCLUT con la misma
+paleta no la da por cambiada. `ge_estado_clave`: la clave del estado de GX,
+después de emitirlo. Banco de qemu: llamada como la pelea de DBZ
+−24 %, sprites de uno en uno −36 %, textura y paleta en cada llamada −31 %.
+Idéntico (banco al azar con la libogc que guarda el estado y la huella del
+FIFO, que encontró un fallo de verdad antes de entregar; mutaciones del GE
+y de GX; A/B; la 0.5.23.3 contra la 0.5.23.4). El diseño del IR pasa a la
+versión siguiente. Candidatos vistos: los vértices de los sprites por el
+decodificador por lotes (~370 instrucciones por vértice por el genérico) y
+una charola parcial (solo la textura) si en DBZ pesa "con otra clave".
 
 Primera tanda acordada (todas "más barato", verificables en el PC):
 0.1 `prof_espera`, **skinning rápido** (`ge_skin_rapido`), **matrices al

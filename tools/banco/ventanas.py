@@ -42,6 +42,10 @@ def parse(path):
         if m: w.update(hu_rachas=int(m.group(1)), hu_cmds=int(m.group(2)) / 1000.0)
         m = re.search(r'Charolas \(ge_charolas\): (\d+) llamadas, (\d+)% ', l)
         if m: w.update(ch_ll=int(m.group(1)), ch_pct=int(m.group(2)))
+        m = re.search(r'Charolas \(ge_charolas\):.*?sin charola abierta (\d+), con otra clave (\d+), textura que volver a buscar (\d+)', l)
+        if m: w.update(ch_sin=int(m.group(1)), ch_clave=int(m.group(2)), ch_tex=int(m.group(3)))
+        m = re.search(r'Verificacion de las charolas \(ge_verificar\): (\d+) llamadas.*?comparadas, (\d+) distintas', l)
+        if m: w.update(chv=int(m.group(1)), chv_mal=int(m.group(2)))
         m = re.search(r'Envio por charolas \(ge_charolas_envio\): (\d+) tandas, (\d+) triangulos.*?y (\d+) por el camino', l)
         if m: w.update(ce_tandas=int(m.group(1)), ce_juntos=int(m.group(2)) / 1000.0, ce_sueltos=int(m.group(3)) / 1000.0)
         m = re.search(r'probar la caja de cada llamada ([\d.]+) ms \(de ellos leer sus posiciones ([\d.]+) ms.*?repasar sus triangulos ([\d.]+) ms', l)
@@ -67,6 +71,9 @@ cols = [('real', 's reales', '{:7.1f}'), ('vel', '% velocidad', '{:7.1f}'), ('ti
         ('ms_ll', 'ms probando la caja de cada llamada', '{:7.0f}'), ('ms_tri', 'ms repasando triangulos', '{:7.0f}'),
         ('hu_rachas', 'rachas de huesos (ge_cmd_huesos)', '{:7d}'), ('hu_cmds', 'miles de comandos en rachas', '{:7.0f}'),
         ('ch_ll', 'llamadas (ge_charolas)', '{:7d}'), ('ch_pct', '% que siguen la charola', '{:7d}'),
+        ('ch_sin', 'sin charola abierta', '{:7d}'), ('ch_clave', 'con otra clave', '{:7d}'),
+        ('ch_tex', 'textura que volver a buscar', '{:7d}'), ('chv', 'charolas comparadas (ge_verificar)', '{:7d}'),
+        ('chv_mal', 'charolas distintas (tiene que ser 0)', '{:7d}'),
         ('ce_tandas', 'tandas (ge_charolas_envio)', '{:7d}'), ('ce_juntos', 'miles de triangulos juntos', '{:7.0f}'),
         ('ce_sueltos', 'miles de triangulos sueltos', '{:7.0f}')]
 print('ventana     ' + ''.join(f'{k[:7]:>7}' for k, _ in runs))

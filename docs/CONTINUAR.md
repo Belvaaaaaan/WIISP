@@ -3045,6 +3045,121 @@ Qué mirar:
   Más de lo previsto (~1,5 %): las rachas (~38 comandos, como decía el
   censo de la 0.5.23) se quedan enteras en el bucle propio.
 
+### v0.5.23.4: charolas (`ge_charolas`, 1.4), paletas iguales (`ge_clut_igual`) y la clave del estado de GX (`ge_estado_clave`)
+
+Punto 4 del plan. Con `ge_estado_sucio` (0.5.15) el estado de cada llamada
+ya solo se rehacía si cambiaba algo que lo lee, pero cada llamada seguía
+pagando `setup_targets` (búferes en el EFB, `get_surface`) y
+`lookup_texture` (~900 instrucciones), la preparación de `ge_draw_prim` y
+un `GX_Begin` por triángulo. La charola junta llamadas seguidas con el
+mismo estado: lo de la primera vale para las siguientes. Siete interruptores,
+todos encendidos (detalle en ARREGLOS):
+
+1. `ge_charolas` (GX): `gx_begin` no marca `targets_dirty` si la llamada
+   sigue la charola abierta. Clave: `ge_raster_gen` (sube cada vez que el
+   estado del rasterizador se calcula de nuevo), `ge.clut_gen` y el grupo
+   nuevo D de `ge_sucio` (búferes, máscaras, LIGHTMODE). Se apunta tras un
+   `setup_targets` que dibuja, sin texturas de la GPU (copia directa,
+   paleta desde la GPU o su censo) y con todos los niveles de la textura en
+   la RAM (`gpu_newer` cambia al dibujar, sin aviso). La corta todo lo que
+   toca los destinos o GX desde fuera (VRAM, presentar, `set_pf`, copias,
+   líneas, puntos, borrados, reiniciar). La textura se vuelve a comprobar
+   en el primer triángulo que se dibuja, como en el camino de siempre:
+   `tc_again` (lo mismo que `tc_lookup` haría con esa entrada) o, si no
+   hubo ningún aviso de escritura desde la última vez, la entrada se
+   comprobó en este periodo (`domain == ge_sync_domain`) y es contigua,
+   solo `tc_hit` (lo que `tc_lookup` apunta).
+2. `ge_charolas_sprites`: los sprites tampoco cortan la charola y la
+   apuntan (la textura pendiente, tras descartar los de ancho cero).
+3. `ge_charolas_envio`: los triángulos aceptados de una llamada se apuntan
+   en una lista (punteros a los vértices del caché de la llamada y de cuál
+   sale el color plano) y GX los manda con un solo `GX_Begin`, las mismas
+   palabras en el mismo orden.
+4. `ge_charolas_tiras`: las tiras sin descarte de caras, en un bucle propio
+   con las reglas de `send_triangle` en línea.
+5. `ge_charolas_ge`: el formato de vértice por puntero y `vsource_init`
+   sin `memset`.
+6. `ge_clut_igual`: un LOADCLUT con la misma paleta (mismo tamaño y mismos
+   bytes; `ge_load_clut` ya lo comparaba para el censo) no sube
+   `clut_gen`. Todo lo que depende de `clut_gen` se calcula de los bytes
+   de la paleta (el resumen de la paleta de GX, la clave de las texturas y
+   de la charola), y una paleta leída de un búfer de la GPU ya corta la
+   charola por `vram_hook`. Sin él, un juego que carga la paleta en cada
+   llamada (`sceGuClutLoad` antes de cada dibujo) nunca sigue la charola.
+7. `ge_estado_clave`: la clave del estado de GX (`ge_estado_sucio`) se
+   toma después de emitirlo. `apply_gx` escribe en el objeto de la textura
+   el modo de repetición y el filtro (salen del rasterizador, que ya está
+   en la clave), y la clave tomada antes los tenía sin poner: la llamada
+   siguiente a la primera vez de cada textura veía otra clave y volvía a
+   emitir lo mismo. La charola se salta esa emisión (bien: sale lo mismo),
+   pero `ge_verificar` lo daba por distinto: lo vio en 5 pspautotests de
+   `gpu/` (`ge_verificar` con el CLI de GX). Con la clave de después, la
+   verificación es exacta y sin charolas se ahorra esa emisión repetida.
+
+Otro falso aviso de la verificación, encontrado por el banco con
+`ge_verificar` (modo `verif` nuevo de `banco_charolas.sh`, `CAMBIOS=40`,
+semilla 19): la comprobación "la llamada habría seguido sin preparar
+nada" (`ch_verif_listo`) no se quitaba al empezar cada llamada; si la
+primera primitiva era un sprite, se quedaba pendiente y la miraba un
+triángulo de otra llamada que ya no seguía ninguna charola. Ahora se quita
+en `gx_begin` y en las primitivas que no son triángulos.
+
+Un fallo de verdad, encontrado por el banco al azar (`bench_charolas`,
+`CAMBIOS=5`, semilla 17) y arreglado antes de seguir: la primera versión
+daba la textura por buena sin mirarla si no había avisos de escritura,
+también cuando su última comprobación era de otro periodo; `tc_lookup`, en
+cambio, mira entonces la memoria (el vistazo o el hash entero), y una
+escritura sin aviso de la CPU se colaba. Ahora el atajo exige el mismo
+periodo y una entrada contigua; si no, `tc_again`.
+
+Banco de qemu (`bench_lista`, código de devkitPPC, instrucciones por
+llamada sin el psq_l emulado; cada columna añade un interruptor a la
+anterior; siempre los seis en la línea de órdenes, ver LEEME):
+
+TABLA_BANCO
+
+- La escena 11 (como la pelea de DBZ: 4 huesos y la matriz de mundo en
+  cada llamada, una textura): −24 %. La escena 12 (sprites de uno en uno):
+  −36 %. La escena 1 (la textura y la paleta en cada llamada, con los
+  mismos valores): sin `ge_clut_igual` la charola nunca sigue (+174 con
+  `ge_charolas` sola: apuntarla sin usarla) y con él −31 % en total.
+- En la escena 11 lo que queda por llamada fuera de vértices y triángulos
+  es poco (`gx_begin`, `ch_textura`, `ge_raster_begin`, `vsource_init` y
+  el vaciado de la lista suman ~270): el resto es leer vértices (~383 por
+  vértice con huesos), ensamblar y mandar a GX (~152 por triángulo).
+- En la escena 12, cada vértice de un sprite va por el camino genérico
+  (`read_vertex` + `decode_vertex` + `read_raw` + `memset`, ~370 por
+  vértice): candidato aparte (sprites por el decodificador por lotes).
+- Probado y descartado (medido): reutilizar en `gx_triangles` las palabras
+  de un vértice ya mandado (más lento: las copias con `memcpy` y la k de
+  cada triángulo distinta).
+- `prof_pmc` lee los PMC en cada cambio de fase (~30-40 ciclos) y el envío
+  por charolas quita cambios de fase por triángulo: con `prof_pmc` la
+  mejora parece algo mayor que la real. La corrida `imagenes` va sin
+  `prof_pmc` para ver cuánto pesa medir.
+
+Verificación:
+
+VERIFICACION
+
+Autotest (4 registros y un `.capturas.txt`; `prof_tirones`,
+`prof_ventana_juego`, `ventana 600` y `ge_bbox_triangulos 0`):
+- sin: los siete interruptores apagados (como la 0.5.23.3), con
+  `prof_pmc`;
+- con: los siete encendidos, con `prof_pmc`;
+- verif: con `ge_verificar` (charolas, sprites, envío y tiras comparados con
+  el camino de siempre), con `prof_pmc`;
+- imagenes: como con, con las 12 capturas de siempre y **sin** `prof_pmc`.
+
+Qué mirar (`ventanas.py sin=... con=... verif=... imagenes=...`):
+- con frente a sin: velocidad de las peleas, "M ciclos (PMC)", ciclos por
+  llamada (estado) y por primitiva (enviar); "% que siguen la charola" y
+  por qué no siguen (sin charola abierta, con otra clave, textura que volver
+  a buscar); tandas y triángulos juntos del envío;
+- verif: "charolas distintas" 0, y todo lo demás de la verificación a 0;
+- imagenes: las 12 capturas de siempre (9E8BC705 ... E9392291) y la
+  velocidad sin `prof_pmc` frente a con.
+
 ### Para el siguiente chat (empezar aquí)
 
 Metodología acordada (detalle en `docs/HOJA_DE_RUTA.md`): primero medir
@@ -3070,25 +3185,28 @@ Metodología acordada (detalle en `docs/HOJA_DE_RUTA.md`): primero medir
   `ge_bbox_llamada` y el censo `prof_huesos` (0.5.23) y la prueba de cada
   llamada más barata (`ge_bbox_orden`, `ge_bbox_aabb`, 0.5.23.1) y la
   banda de guarda y el repaso por triángulos (`ge_bbox_guarda`,
-  `ge_bbox_triangulos`, 0.5.23.2; el repaso, apagado desde la 0.5.23.3) y
-  las rachas de huesos (`ge_cmd_huesos`, 0.5.23.3).
+  `ge_bbox_triangulos`, 0.5.23.2; el repaso, apagado desde la 0.5.23.3),
+  las rachas de huesos (`ge_cmd_huesos`, 0.5.23.3) y 1.4, las charolas
+  (`ge_charolas`, `ge_charolas_sprites`, `ge_charolas_envio`,
+  `ge_charolas_tiras`, `ge_charolas_ge`) con `ge_clut_igual` (0.5.23.4).
 - Herramientas para medir sin el Wii (banco de qemu con el código de
   devkitPPC, perfil por función, psq_l emulado, A/B) y para leer los
   registros del Wii (`ventanas.py`): `tools/banco/LEEME.md`. El entorno
   (devkitPPC, qemu, pspautotests, PPSSPP): `tools/setup_entorno.sh`.
-- **Siguiente:** leer los registros de la 0.5.23.3 (`ventanas.py sin=...
-  con=... verif=... imagenes=...`):
-  - con frente a sin: velocidad de las peleas, "M ciclos (PMC)", "ciclos
-    por comando" y "ciclos por llamada (comandos)" (deberían bajar), y las
-    rachas de huesos (filas nuevas; en la pelea, ~120 mil rachas y ~4,6 M
-    comandos, datos y números, por ventana si el censo de la 0.5.23 sigue
-    valiendo);
-  - verif: "Verificacion de las rachas de huesos" con 0 distintas (y todo
-    lo demás a 0);
-  - imagenes: las 12 capturas de siempre (9E8BC705 ... E9392291).
-  Después, el punto 4 (0.5.23.4, 1.4 `ge_charolas` y el diseño del IR).
+- **Siguiente:** leer los registros de la 0.5.23.4 (`ventanas.py sin=...
+  con=... verif=... imagenes=...`; qué mirar, en su sección de arriba):
+  velocidad y ciclos de las peleas, el % de llamadas que siguen la charola
+  y por qué no siguen las demás (si "con otra clave" pesa mucho, mirar qué
+  cambia entre llamadas: una charola parcial que solo vuelva a buscar la
+  textura), verif con 0 distintas e imagenes con las 12 capturas de
+  siempre. Después, el diseño del IR (paso 11: 2.2 y 2.3 como IR, con 2.5
+  `mem_bat`), que el plan juntaba con la 0.5.23.4: queda para la versión
+  siguiente, hablado antes con el usuario. El limitador de velocidad, al
+  final de todo (pedido del usuario).
   Para las mutaciones, `tools/banco/mutar.py` (con `--solo` de las suites
-  del código tocado y `--asan` para el repaso de las que sobreviven).
+  del código tocado y `--asan` para el repaso de las que sobreviven) y,
+  para el camino de GX, `tools/banco/mutar_gx.py` contra el banco de las
+  charolas.
   Lo que sigue es de antes de la 0.5.23:
   Si la prueba de cada llamada cuesta más de lo que salta, se apaga
   `ge_bbox_llamada` (su interruptor) o se limita a las cajas dudosas

@@ -55,6 +55,24 @@ se arregló o cambió y una descripción breve. El detalle está en
 - `gpu/ge_vertex.c`: `ge_charolas_ge` (encendido). Por llamada: el formato
   de vértice por puntero al guardado (sin copiar sus 76 bytes) y
   `vsource_init` sin `memset`.
+- `wii/gx_ge.c`: `ge_estado_clave` (encendido). La clave del estado de GX
+  de `ge_estado_sucio` se toma después de emitirlo: `apply_gx` escribe en
+  el objeto de la textura el modo de repetición y el filtro (que salen del
+  rasterizador, ya en la clave), y la clave de antes los tenía sin poner.
+  La llamada siguiente a la primera vez de cada textura veía otra clave y
+  volvía a emitir lo mismo; con charolas, la verificación lo daba por
+  distinto (falso aviso en 5 pspautotests de `gpu/`).
+- `wii/gx_ge.c`: verificación de las charolas, `ch_verif_listo` (la
+  comprobación de que la llamada habría seguido sin preparar nada) se
+  quita al empezar cada llamada y en los sprites, líneas, puntos y
+  borrados: si la primera primitiva no era un triángulo, se quedaba
+  pendiente y la miraba un triángulo de otra llamada (falso aviso, lo
+  encontró el banco con `ge_verificar`).
+- `gpu/ge.c`: `ge_clut_igual` (encendido). Un LOADCLUT con la misma
+  paleta (mismo tamaño y mismos bytes, lo que `ge_load_clut` ya comparaba
+  para el censo) no sube `clut_gen`: lo que depende de él sale de los bytes
+  de la paleta, que no cambian. Sin él, cargar la paleta en cada llamada
+  cortaba la charola en todas.
 - `gpu/ge.c`, `gpu/ge_internal.h`: grupo nuevo de `ge_sucio`, D (destinos):
   FRAMEBUFPTR, FRAMEBUFWIDTH, ZBUFPTR, ZBUFWIDTH, FRAMEBUFPIXFORMAT,
   MASKRGB, MASKALPHA y LIGHTMODE (lo que `setup_targets` y `apply_gx` leen
@@ -64,8 +82,8 @@ se arregló o cambió y una descripción breve. El detalle está en
 - `hle/hle.c`, `gpu/ge.h`: líneas `[TIEMPOS] Charolas`, `Envio por
   charolas` y `Verificacion de las charolas`.
 - `core/opt.h`, `core/opt.c`: `ge_charolas` (estaba reservado),
-  `ge_charolas_sprites`, `ge_charolas_envio`, `ge_charolas_tiras` y
-  `ge_charolas_ge`.
+  `ge_charolas_sprites`, `ge_charolas_envio`, `ge_charolas_tiras`,
+  `ge_charolas_ge`, `ge_clut_igual` y `ge_estado_clave`.
 - `tests/test_vdec.c`: el renderizador que lo apunta todo recibe también
   las tandas; vueltas nuevas sin el envío por charolas y sin las tiras,
   iguales a la referencia y entre sí (contadores incluidos).
@@ -75,13 +93,21 @@ se arregló o cambió y una descripción breve. El detalle está en
   la RAM y en la VRAM (dentro y fuera de un búfer en el que se dibuja; la
   del principio, al azar), llamadas que no dibujan nada (máscara de color
   entera y sin escribir profundidad), sprites de ancho cero y escrituras
-  sin aviso en la textura en uso (a veces con otro periodo).
+  sin aviso en la textura en uso (a veces con otro periodo), paletas de
+  otro tamaño y cambiadas dentro de lo que se carga. No se compara cuántas
+  veces se resume la paleta (lo que ahorra `ge_clut_igual`). Con
+  `REGISTRO=archivo`, el registro (las líneas `[VERIF]`); con
+  `ge_verificar`, una línea `VERIF` con lo comparado y lo distinto.
+  `banco_charolas.sh ... verif`: las dos corridas con `ge_verificar` y los
+  distintos a 0. `mutar_gx.py --verif`: qué mutaciones ve `ge_verificar`.
   `stub_estado.c`: huella del FIFO (cada triángulo con el estado de su
   `GX_Begin`; igual con uno por triángulo o uno para muchos), con
   `gx_ge.c` compilado con `-DWIISP_FIFO_TRAZA`. `ab_versiones.py`: `--a`,
   `--b`, `--fifo` y `--sin-fifo` (contra un CLI de antes de la huella del
   FIFO). `bench_lista.c`: escena 11, como una pelea de DBZ, y 12, sprites
-  en 2D de uno en uno.
+  en 2D de uno en uno. `ventanas.py`: por qué no siguen la charola (sin
+  charola abierta, otra clave, textura) y su verificación.
+  `mutaciones/0.5.23.4.txt` (GE) y `0.5.23.4_gx.txt` (GX).
   `mutar_gx.py`: mutaciones de GX contra el banco de las charolas.
   `build_tests_dkp.sh`: también `ge_raster.c`.
 - `tests/test_bbox.c`, `test_censo.c`, `test_listas.c` y `frontend/app.c`: el miembro nuevo

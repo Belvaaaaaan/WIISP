@@ -10,6 +10,7 @@
    y sin los interruptores tienen que salir iguales (salvo el número de
    GX_Begin con ge_charolas_envio: comparar con --fifo, ver banco_charolas.sh).
    CAMBIOS=N en el entorno: N % de llamadas con algún cambio antes (40).
+   REGISTRO=archivo: el registro (las líneas [VERIF] de ge_verificar).
    La textura puede estar en la VRAM, dentro o fuera de un búfer en el que
    se dibuja, y las máscaras pueden dejar la llamada sin dibujar nada.
    Algunos sprites no tienen ancho (no dibujan ni buscan la textura). */
@@ -26,6 +27,8 @@ void gx_ge_enable(int on);
 void gx_ge_texture_report(char *buf, size_t size);
 void host_renderer_hook(void);
 void bench_run_list(u32 pc, u32 end);
+void ge_vdec_verif_report(char *buf, size_t size);
+void hle_set_log_file(const char *path);
 static u32 f24(float f){ u32 b; memcpy(&b, &f, 4); return b >> 8; }
 static u32 rs;
 static u32 rnd(void){ rs ^= rs << 13; rs ^= rs >> 17; rs ^= rs << 5; return rs; }
@@ -51,6 +54,7 @@ int main(int argc, char **argv){
 	mem_init(ram, PSP_RAM_SIZE_32MB, vram, scr);
 	opt_reset();
 	for(i = 3; i < argc; i++) opt_parse(argv[i]);
+	if(getenv("REGISTRO")) hle_set_log_file(getenv("REGISTRO"));   /* las líneas [VERIF], a ese archivo */
 	host_renderer_hook();
 	ge.cmd[GE_VIEWPORTXSCALE] = f24(240); ge.cmd[GE_VIEWPORTYSCALE] = f24(-136); ge.cmd[GE_VIEWPORTZSCALE] = f24(-32000);
 	ge.cmd[GE_VIEWPORTXCENTER] = f24(2048); ge.cmd[GE_VIEWPORTYCENTER] = f24(2048); ge.cmd[GE_VIEWPORTZCENTER] = f24(32000);
@@ -174,6 +178,13 @@ int main(int argc, char **argv){
 	printf("GE: %u comandos, %u vertices, %u triangulos (%u dibujados, %u fuera, %u de espaldas), %u primitivas, %u llamadas\n",
 	       ge_stats.commands, ge_stats.vertices, ge_stats.tris, ge_stats.tris_drawn, ge_stats.tris_outside, ge_stats.tris_back,
 	       ge_stats.primitives, ge_stats.draws);
+	if(opt_on[OPT_GE_VERIF]){   /* con ge_verificar, lo comparado y lo distinto (en otra línea: lo demás tiene que salir igual) */
+		static char vr[512];
+		ge_vdec_verif_report(vr, sizeof(vr));
+		printf("VERIF charolas %u/%u, estado de GX %u/%u (%u sin libogc), triangulos sin preparar %u/%u; %s\n",
+		       ge_stats.chv_llamadas, ge_stats.chv_malas, ge_stats.es_gx_verif, ge_stats.es_gx_verif_bad, ge_stats.es_gx_verif_sin,
+		       ge_stats.es_tri_verif, ge_stats.es_tri_verif_bad, vr);
+	}
 	fprintf(stderr, "charolas: %u llamadas, %u siguieron, %u sin charola, %u otra clave, %u textura\n", ge_stats.ch_llamadas,
 	        ge_stats.ch_siguen, ge_stats.ch_sin, ge_stats.ch_clave, ge_stats.ch_textura);
 	return 0;

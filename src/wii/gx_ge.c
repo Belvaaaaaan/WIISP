@@ -2647,6 +2647,7 @@ static void gx_emit_state(void){
 		return;
 	}
 	apply_gx();
+	if(opt_on[OPT_GE_ESTADO_CLAVE]) gx_key(&k);   //Arreglo
 	memcpy(&gx_key_last, &k, sizeof(k));
 	gx_key_ok = 1;
 }
@@ -3059,6 +3060,7 @@ static void draw_sprite(const GeVertex *v0, const GeVertex *v1){
 static void gx_rect(const GeVertex *v0, const GeVertex *v1){
 	int ok;
 	tri_listo = 0;
+	ch_verif_listo = 0;   //Arreglo
 	if(!opt_on[OPT_GE_CHAROLAS_SPRITES]){   //Arreglo
 		charola = 0;   //Arreglo
 		if(ch_pend){ ch_pend = 0; targets_dirty = 1; }   //Arreglo
@@ -3086,6 +3088,7 @@ static void gx_clear_rect(const GeVertex *v0, const GeVertex *v1){
 	int full = 0, covers = 0, color_full = 0, alpha_w = 0, aval = (int)(v1->color0 >> 24);
 	core_u32 mrgb = ge.cmd[GE_MASKRGB] & 0xFFFFFF, ma = ge.cmd[GE_MASKALPHA] & 0xFF;
 	tri_listo = 0;
+	ch_verif_listo = 0;   //Arreglo
 	charola = 0;   //Arreglo
 	if(ch_pend){ ch_pend = 0; targets_dirty = 1; }   //Arreglo
 	if(v0->x == v1->x || v0->y == v1->y) return;
@@ -3133,6 +3136,7 @@ static void gx_clear_rect(const GeVertex *v0, const GeVertex *v1){
    PSP pinta el píxel cuya esquina es esa coordenada: medio píxel más */
 static void gx_line(const GeVertex *v0, const GeVertex *v1){
 	tri_listo = 0;
+	ch_verif_listo = 0;   //Arreglo
 	charola = 0;   //Arreglo
 	if(ch_pend){ ch_pend = 0; targets_dirty = 1; }   //Arreglo
 	if(!prepare(0)) return;
@@ -3148,6 +3152,7 @@ static void gx_line(const GeVertex *v0, const GeVertex *v1){
 
 static void gx_point(const GeVertex *v0){
 	tri_listo = 0;
+	ch_verif_listo = 0;   //Arreglo
 	charola = 0;   //Arreglo
 	if(ch_pend){ ch_pend = 0; targets_dirty = 1; }   //Arreglo
 	if(!prepare(0)) return;
@@ -3162,7 +3167,7 @@ static void gx_point(const GeVertex *v0){
 
 static void gx_begin(void){
 	cs_primero = 1;
-	ch_verif = ch_verif_gx = ch_pend = 0;   //Arreglo
+	ch_verif = ch_verif_gx = ch_verif_listo = ch_pend = 0;   //Arreglo
 	if(opt_on[OPT_GE_CHAROLAS]){   //Arreglo
 		ge_stats.ch_llamadas++;   //Arreglo
 		if(!charola || targets_dirty) ge_stats.ch_sin++;   //Arreglo

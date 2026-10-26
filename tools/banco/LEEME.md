@@ -84,6 +84,11 @@ al repositorio), `gcc-powerpc-linux-gnu` y `qemu-user`. Las salidas van a
   en la VRAM (dentro y fuera de un búfer en el que se dibuja; la del
   principio, al azar por semilla), llamadas que no dibujan (máscara de
   color entera y sin escribir profundidad) y sprites de ancho cero.
+  `REGISTRO=archivo`: el registro del emulador (las líneas `[VERIF]`). Con
+  `ge_verificar=1` escribe una línea `VERIF` con lo comparado/distinto de
+  cada verificación; `banco_charolas.sh ... verif` corre A y B con
+  `ge_verificar` (que cambia lo que se emite: hay que comparar verificado
+  con verificado) y exige 0 distintos.
   Compara la huella del estado de GX, la del FIFO, los contadores del GE y
   los de la caché de texturas entre dos juegos de interruptores (`fifo`:
   sin el número de `GX_Begin`, para `ge_charolas_envio`). Encontró un
@@ -99,7 +104,11 @@ al repositorio), `gcc-powerpc-linux-gnu` y `qemu-user`. Las salidas van a
   archivo mutado (con devkitPPC o con el gcc de PowerPC), enlaza
   `bench_charolas` y lo compara, semilla a semilla, con el banco sin mutar
   y las charolas apagadas (el camino de siempre), con `CAMBIOS` 3, 5, 10 y
-  40 (40 casos con `--semillas 10`, ~3 min con 2 hilos).
+  40 (40 casos con `--semillas 10`, ~3 min con 2 hilos). Con `--verif`,
+  lo que vería `ge_verificar` en el Wii: mutación y referencia con
+  `ge_verificar=1` (la referencia, sin mutar y con los interruptores por
+  defecto); detectada si la línea `VERIF` del banco tiene algo distinto o
+  lo demás no sale igual.
 - `bench_lista` escena 11: como una pelea de DBZ (4 huesos y la matriz de
   mundo en cada llamada, la textura una sola vez); escena 12 (vtype 0):
   sprites en 2D de uno en uno con la textura una sola vez (un juego 2D, el

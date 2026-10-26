@@ -250,3 +250,27 @@
 >>>
 			if(igual && off == 0 && memcmp(ge.clut + off, p, 16)) igual = 0;
 ===
+=== estado clave: la de antes de emitir
+@ src/wii/gx_ge.c
+<<<
+	if(opt_on[OPT_GE_ESTADO_CLAVE]) gx_key(&k);   //Arreglo
+>>>
+	(void)0;   //Arreglo
+===
+=== verif: sin quitar la comprobacion pendiente al empezar
+@ src/wii/gx_ge.c
+<<<
+	ch_verif = ch_verif_gx = ch_verif_listo = ch_pend = 0;   //Arreglo
+>>>
+	ch_verif = ch_verif_gx = ch_pend = 0;   //Arreglo
+===
+=== verif: sprites sin quitar la comprobacion pendiente
+@ src/wii/gx_ge.c
+<<<
+	tri_listo = 0;
+	ch_verif_listo = 0;   //Arreglo
+	if(!opt_on[OPT_GE_CHAROLAS_SPRITES]){   //Arreglo
+>>>
+	tri_listo = 0;
+	if(!opt_on[OPT_GE_CHAROLAS_SPRITES]){   //Arreglo
+===

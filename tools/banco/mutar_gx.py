@@ -9,8 +9,12 @@ corre con los de por defecto. Cuenta como detectada si alguna salida (con la
 huella del FIFO, no el número de GX_Begin) es distinta, si se cuelga o si no
 termina bien.
 
-Uso: mutar_gx.py MUTACIONES [--semillas N] [--hilos N] [--solo-estas a,b]
-Mismo formato de MUTACIONES que mutar.py. Salidas en $SALIDA/mutar_gx."""
+Uso: mutar_gx.py MUTACIONES [--semillas N] [--hilos N] [--solo-estas a,b] [--verif]
+Mismo formato de MUTACIONES que mutar.py. Salidas en $SALIDA/mutar_gx.
+--verif: lo que vería ge_verificar en el Wii. La mutación y la referencia
+(el banco sin mutar con los interruptores por defecto) corren con
+ge_verificar=1; cuenta como detectada si en la línea VERIF sale algo
+distinto de 0 o si lo demás no sale igual."""
 import concurrent.futures, glob, os, re, subprocess, sys, time
 sys.path.insert(0, os.path.dirname(__file__))
 from mutar import leer_mutaciones
@@ -31,7 +35,7 @@ DKP_OBJ = {
     'src/gpu/ge.c': ('bench_cmd.o', 'tools/banco/bench_cmd.c', []),
 }
 CAMBIOS = (3, 5, 10, 40)
-APAGADO = ['ge_charolas=0', 'ge_charolas_envio=0', 'ge_charolas_ge=0', 'ge_charolas_tiras=0', 'ge_charolas_sprites=0', 'ge_clut_igual=0']
+APAGADO = ['ge_charolas=0', 'ge_charolas_envio=0', 'ge_charolas_ge=0', 'ge_charolas_tiras=0', 'ge_charolas_sprites=0', 'ge_clut_igual=0', 'ge_estado_clave=0']
 
 def ppc_fuentes():
     pat = ['src/core/*.c', 'src/loader/*.c', 'src/cpu/*.c', 'src/hle/*.c', 'src/gpu/*.c']
@@ -59,7 +63,10 @@ def enlaza(d, objs, binario):
     r = run(['powerpc-linux-gnu-gcc'] + PPCF + ['-Isrc', '-static', '-o', binario] + objs + extra + ['-lm'])
     return r.returncode == 0, r.stderr
 
+VERIF = False
+
 def salida(binario, semilla, cambios, opts, limite):
+    if VERIF: opts = opts + ['ge_verificar=1']
     env = dict(os.environ, CAMBIOS=str(cambios))
     try:
         r = subprocess.run(['qemu-ppc', binario, str(semilla), '300'] + opts, capture_output=True, text=True, env=env,
@@ -68,6 +75,10 @@ def salida(binario, semilla, cambios, opts, limite):
         return None
     if r.returncode: return 'termina con %d' % r.returncode
     out = re.sub(r'^\[GX\] [^;]*; ', '[GX] ', r.stdout, flags=re.M)
+    if VERIF:
+        v = re.search(r'^VERIF.*$', out, flags=re.M)
+        if v and (re.search(r'\d+/[1-9]', v.group(0)) or re.search(r', [1-9]\d* distint', v.group(0))): return 'VERIF ' + v.group(0)[:200]
+        out = re.sub(r'^(VERIF|Verificacion).*\n', '', out, flags=re.M)
     return re.sub(r', [0-9]+ paletas;', ';', out)   # lo que ahorra ge_clut_igual
 
 def main():
@@ -79,6 +90,9 @@ def main():
         return d
     semillas = int(opcion('--semillas', '12')); hilos = int(opcion('--hilos', str(os.cpu_count() or 4)))
     estas = opcion('--solo-estas')
+    global VERIF
+    VERIF = '--verif' in args
+    if VERIF: args.remove('--verif')
     muts = leer_mutaciones(args[0])
     if estas: muts = [m for m in muts if m['nombre'] in estas.split(',')]
     salida_dir = os.path.join(os.environ.get('SALIDA', '/tmp/banco'), 'mutar_gx')
@@ -102,10 +116,10 @@ def main():
     casos = [(s, c) for c in CAMBIOS for s in range(1, semillas + 1)]
     t1 = time.time()
     with concurrent.futures.ThreadPoolExecutor(hilos) as ex:
-        ref = list(ex.map(lambda sc: salida(binario, sc[0], sc[1], APAGADO, 600), casos))
+        ref = list(ex.map(lambda sc: salida(binario, sc[0], sc[1], [] if VERIF else APAGADO, 600), casos))
         con = list(ex.map(lambda sc: salida(binario, sc[0], sc[1], [], 600), casos))
     tb = (time.time() - t1) / 2
-    if any(r is None or r.startswith('termina') for r in ref) or ref != con:
+    if any(r is None or r.startswith('termina') or r.startswith('VERIF') for r in ref) or ref != con:
         sys.exit('la base no da lo mismo con y sin las charolas')
     limite = max(20, 10 * tb / max(1, len(casos)) * hilos)
     print(f'base: {time.time() - t0:.0f} s; {len(casos)} casos ({tb:.0f} s); {len(muts)} mutaciones con {hilos} hilos')
@@ -138,7 +152,7 @@ def main():
             o = salida(b, s, c, [], limite)
             if o is None: return 'colgada', 'semilla %d, cambios %d' % (s, c)
             if o != r:
-                return 'detectada', 'semilla %d, cambios %d' % (s, c) if not o.startswith('termina') else o
+                return 'detectada', ('semilla %d, cambios %d' % (s, c)) + (': ' + o if o.startswith('VERIF') or o.startswith('termina') else '')
         return 'sobrevive', ''
 
     with concurrent.futures.ThreadPoolExecutor(hilos) as ex:
