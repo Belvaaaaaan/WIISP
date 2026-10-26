@@ -2971,6 +2971,64 @@ Además:
   como antes. Todas las pruebas sin ASan a -O2: 39 s de compilar y 96 s de
   correr (con ASan, ~60 s y ~407 s).
 
+Verificación:
+- Pruebas: x86 con ASan 166.624 comprobaciones, 0 fallos; PowerPC (gcc) y
+  devkitPPC bajo qemu: ver abajo. `tests-dkp` compila ahora también `ge.c`
+  con devkitPPC (antes solo `ge_vertex.c` y los intérpretes): la racha se
+  prueba con el compilador de la Wii.
+- `tests/test_listas.c`, prueba nueva: 3000 listas con 0x2A y 0x2B
+  mezclados (números al azar, por encima de 96 y junto al final de los 24
+  bits), la parada dentro de la racha (750), la racha hasta el borde de la
+  RAM con la parada nunca alcanzada o desalineada (750), en la copia sin
+  caché; con el atajo, sin él y por `execute`: 0 distintas (2.270 rachas
+  con 96.842 comandos; con `ge_verificar`, 1.119 comparadas, 0 distintas).
+  Mismas listas en x86, PowerPC y devkitPPC (cada número al azar se saca
+  aparte: el orden de los argumentos de una llamada cambia entre
+  compiladores). Con el atajo estropeado a propósito
+  (`ge_test_romper_racha`: un hueso, el número o el comando actual), la
+  verificación lo ve las tres veces. Las listas al azar de antes cuentan
+  también las rachas verificadas (96, 0 distintas).
+- Mutaciones (27, `tools/banco/mutaciones/0.5.23.3.txt`, `mutar.py
+  --solo listas`, 250 s; con el método de antes, ~3,5 horas):
+  - **detectadas, 25:** 19 por las pruebas (índice ≤ 96 o < 95, índice o
+    número con 8 bits, dato sin desplazar, contador de dos en dos, sin
+    contar los 0x2A, 0x2B a 0 siempre o nunca, sin la máscara de 24 bits,
+    comando actual fijo, comandos de menos, también fuera de la RAM, el
+    atajo con `ge_verificar` o con los censos, y en el verificador: sin
+    comparar huesos, número o comando actual, un comando menos) y 6 que
+    dejan la lista dando vueltas (byte del comando equivocado, uno de más
+    al final, sin la parada, la parada un comando después o sin mirar la
+    alineación, el pc un comando antes);
+  - **solo con ASan, 1:** leer un comando más allá del final de la RAM
+    (en el repaso con ASan, 546 s);
+  - **equivalente, 1:** el verificador sin deshacer los huesos (escribe
+    dos veces lo mismo).
+- pspautotests 275/275.
+- A/B de `ge_cmd_huesos` en las 572 (exacto y MR, 4 a la vez): solo
+  `io/`, `malloc` y savedata; de uno en uno quedan `io/file/rename` e
+  `io/io/io`, que salen igual de distintos con `prof_vertices` (que solo
+  mide): son de las carpetas de las pruebas, no del atajo.
+- La 0.5.23.2 contra la 0.5.23.3 (`ab_versiones.py`, con los
+  interruptores por defecto de cada una: también `ge_bbox_triangulos` 1
+  frente a 0): 555 programas, solo `io/file/rename` distinto (0 dibujos,
+  misma huella de GX).
+- `ge_verificar` en las 110 de `gpu/` (exacto y MR): 0 líneas `[VERIF]`.
+- Compilación para el Wii: `wiisp.dol` 0.5.23.3.
+
+Autotest (4 registros y un `.capturas.txt`; todas con `prof_pmc`,
+`prof_tirones`, `prof_ventana_juego` y `ventana 600`, y
+`ge_bbox_triangulos 0`):
+- sin: `ge_cmd_huesos 0`;
+- con: `ge_cmd_huesos 1`;
+- verif: con `ge_verificar` (camino nuevo);
+- imagenes: como con, con `capturas 400` (las 12 de siempre).
+
+Qué mirar:
+- con frente a sin (`ventanas.py`): velocidad de las peleas, M ciclos,
+  ciclos por comando y por llamada (comandos); rachas de huesos;
+- verif: 0 distintas en "Verificacion de las rachas de huesos";
+- imagenes: las 12 capturas de siempre.
+
 ### Para el siguiente chat (empezar aquí)
 
 Metodología acordada (detalle en `docs/HOJA_DE_RUTA.md`): primero medir

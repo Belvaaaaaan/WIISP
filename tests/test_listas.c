@@ -313,13 +313,22 @@ void test_listas(void){
 			for(k = lrn(4); k > 0; k--) lcmd(GE_NOP, lrnd());
 			ini_r = lp;
 			for(k = 0; k < len; k++){
-				u32 tipo = mezcla == 0 ? (k % 13 == 0) : mezcla == 1 ? lrn(8) == 0 : lrn(2);
-				if(tipo) lcmd(GE_BONEMATRIXNUMBER, lrn(3) ? lrn(96) + 12 * lrn(3) : lrnd());
-				else lcmd(GE_BONEMATRIXDATA, lrn(4) ? (lrn(3) ? 0x3F8000u : 0) : lrnd());
+				u32 tipo = mezcla == 0 ? (k % 13 == 0) : mezcla == 1 ? lrn(8) == 0 : lrn(2), a;
+				if(tipo){
+					if(lrn(3)){ a = lrn(96); a += 12 * lrn(3); } else a = lrnd();
+					lcmd(GE_BONEMATRIXNUMBER, a);
+				} else {
+					if(lrn(4)) a = lrn(3) ? 0x3F8000u : 0; else a = lrnd();
+					lcmd(GE_BONEMATRIXDATA, a);
+				}
 			}
 			if(caso == 3){
-				while((lp & 0x0FFFFFFFu) < 0x0A000000u) lcmd(lrn(4) ? GE_BONEMATRIXDATA : GE_NOP, lrnd());
-				end = lrn(2) ? 0xFFFFFFF0u : ini_r + 4 * lrn(len) + 1 + lrn(3);
+				while((lp & 0x0FFFFFFFu) < 0x0A000000u){
+					u32 cc = lrn(4) ? GE_BONEMATRIXDATA : GE_NOP;
+					lcmd(cc, lrnd());
+				}
+				if(lrn(2)) end = 0xFFFFFFF0u;
+				else { end = ini_r + 4 * lrn(len); end += 1 + lrn(3); }
 				borde++;
 			} else {
 				for(k = lrn(3); k > 0; k--){
