@@ -18,3 +18,7 @@ powerpc-linux-gnu-gcc -O2 -std=gnu11 -fwrapv -DWIISP_PROF -Isrc -static -o $G/be
 # El banco de listas: el bucle de comandos (ge.c, incluido en bench_cmd.c) y el rasterizador también con devkitPPC
 SRC2=$(echo "$SRC" | tr ' ' '\n' | grep -v "src/gpu/ge_raster.c\|src/gpu/ge.c$")
 powerpc-linux-gnu-gcc -O2 -std=gnu11 -fwrapv -DWIISP_PROF -Isrc -static -o $G/bench_lista $SRC2 $G/gx_ge_dkp.o $G/ge_vertex_dkp.o $G/ge_raster_dkp.o $G/bench_cmd_dkp.o $T/stub.c $T/sigill_ppc.c $T/bench_lista.c -lm 2>&1 | grep -v "warning\|NOTE" || true
+# El banco de las charolas: gx_ge.c con la traza del FIFO sobre la libogc que guarda el estado
+$DEVKITPPC/bin/powerpc-eabi-gcc $DKF -DWIISP_FIFO_TRAZA -c src/wii/gx_ge.c -o $G/gx_ge_traza_dkp.o
+powerpc-linux-gnu-objcopy --remove-section .gnu.attributes $G/gx_ge_traza_dkp.o
+powerpc-linux-gnu-gcc -O2 -std=gnu11 -fwrapv -DWIISP_PROF -Isrc -static -o $G/bench_charolas $SRC2 $G/gx_ge_traza_dkp.o $G/ge_vertex_dkp.o $G/ge_raster_dkp.o $G/bench_cmd_dkp.o $T/stub_estado.c $T/sigill_ppc.c $T/bench_charolas.c -lm 2>&1 | grep -v "warning\|NOTE" || true

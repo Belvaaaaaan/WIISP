@@ -110,7 +110,7 @@ extern GeStats ge_stats;
    con algún comando que cambió de valor desde que se calcularon por última
    vez (V formato de vértice, uv y morph; T transformación y luces; R
    píxel, muestreo y tijera del rasterizador) */
-enum { GE_SUCIO_V = 1, GE_SUCIO_T = 2, GE_SUCIO_R = 4, GE_SUCIO_B = 8, GE_SUCIO_P = 16, GE_SUCIO_TODO = 31 };   //Arreglo
+enum { GE_SUCIO_V = 1, GE_SUCIO_T = 2, GE_SUCIO_R = 4, GE_SUCIO_B = 8, GE_SUCIO_P = 16, GE_SUCIO_D = 32, GE_SUCIO_TODO = 63 };   //Arreglo
 extern u32 ge_sucio;
 /* ge_estado_sucio con ge_verificar: lo guardado comparado con lo recalculado
    (0 formato, 1 transformación, 2 rasterizador) */
@@ -360,6 +360,11 @@ const u32 *ge_clut16_32_info(u32 *shift, u32 *mask, u32 *offset);
    orden correcto y dentro de la tijera, en lugar del rasterizador por
    software. begin se llama antes de cada tanda, con el estado de
    ge_raster_state() ya calculado. */
+typedef struct {   //Arreglo
+	const GeVertex *v[3];
+	const GeVertex *col;
+} GeTriCharola;
+
 typedef struct {
 	void (*begin)(void);
 	void (*triangle)(const GeVertex *v0, const GeVertex *v1, const GeVertex *v2);
@@ -368,7 +373,18 @@ typedef struct {
 	void (*line)(const GeVertex *v0, const GeVertex *v1);
 	void (*point)(const GeVertex *v0);
 	void (*tex_flush)(void);
+	void (*triangles)(const GeTriCharola *t, int n);   //Arreglo
 } GeHwRenderer;
+
+extern int ge_charola_tris;   //Arreglo
+void ge_raster_charola_vaciar(void);   //Arreglo
+void ge_raster_triangle_c(const GeVertex *v0, const GeVertex *v1, const GeVertex *v2, const GeVertex *col);   //Arreglo
+void ge_raster_triangle_ccw_c(const GeVertex *v0, const GeVertex *v1, const GeVertex *v2, const GeVertex *col);   //Arreglo
+static inline void ge_tri_col(GeVertex *o, const GeVertex *c, const GeVertex *col){   //Arreglo
+	*o = *c;
+	o->color0 = col->color0;
+	o->color1 = col->color1;
+}
 
 extern const GeHwRenderer *ge_hw;
 

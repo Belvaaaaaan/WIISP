@@ -258,6 +258,11 @@ static int gx_tocado = 1;
    lo que entra en este archivo desde fuera entre dos triángulos: la llamada
    siguiente, los ganchos de la VRAM, las demás primitivas, presentar... */
 static int tri_listo;
+static int charola, ch_tri, ch_pend;   //Arreglo
+static struct {   //Arreglo
+	core_u32 rgen, clut_gen, notas, avisos;
+	int tex;
+} ch;
 static unsigned rtt_dl[RD_N], rtt_dec[RO_N], rtt_gpu, rtt_miss[RM_N];
 static u64 rtt_dl_ticks[RD_N], rtt_dec_ticks[RO_N], rtt_dec_bytes[RO_N];
 static unsigned rtt_dx[DX_N], rtt_uploads;
@@ -380,6 +385,7 @@ static void set_pf(int pf){
 	efb_fmt = pf;
 	gx_tocado = 1;
 	tri_listo = 0;
+	charola = 0;   //Arreglo
 }
 
 static int has_alpha_fmt(int fmt){ return fmt == GE_FMT_5551 || fmt == GE_FMT_4444 || fmt == GE_FMT_8888; }
@@ -903,7 +909,7 @@ static void drop_surface(Surface *s){
 	if(s->state == GPU_NEWER) download(s);
 	if(s == cur_c){ cur_c = NULL; efb_c_newer = 0; restored_c = 0; }
 	if(s == cur_z){ cur_z = NULL; efb_z_newer = 0; restored_z = 0; }
-	if(s == clut_src){ clut_src = NULL; use_clut_gpu = 0; targets_dirty = 1; cs_aviso = 1; }
+	if(s == clut_src){ clut_src = NULL; use_clut_gpu = 0; targets_dirty = 1; cs_aviso = 1; charola = 0; }   //Arreglo
 	defer_free(s->tex);
 	defer_free(s->ci);
 	memset(s, 0, sizeof(*s));
@@ -956,6 +962,7 @@ static int only_padding(const Surface *s, core_u32 off, core_u32 len){
 
 static void vram_hook(core_u32 off, core_u32 len, int write){
 	tri_listo = 0;   /* puede bajar o invalidar el búfer en el que se dibuja */
+	charola = 0;   //Arreglo
 	int i;
 	const Surface *clut_s = NULL;
 	acc_off = off;
@@ -1189,6 +1196,7 @@ static void set_mode(int m){
 		GX_SetTexCoordGen(GX_TEXCOORD0, GX_TG_MTX2x4, GX_TG_TEX0, GX_IDENTITY);
 	}
 	gx_dirty = 1;
+	charola = 0;   //Arreglo
 }
 
 /* Dibuja una copia (color y/o profundidad) en (x0,y0)-(x1,y1) del EFB */
@@ -1257,6 +1265,7 @@ static void blit(const Surface *c, const Surface *z, int color, int alpha, float
 	}
 	gx_dirty = 1;
 	gx_tocado = 1;
+	charola = 0;   //Arreglo
 }
 
 /* --- Restaurar el EFB ---------------------------------------------------------- */
@@ -1924,6 +1933,7 @@ static void clut_gpu_fallback(void){
 	gx_dirty = 1;
 	gx_tocado = 1;
 	tri_listo = 0;
+	charola = 0;   //Arreglo
 }
 
 /* --- Estado de GX a partir del GE ---------------------------------------------- */
@@ -2409,6 +2419,88 @@ static int rtt_cover(const GeVertex *v0, const GeVertex *v1){
 	return 1;
 }
 
+typedef struct {   //Arreglo
+	int skip_draws, touch_c, touch_z, writes_c, writes_z, stencil_val, reads_dst_alpha, through, tex_on, use_rtt, use_clut_gpu;
+	int tex_proj, flat;
+	Surface *cur_c, *cur_z, *clut_src;
+	TexEntry *cur_tex;
+	RttPal *rtt_cur;
+	float inv_tw, inv_th, tex_su, tex_sv;
+	core_u32 rtt_tex_off;
+} ChSalida;
+static ChSalida ch_sal;
+static int ch_verif, ch_verif_gx, ch_verif_listo;
+static u32 ch_verif_quick, ch_verif_checks;
+
+static void ch_salida(ChSalida *o){   //Arreglo
+	memset(o, 0, sizeof(*o));
+	o->skip_draws = skip_draws; o->touch_c = touch_c; o->touch_z = touch_z; o->writes_c = writes_c; o->writes_z = writes_z;
+	o->stencil_val = stencil_val; o->reads_dst_alpha = reads_dst_alpha; o->through = through; o->tex_on = tex_on;
+	o->use_rtt = use_rtt; o->use_clut_gpu = use_clut_gpu; o->tex_proj = tex_proj; o->flat = flat;
+	o->cur_c = cur_c; o->cur_z = cur_z; o->clut_src = clut_src; o->cur_tex = cur_tex; o->rtt_cur = rtt_cur;
+	o->inv_tw = inv_tw; o->inv_th = inv_th; o->tex_su = tex_su; o->tex_sv = tex_sv; o->rtt_tex_off = rtt_tex_off;
+}
+
+static inline int ch_igual(void){   //Arreglo
+	return !(ge_sucio & GE_SUCIO_D) && ch.rgen == ge_raster_gen && ch.clut_gen == ge.clut_gen;
+}
+
+static void ch_textura_vista(void){   //Arreglo
+	ch.notas = mem_write_notes;
+	ch.avisos = mem_write_all_hints;
+}
+
+static void charola_apuntar(void){   //Arreglo
+	const GeRasterState *r = ge_raster_state();
+	charola = 0;
+	if(!ch_tri || !opt_on[OPT_GE_CHAROLAS] || !opt_on[OPT_GE_ESTADO_SUCIO] || opt_on[OPT_PROF_ESTADO]) return;
+	if(skip_draws || use_rtt || use_clut_gpu || rtt_cur) return;
+	ch.tex = -1;
+	if(tex_on && r->texvalid[0]){
+		const TcEntry *e;
+		core_u32 i;
+		if(!cur_tex) return;
+		ch.tex = (int)(cur_tex - texc);
+		e = &tcache.e[ch.tex];
+		for(i = 0; i < e->key.levels; i++) if((e->lv_addr[i] & PSP_ADDR_MASK) < PSP_RAM_BASE) return;
+	}
+	ch.rgen = ge_raster_gen;
+	ch.clut_gen = ge.clut_gen;
+	ch_textura_vista();
+	ge_sucio &= ~(core_u32)GE_SUCIO_D;
+	ch_salida(&ch_sal);
+	charola = 1;
+}
+
+static void __attribute__((noinline)) ch_textura(void){   //Arreglo
+	ch_pend = 0;
+	tcache.frame = frame;
+	tcache.backoff = lazy_textures;
+	if(ch.notas == mem_write_notes && ch.avisos == mem_write_all_hints && tcache.e[ch.tex].domain == ge_sync_domain &&
+	   tcache.e[ch.tex].direct){
+		tc_hit(&tcache, ch.tex);
+		return;
+	}
+	if(tc_again(&tcache, ch.tex, 0)){ ch_textura_vista(); return; }
+	targets_dirty = 1;
+	tri_listo = 0;
+	charola = 0;
+	ge_stats.ch_textura++;
+}
+
+static void __attribute__((noinline)) charola_verif(void){   //Arreglo
+	ChSalida now;
+	int malo;
+	ch_salida(&now);
+	malo = memcmp(&now, &ch_sal, sizeof(now)) != 0;
+	if(ch.tex >= 0) malo |= tcache.stats.quick != ch_verif_quick + 1 || tcache.stats.checks != ch_verif_checks;
+	ge_stats.chv_llamadas++;
+	if(malo && ge_stats.chv_malas++ < 16)
+		hle_log_quiet("[VERIF] charola: la llamada habria seguido la anterior y sus destinos o su textura salen distintos\n");
+	ch_verif = 0;
+	ch_verif_gx = 1;
+}
+
 /* Antes de cada primitiva: búferes en el EFB con su contenido. full: el
    rectángulo de borrado tapa todo el búfer de color (1) y/o de
    profundidad (2), que no hace falta restaurar. 0 = no dibujar. */
@@ -2416,7 +2508,10 @@ static int prepare_targets(int full){
 	if(targets_dirty){
 		u64 t0 = gettime();
 		int phase = prof_ge_enter(GEF_ESTADO);
+		if(ch_verif){ ch_verif_quick = tcache.stats.quick; ch_verif_checks = tcache.stats.checks; }   //Arreglo
 		setup_targets();
+		if(ch_verif) charola_verif();   //Arreglo
+		charola_apuntar();   //Arreglo
 		targets_dirty = 0;
 		gx_dirty = 1;
 		if(opt_on[OPT_PROF_ESTADO]) census_dst();
@@ -2540,6 +2635,11 @@ static void gx_emit_state(void){
 	GxKey k;
 	gx_key(&k);
 	ge_stats.es_gx++;
+	if(ch_verif_gx){   //Arreglo
+		ch_verif_gx = 0;   //Arreglo
+		if(!(gx_key_ok && !gx_tocado && gx_key_eq(&k, &gx_key_last)) && ge_stats.chv_malas++ < 16)   //Arreglo
+			hle_log_quiet("[VERIF] charola: la llamada habria seguido la anterior sin poner el estado de GX que hacia falta\n");   //Arreglo
+	}   //Arreglo
 	if(gx_key_ok && !gx_tocado && gx_key_eq(&k, &gx_key_last)){
 		/* Lo mismo que la vez anterior: con ge_verificar se emite igual y se comprueba */
 		if(opt_on[OPT_GE_VERIF]) gx_emit_verify();
@@ -2612,7 +2712,14 @@ static inline void drawn(void){
 
 /* --- Primitivas ---------------------------------------------------------------- */
 
+#ifdef WIISP_FIFO_TRAZA   //Arreglo
+void fifo_traza_vtx(float x, float y, float z, float s, float t, float q, core_u32 c0, core_u32 c1);   //Arreglo
+#endif   //Arreglo
+
 static inline void put(float x, float y, float z, float s, float t, float q, core_u32 c0, core_u32 c1){
+#ifdef WIISP_FIFO_TRAZA   //Arreglo
+	fifo_traza_vtx(x, y, z, s, t, q, c0, c1);   //Arreglo
+#endif   //Arreglo
 	wgPipe->F32 = x;
 	wgPipe->F32 = y;
 	wgPipe->F32 = z;
@@ -2787,7 +2894,11 @@ static void __attribute__((noinline)) verify_triangle(const GeVertex *v0, const 
 static void __attribute__((noinline)) gx_triangle_ref_path(const GeVertex *v0, const GeVertex *v1, const GeVertex *v2){
 	const GeVertex *c;
 	float k;
-	if(!prepare(0)) return;
+	int ok;   //Arreglo
+	ch_tri = 1;   //Arreglo
+	ok = prepare(0);   //Arreglo
+	ch_tri = 0;   //Arreglo
+	if(!ok) return;   //Arreglo
 	if(use_clut_gpu && tex_on){
 		const GeVertex *vv[3] = { v0, v1, v2 };
 		if(!clut_gpu_triangle_ok(vv)){
@@ -2815,6 +2926,7 @@ static void gx_triangle(const GeVertex *v0, const GeVertex *v1, const GeVertex *
 	const GeVertex *c;
 	int listo;
 	if(opt_on[OPT_PROF_ESTADO]) census_prim();
+	if(ch_pend) ch_textura();   //Arreglo
 	if(!opt_on[OPT_GX_ENVIO]){ gx_triangle_ref_path(v0, v1, v2); return; }
 	listo = tri_listo && opt_on[OPT_GE_ESTADO_SUCIO];
 	if(listo && opt_on[OPT_GE_VERIF]){
@@ -2829,7 +2941,18 @@ static void gx_triangle(const GeVertex *v0, const GeVertex *v1, const GeVertex *
 	}
 	ge_stats.es_tri++;
 	if(listo) ge_stats.es_tri_listo++;
-	else if(!prepare_idle() && !prepare(0)) return;
+	else {   //Arreglo
+		int ok;   //Arreglo
+		ch_tri = 1;   //Arreglo
+		ok = prepare_idle() || prepare(0);   //Arreglo
+		ch_tri = 0;   //Arreglo
+		if(!ok) return;   //Arreglo
+		if(ch_verif_listo){   //Arreglo
+			ch_verif_listo = 0;   //Arreglo
+			if(!estado_listo() && ge_stats.chv_malas++ < 16)   //Arreglo
+				hle_log_quiet("[VERIF] charola: la llamada habria seguido la anterior sin preparar lo que hacia falta\n");   //Arreglo
+		}   //Arreglo
+	}   //Arreglo
 	if(use_clut_gpu && tex_on){
 		const GeVertex *vv[3] = { v0, v1, v2 };
 		if(!clut_gpu_triangle_ok(vv)){
@@ -2853,6 +2976,50 @@ static void gx_triangle(const GeVertex *v0, const GeVertex *v1, const GeVertex *
 		drawn();
 		tri_listo = opt_on[OPT_GE_ESTADO_SUCIO] && estado_listo();
 	}
+}
+
+static void gx_triangles(const GeTriCharola *t, int n){   //Arreglo
+	GxEmitLocal l;
+	int i = 0, m;
+	while(i < n){
+		const GeTriCharola *x = &t[i];
+		if(!ch_pend && tri_listo && opt_on[OPT_GE_ESTADO_SUCIO] && opt_on[OPT_GX_ENVIO] && !opt_on[OPT_PROF_ESTADO] &&
+		   !(tex_on && (use_clut_gpu || rtt_cur)) && !(opt_on[OPT_GE_VERIF] && !estado_listo()))
+			break;
+		if(x->col == x->v[2]) gx_triangle(x->v[0], x->v[1], x->v[2]);
+		else {
+			GeVertex c2;
+			ge_tri_col(&c2, x->v[2], x->col);
+			gx_triangle(x->v[0], x->v[1], &c2);
+		}
+		i++;
+	}
+	if(i == n) return;
+	m = n - i;
+	ge_stats.es_tri += (u32)m;
+	ge_stats.es_tri_listo += (u32)m;
+	if(opt_on[OPT_GE_VERIF]) ge_stats.es_tri_verif += (u32)m;
+	GX_Begin(GX_TRIANGLES, GX_VTXFMT0, (u16)(3 * m));
+	l.tex_on = tex_on; l.through = through; l.tex_proj = tex_proj;
+	l.inv_tw = inv_tw; l.inv_th = inv_th; l.tex_su = tex_su; l.tex_sv = tex_sv; l.pos_off = pos_off;
+	{
+		const int norm = tex_on && !through && tex_norm, fl = flat;
+		for(; i < n; i++){
+			const GeVertex *a = t[i].v[0], *b = t[i].v[1], *c = t[i].v[2], *col = t[i].col;
+			GxVtxWords w;
+			l.k = norm ? gx_tex_scale3(a, b, c) : 1.0f;
+			w = gx_vertex_fast(a, fl ? col : a, &l); put_words(&w);
+			w = gx_vertex_fast(b, fl ? col : b, &l); put_words(&w);
+			w = gx_vertex_fast(c, col, &l); put_words(&w);
+		}
+	}
+	GX_End();
+	if(opt_on[OPT_GE_VERIF])
+		for(i = n - m; i < n; i++){
+			GeVertex c2;
+			ge_tri_col(&c2, t[i].v[2], t[i].col);
+			verify_triangle(t[i].v[0], t[i].v[1], &c2);
+		}
 }
 
 /* Esquina de un sprite: x de vx, y de vy; s y t según la orientación */
@@ -2888,6 +3055,8 @@ static void draw_sprite(const GeVertex *v0, const GeVertex *v1){
 static void gx_rect(const GeVertex *v0, const GeVertex *v1){
 	int ok;
 	tri_listo = 0;
+	charola = 0;   //Arreglo
+	if(ch_pend){ ch_pend = 0; targets_dirty = 1; }   //Arreglo
 	if(v0->x == v1->x || v0->y == v1->y) return;
 	if(opt_on[OPT_PROF_ESTADO]) census_prim();
 	first_v0 = v0; first_v1 = v1;
@@ -2908,6 +3077,8 @@ static void gx_clear_rect(const GeVertex *v0, const GeVertex *v1){
 	int full = 0, covers = 0, color_full = 0, alpha_w = 0, aval = (int)(v1->color0 >> 24);
 	core_u32 mrgb = ge.cmd[GE_MASKRGB] & 0xFFFFFF, ma = ge.cmd[GE_MASKALPHA] & 0xFF;
 	tri_listo = 0;
+	charola = 0;   //Arreglo
+	if(ch_pend){ ch_pend = 0; targets_dirty = 1; }   //Arreglo
 	if(v0->x == v1->x || v0->y == v1->y) return;
 	if(targets_dirty){
 		int phase = prof_ge_enter(GEF_ESTADO);
@@ -2953,6 +3124,8 @@ static void gx_clear_rect(const GeVertex *v0, const GeVertex *v1){
    PSP pinta el píxel cuya esquina es esa coordenada: medio píxel más */
 static void gx_line(const GeVertex *v0, const GeVertex *v1){
 	tri_listo = 0;
+	charola = 0;   //Arreglo
+	if(ch_pend){ ch_pend = 0; targets_dirty = 1; }   //Arreglo
 	if(!prepare(0)) return;
 	if(use_clut_gpu && tex_on){ clut_gpu_fallback(); prepare_state(); }   /* sin comprobación de límites */
 	pos_off = 0.5f;
@@ -2966,6 +3139,8 @@ static void gx_line(const GeVertex *v0, const GeVertex *v1){
 
 static void gx_point(const GeVertex *v0){
 	tri_listo = 0;
+	charola = 0;   //Arreglo
+	if(ch_pend){ ch_pend = 0; targets_dirty = 1; }   //Arreglo
 	if(!prepare(0)) return;
 	if(use_clut_gpu && tex_on){ clut_gpu_fallback(); prepare_state(); }
 	pos_off = 0.5f;
@@ -2977,8 +3152,25 @@ static void gx_point(const GeVertex *v0){
 }
 
 static void gx_begin(void){
-	targets_dirty = 1;
 	cs_primero = 1;
+	ch_verif = ch_verif_gx = ch_pend = 0;   //Arreglo
+	if(opt_on[OPT_GE_CHAROLAS]){   //Arreglo
+		ge_stats.ch_llamadas++;   //Arreglo
+		if(!charola || targets_dirty) ge_stats.ch_sin++;   //Arreglo
+		else if(!ch_igual()) ge_stats.ch_clave++;   //Arreglo
+		else if(!opt_on[OPT_GE_VERIF]){   //Arreglo
+			ge_stats.ch_siguen++;   //Arreglo
+			ch_pend = ch.tex >= 0;   //Arreglo
+			return;   //Arreglo
+		} else {   //Arreglo
+			tcache.frame = frame;   //Arreglo
+			tcache.backoff = lazy_textures;   //Arreglo
+			ch_verif = ch.tex < 0 || tc_again(&tcache, ch.tex, 1);   //Arreglo
+			ch_verif_listo = tri_listo && ch.tex < 0;   //Arreglo
+		}   //Arreglo
+	}   //Arreglo
+	charola = 0;   //Arreglo
+	targets_dirty = 1;
 	tri_listo = 0;
 }
 
@@ -2989,7 +3181,7 @@ static void gx_tex_flush(void){
 }
 
 static const GeHwRenderer gx_renderer = {
-	gx_begin, gx_triangle, gx_rect, gx_clear_rect, gx_line, gx_point, gx_tex_flush
+	gx_begin, gx_triangle, gx_rect, gx_clear_rect, gx_line, gx_point, gx_tex_flush, gx_triangles   //Arreglo
 };
 
 /* --- Presentación -------------------------------------------------------------- */
@@ -3028,6 +3220,7 @@ int gx_ge_present(void *xfb, GXRModeObj *rm, int widescreen){
 	gx_ge_present_wait();   /* la anterior ya tiene que estar (video.c la espera antes) */
 	r = present_body(xfb, rm, widescreen);
 	tri_listo = 0;
+	charola = 0;   //Arreglo
 	prof_present += gettime() - t0;
 	return r;
 }
@@ -3056,7 +3249,7 @@ void gx_ge_memory(unsigned *tex_bytes, unsigned *tex_n, unsigned *surf_n, unsign
 	*deferred = (unsigned)ndefer;
 }
 
-void gx_ge_set_lazy_textures(int on){ lazy_textures = on; }
+void gx_ge_set_lazy_textures(int on){ lazy_textures = on; charola = 0; }   //Arreglo
 void gx_ge_set_tex_norm(int on){ tex_norm = on; }
 int gx_ge_tex_norm(void){ return tex_norm; }
 
@@ -3310,6 +3503,7 @@ static int present_body(void *xfb, GXRModeObj *rm, int widescreen){
 	restored_c = restored_z = 0;
 	targets_dirty = 1;
 	cs_aviso = gx_tocado = 1;   /* censo: la imagen se compone con otro estado de GX */
+	charola = 0;   //Arreglo
 
 	if(!s){
 		/* Framebuffer escrito por la CPU: se convierte desde la memoria */
@@ -3390,6 +3584,7 @@ static int present_body(void *xfb, GXRModeObj *rm, int widescreen){
 void gx_ge_sync_vram(void){
 	int i;
 	tri_listo = 0;
+	charola = 0;   //Arreglo
 	dl_force = DX_SINC;
 	for(i = 0; i < MAX_SURF; i++)
 		if(surf[i].used && surf[i].state == GPU_NEWER) download(&surf[i]);
@@ -3400,6 +3595,7 @@ void gx_ge_sync_vram(void){
 void gx_ge_reset(void){
 	int i;
 	tri_listo = 0;
+	charola = 0;   //Arreglo
 	wait_gpu();
 	for(i = 0; i < MAX_SURF; i++)
 		if(surf[i].used){ free(surf[i].tex); free(surf[i].ci); memset(&surf[i], 0, sizeof(surf[i])); }
@@ -3425,6 +3621,7 @@ void gx_ge_reset(void){
 void gx_ge_init(void){
 	Mtx id;
 	tri_listo = 0;
+	charola = 0;   //Arreglo
 	gx_tocado = 1;
 	tc_init(&tcache);
 	tcache.alloc = alloc_texture_slot;

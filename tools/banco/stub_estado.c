@@ -6,7 +6,13 @@
    esperas y cargas de TLUT entran en el orden en que llegan. Los punteros
    se cambian por el orden en que aparecen (no dependen de las direcciones).
    Con host_renderer_hook (main.c del CLI), el CLI dibuja por gx_ge.c y al
-   salir escribe "[GX] N dibujos, huella X". */
+   salir escribe "[GX] N dibujos, huella X".
+   Huella del FIFO (gx_ge.c compilado con -DWIISP_FIFO_TRAZA): cada vértice
+   que escribe put() entra en la primitiva de su GX_Begin; los triángulos
+   (GX_TRIANGLES) se cuentan de tres en tres con el estado de su GX_Begin, así
+   que la huella es la misma con un GX_Begin por triángulo o uno para muchos.
+   Las demás primitivas, enteras con su estado (las de blit no pasan por
+   put(): solo su tipo y número de vértices). */
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -27,6 +33,8 @@ enum { F_VTXDESC, F_CLEARVTX, F_NUMCHANS, F_NUMTEXGENS, F_TEXCOORDGEN, F_CHANCTR
        F_TEVKASEL, F_TEVKCOLOR, F_TEVOP, F_LOADTEX, F_N };
 
 static u32 slot[F_N][64], state_h, trace_h = 2166136261u, begins;
+static u32 fifo_h = 2166136261u, fifo_tris, fifo_prims, fifo_malos;
+static u32 prim_tipo, prim_n, prim_estado, prim_vistos, prim_h, tri_h;
 
 static u32 fnv(u32 h, u32 v){ int i; for(i = 0; i < 4; i++){ h ^= (v >> (i * 8)) & 0xFF; h *= 16777619u; } return h; }
 static u32 mix(int f, u32 idx, u32 h){ return fnv(fnv(fnv(0x811C9DC5u, (u32)f), idx), h) * 0x9E3779B1u; }
@@ -150,8 +158,34 @@ void PPCDCacheFlushAsync(void){}
 void PPCDCacheInvalidate(void){}
 void ps_guMtxIdentity(float *m){ int i; for(i = 0; i < 12; i++) m[i] = (i % 5 == 0) ? 1.0f : 0.0f; }
 void ps_guMtxScale(float *m, float x, float y, float z){ memset(m, 0, 48); m[0] = x; m[5] = y; m[10] = z; }
+static u32 fnvf(u32 h, float f){ return fnv(h, fbits(f)); }
+static void prim_cierra(void){
+	if(!prim_tipo && !prim_n) return;
+	if(prim_vistos && prim_vistos != prim_n) fifo_malos++;
+	if(prim_tipo != 0x90 || !prim_vistos){
+		fifo_h = fnv(fnv(fnv(fifo_h, prim_estado), prim_tipo | (prim_n << 8)), prim_h);
+		fifo_prims++;
+	}
+	prim_tipo = prim_n = prim_vistos = 0;
+	prim_h = 2166136261u;
+}
+void fifo_traza_vtx(float x, float y, float z, float s, float t, float q, u32 c0, u32 c1);
+void fifo_traza_vtx(float x, float y, float z, float s, float t, float q, u32 c0, u32 c1){
+	u32 h = fnv(fnv(fnvf(fnvf(fnvf(fnvf(fnvf(fnvf(2166136261u, x), y), z), s), t), q), c0), c1);
+	prim_vistos++;
+	if(prim_tipo == 0x90){
+		tri_h = (prim_vistos % 3 == 1) ? fnv(prim_estado, h) : fnv(tri_h, h);
+		if(prim_vistos % 3 == 0){ fifo_h = fnv(fnv(fifo_h, 0x90u), tri_h); fifo_tris++; }
+	} else prim_h = fnv(prim_h, h);
+}
+
 /* GX_Begin como el de libogc, y la huella del estado en cada dibujo */
 void GX_Begin(u8 prim, u8 fmt, u16 n){
+	prim_cierra();
+	prim_tipo = prim;
+	prim_n = n;
+	prim_estado = fnv(state_h, fmt);
+	prim_h = 2166136261u;
 	wgPipe->U8 = prim | (fmt & 7);
 	wgPipe->U16 = n;
 	trace_h = fnv(fnv(trace_h, state_h), prim | (fmt << 8) | ((u32)n << 16));
@@ -170,7 +204,12 @@ void GX_Begin(u8 prim, u8 fmt, u16 n){
 
 void gx_ge_init(void);
 void gx_ge_enable(int on);
-static void report(void){ printf("[GX] %u dibujos, huella %08X\n", begins, trace_h); fflush(stdout); }
+static void report(void){
+	prim_cierra();
+	printf("[GX] %u dibujos, huella %08X; FIFO %u triangulos, %u primitivas, %u mal contadas, huella %08X\n", begins, trace_h,
+	       fifo_tris, fifo_prims, fifo_malos, fifo_h);
+	fflush(stdout);
+}
 void host_renderer_hook(void){
 	gx_ge_init();
 	gx_ge_enable(1);

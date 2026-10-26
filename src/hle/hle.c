@@ -604,6 +604,16 @@ static void profile_ge_lines(const GeStats *g, const GeStats *b, u32 vblanks){
 		        pct(salt, g->es_gx - b->es_gx), opt_on[OPT_GE_VERIF] ? "se habria saltado (con ge_verificar se emite igual)" : "sin emitir",
 		        (unsigned)(g->es_tri - b->es_tri), pct(g->es_tri_listo - b->es_tri_listo, g->es_tri - b->es_tri));
 	}
+	if(opt_on[OPT_GE_CHAROLAS] && g->ch_llamadas != b->ch_llamadas)   //Arreglo
+		hle_log("[TIEMPOS] Charolas (ge_charolas): %u llamadas, %.0f%% %s la anterior (destinos, textura y estado de GX "
+		        "sin rehacer); sin charola abierta %u, con otra clave %u, textura que volver a buscar %u\n",
+		        (unsigned)(g->ch_llamadas - b->ch_llamadas),
+		        pct(opt_on[OPT_GE_VERIF] ? g->chv_llamadas - b->chv_llamadas : g->ch_siguen - b->ch_siguen, g->ch_llamadas - b->ch_llamadas),
+		        opt_on[OPT_GE_VERIF] ? "habrian seguido (con ge_verificar se rehace igual y se compara)" : "siguieron",
+		        (unsigned)(g->ch_sin - b->ch_sin), (unsigned)(g->ch_clave - b->ch_clave), (unsigned)(g->ch_textura - b->ch_textura));   //Arreglo
+	if(opt_on[OPT_GE_VERIF] && opt_on[OPT_GE_CHAROLAS])   //Arreglo
+		hle_log("[TIEMPOS] Verificacion de las charolas (ge_verificar): %u llamadas que habrian seguido la anterior comparadas, "
+		        "%u distintas\n", (unsigned)(g->chv_llamadas - b->chv_llamadas), (unsigned)(g->chv_malas - b->chv_malas));   //Arreglo
 	if(opt_on[OPT_GE_VERIF] && opt_on[OPT_GE_ESTADO_SUCIO])
 		hle_log("[TIEMPOS] Verificacion del estado de GX (ge_verificar): %u emisiones que se habrian saltado comparadas con "
 		        "libogc, %u distintas (%u sin poder leer libogc); triangulos sin preparar %u comparados, %u distintos\n",

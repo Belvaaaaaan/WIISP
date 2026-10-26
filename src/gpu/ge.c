@@ -438,6 +438,14 @@ static void __attribute__((constructor)) estado_tabla(void){
 	estado_grupo[GE_SCISSOR2] |= GE_SUCIO_P;   //Arreglo
 	estado_grupo[GE_REGION2] |= GE_SUCIO_P;   //Arreglo
 	estado_grupo[GE_DEPTHCLAMPENABLE] |= GE_SUCIO_P;   //Arreglo
+	estado_grupo[GE_FRAMEBUFPTR] |= GE_SUCIO_D;   //Arreglo
+	estado_grupo[GE_FRAMEBUFWIDTH] |= GE_SUCIO_D;   //Arreglo
+	estado_grupo[GE_ZBUFPTR] |= GE_SUCIO_D;   //Arreglo
+	estado_grupo[GE_ZBUFWIDTH] |= GE_SUCIO_D;   //Arreglo
+	estado_grupo[GE_FRAMEBUFPIXFORMAT] |= GE_SUCIO_D;   //Arreglo
+	estado_grupo[GE_MASKRGB] |= GE_SUCIO_D;   //Arreglo
+	estado_grupo[GE_MASKALPHA] |= GE_SUCIO_D;   //Arreglo
+	estado_grupo[GE_LIGHTMODE] |= GE_SUCIO_D;   //Arreglo
 }
 
 /* Pruebas: cambia los grupos de un comando (para meter fallos a propósito) */

@@ -22,6 +22,7 @@ static u32 page_stamp[RAM_PAGES + VRAM_PAGES];
 static u32 write_stamp;
 static int stamp_taken;   /* alguien guardó el sello actual: el próximo aviso lo sube */
 u32 mem_write_all_hints;
+u32 mem_write_notes;   //Arreglo
 
 /* Páginas [*first, *last] que toca un rango; 0 si no es RAM ni VRAM */
 static int page_span(u32 addr, u32 len, u32 *first, u32 *last){
@@ -59,6 +60,7 @@ void mem_note_write(u32 addr, u32 len){
 	u32 first, last, p, off = (addr & PSP_ADDR_MASK) - PSP_RAM_BASE;
 	/* El código predecodificado de esa memoria ya no vale */
 	if(off < psp_mem.ram_size && len) cpu_predec_written(off, len <= psp_mem.ram_size - off ? len : psp_mem.ram_size - off);
+	mem_write_notes++;   //Arreglo
 	if(!page_span(addr, len, &first, &last)) return;
 	if(stamp_taken){ write_stamp++; stamp_taken = 0; }
 	for(p = first; p <= last; p++) page_stamp[p] = write_stamp;
@@ -104,6 +106,7 @@ void mem_reset(void){
 		u32 p;
 		write_stamp++;
 		stamp_taken = 0;
+		mem_write_notes++;   //Arreglo
 		for(p = 0; p < RAM_PAGES + VRAM_PAGES; p++) page_stamp[p] = write_stamp;
 	}
 }

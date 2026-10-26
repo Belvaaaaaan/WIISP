@@ -627,7 +627,7 @@ static void null_begin(void){}
 static void null_tri(const GeVertex *a, const GeVertex *b, const GeVertex *c){ (void)a; (void)b; (void)c; }
 static void null_two(const GeVertex *a, const GeVertex *b){ (void)a; (void)b; }
 static void null_one(const GeVertex *a){ (void)a; }
-static const GeHwRenderer null_renderer = { null_begin, null_tri, null_two, null_two, null_two, null_one, null_begin };
+static const GeHwRenderer null_renderer = { null_begin, null_tri, null_two, null_two, null_two, null_one, null_begin, NULL };   //Arreglo
 
 void app_set_turbo(int on){ ge_turbo = on; }
 int  app_turbo(void){ return ge_turbo; }

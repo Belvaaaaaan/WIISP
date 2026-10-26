@@ -101,6 +101,8 @@ typedef struct TexCache {
 void tc_init(TexCache *tc);
 /* Índice de la textura lista para usar, o -1 si no se pudo decodificar */
 int  tc_lookup(TexCache *tc, const TcQuery *q);
+int  tc_again(TexCache *tc, int idx, int dry);   //Arreglo
+void tc_hit(TexCache *tc, int idx);   //Arreglo
 /* Libera una casilla (el dueño ya soltó sus datos) */
 void tc_free(TexCache *tc, int idx);
 int  tc_unstable_count(const TexCache *tc);

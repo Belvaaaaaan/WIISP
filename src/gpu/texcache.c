@@ -166,6 +166,22 @@ static void verified(TexCache *tc, TcEntry *e, const TcQuery *q, int idx, u32 st
 	take_samples(e);
 }
 
+int tc_again(TexCache *tc, int idx, int dry){   //Arreglo
+	TcEntry *e;
+	if(idx < 0 || idx >= TC_MAX) return 0;
+	e = &tc->e[idx];
+	if(!e->used || !e->current || need_check(tc, e) != TC_OK) return 0;
+	if(dry) return 1;
+	tc_hit(tc, idx);
+	return 1;
+}
+
+void tc_hit(TexCache *tc, int idx){   //Arreglo
+	tc->stats.lookups++;
+	tc->stats.quick++;
+	tc->e[idx].used_frame = tc->frame;
+}
+
 int tc_lookup(TexCache *tc, const TcQuery *q){
 	u32 b = key_bucket(&q->key), hash, stamp;
 	int i, cur = -1, idx = -1, why = TC_DUE, direct, unstable = 0;

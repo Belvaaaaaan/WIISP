@@ -21,7 +21,7 @@ static void n_tri(const GeVertex *a, const GeVertex *b, const GeVertex *c){ (voi
 static void n_two(const GeVertex *a, const GeVertex *b){ (void)a; (void)b; }
 static void n_point(const GeVertex *a){ (void)a; }
 static void n_flush(void){}
-static const GeHwRenderer null_hw = { n_begin, n_tri, n_two, n_two, n_two, n_point, n_flush };
+static const GeHwRenderer null_hw = { n_begin, n_tri, n_two, n_two, n_two, n_point, n_flush, NULL };   //Arreglo
 
 #define L_VERT 0x08700000u
 

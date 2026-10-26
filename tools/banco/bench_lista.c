@@ -7,6 +7,9 @@
    escenas 4 a 10: objetos de 4 llamadas con su caja (ver LEEME.md); 7 a 9
    con el viewport al doble (los planos de +-w fuera del scissor) y 8 a 10
    con vtype 0x11A (sus propios vertices)
+   escena 11: como una pelea de DBZ: 4 huesos y la matriz de mundo en cada
+   llamada, la textura con paleta una sola vez al principio (las llamadas
+   seguidas con el mismo estado: charolas)
    Con LUCES=1 en el entorno, dos luces encendidas (vtype con normal). Con
    prof_estado=1 escribe el censo de estado al final. */
 #include <stdio.h>
@@ -59,7 +62,7 @@ int main(int argc, char **argv){
 	/* La lista: reps llamadas */
 	start = lp = 0x08A00000;
 	nb = esc == 3 ? 8 : 4;
-	if(esc >= 4){
+	if((esc >= 4 && esc <= 10)){   //Arreglo
 		u8 *c = mem_ptr(0x08980000, 48);
 		for(k = 0; k < 8; k++)
 			for(j = 0; j < 3; j++){
@@ -67,13 +70,13 @@ int main(int argc, char **argv){
 				c[k * 6 + j * 2] = (u8)v;
 				c[k * 6 + j * 2 + 1] = (u8)(v >> 8);
 			}
-		if(esc == 5 || esc >= 7){ ge.proj[10] = -51.0f / 49.0f; ge.proj[14] = -100.0f / 49.0f; }
+		if(esc == 5 || (esc >= 7 && esc <= 10)){ ge.proj[10] = -51.0f / 49.0f; ge.proj[14] = -100.0f / 49.0f; }   //Arreglo
 	}
 	if(esc >= 7 && esc != 10){
 		ge.cmd[GE_VIEWPORTXSCALE] = f24(480); ge.cmd[GE_VIEWPORTYSCALE] = f24(-272);
 		ge.cmd[GE_DEPTHCLAMPENABLE] = esc == 7;
 	}
-	if(esc >= 8){
+	if((esc >= 8 && esc <= 10)){   //Arreglo
 		vt = 0x11A;
 		for(k = 0; k < 16; k++)
 			for(j = 0; j < 20; j++){
@@ -89,12 +92,12 @@ int main(int argc, char **argv){
 	}
 	for(i = 0; i < reps; i++){
 		static u32 salto;
-		if(esc >= 4 && i % 4 == 0){
+		if(esc >= 4 && esc <= 10 && i % 4 == 0){   //Arreglo
 			static const float m7[12] = { 3.0f, 0.0f, 6.0f, 0.0f, 0.02f, 0.0f, 0.0179f, 0.0f, -0.0089f, -1.0f, 0.0f, 3.0f };
 			static const float m8[12] = { 8.0f, 0.0f, 0.0f, 0.0f, 8.0f, 0.0f, 0.0f, 0.0f, 4.0f, -4.0f, -2.0f, -1.0f };
 			static const float m10[12] = { 24.0f, 0.0f, 0.0f, 0.0f, 8.0f, 0.0f, 0.0f, 0.0f, 4.0f, -12.0f, -2.0f, -1.0f };
 			cmd(GE_WORLDMATRIXNUMBER, 0);
-			if(esc >= 7) for(j = 0; j < 12; j++) cmd(GE_WORLDMATRIXDATA, f24((esc == 7 ? m7 : esc == 10 ? m10 : m8)[j] + (j == 9 ? 0.001f * (float)(i % 64) : 0.0f)));
+			if((esc >= 7 && esc <= 10)) for(j = 0; j < 12; j++) cmd(GE_WORLDMATRIXDATA, f24((esc == 7 ? m7 : esc == 10 ? m10 : m8)[j] + (j == 9 ? 0.001f * (float)(i % 64) : 0.0f)));   //Arreglo
 			else for(j = 0; j < 12; j++) cmd(GE_WORLDMATRIXDATA, f24(j == 11 ? (esc == 5 ? -55.0f : 0.0f) : j == 9 ? (esc == 6 ? 30.0f : 0.0f) + 0.001f * (float)(i % 64) : ge.world[j]));
 			cmd(GE_VERTEXTYPE, 0x100);
 			cmd(GE_BASE, 0x080000);
@@ -104,7 +107,13 @@ int main(int argc, char **argv){
 			salto = lp;
 			cmd(GE_BJUMP, 0);
 		}
-		if(esc >= 2 && esc <= 3){
+		if(esc == 11 && i == 0){   //Arreglo
+			cmd(GE_TEXMODE, 0); cmd(GE_TEXFORMAT, 3);   //Arreglo
+			cmd(GE_TEXADDR0, 0x900000); cmd(GE_TEXBUFWIDTH0, 64 | (0x08 << 16)); cmd(GE_TEXSIZE0, 6 | (6 << 8));   //Arreglo
+			cmd(GE_TEXFLUSH, 0);   //Arreglo
+			cmd(GE_CLUTFORMAT, 0xFF00); cmd(GE_CLUTADDR, 0x0F0000); cmd(GE_CLUTADDRUPPER, 0x080000); cmd(GE_LOADCLUT, 8);   //Arreglo
+		}   //Arreglo
+		if((esc >= 2 && esc <= 3) || esc == 11){   //Arreglo
 			for(k = 0; k < nb; k++){
 				cmd(GE_BONEMATRIXNUMBER, (u32)k * 12);
 				for(j = 0; j < 12; j++) cmd(GE_BONEMATRIXDATA, f24(ge.bone[k][j]));
@@ -112,7 +121,7 @@ int main(int argc, char **argv){
 			cmd(GE_WORLDMATRIXNUMBER, 0);
 			for(j = 0; j < 12; j++) cmd(GE_WORLDMATRIXDATA, f24(ge.world[j]));
 		}
-		if(esc >= 1){
+		if(esc >= 1 && esc != 11){   //Arreglo
 			cmd(GE_TEXMODE, 0); cmd(GE_TEXFORMAT, 3);
 			cmd(GE_TEXADDR0, 0x900000); cmd(GE_TEXBUFWIDTH0, 64 | (0x08 << 16)); cmd(GE_TEXSIZE0, 6 | (6 << 8));
 			cmd(GE_TEXFLUSH, 0);
@@ -120,9 +129,9 @@ int main(int argc, char **argv){
 		}
 		cmd(GE_VERTEXTYPE, vt);
 		cmd(GE_BASE, 0x080000);
-		cmd(GE_VADDR, (esc >= 8 ? 0x940000 : 0x900000) + (u32)(i % 16) * 0x400);
+		cmd(GE_VADDR, ((esc >= 8 && esc <= 10) ? 0x940000 : 0x900000) + (u32)(i % 16) * 0x400);   //Arreglo
 		cmd(GE_PRIM, (GE_PRIM_TRIANGLE_STRIP << 16) | 20);
-		if(esc >= 4 && i % 4 == 3) mem_write32(salto, (GE_BJUMP << 24) | (lp & 0xFFFFFF));
+		if(esc >= 4 && esc <= 10 && i % 4 == 3) mem_write32(salto, (GE_BJUMP << 24) | (lp & 0xFFFFFF));   //Arreglo
 	}
 	end = lp;
 	bench_run_list(start, end);

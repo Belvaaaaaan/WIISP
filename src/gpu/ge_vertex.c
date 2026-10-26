@@ -1523,6 +1523,10 @@ static void process_line(const GeClipVertex *v0, const GeClipVertex *v1){
 }
 
 static void add_tri_flat(const GeClipVertex *a, const GeClipVertex *b, const GeClipVertex *c, const GeClipVertex *provoking){
+	if(ge_charola_tris){   //Arreglo
+		ge_raster_triangle_c(&a->v, &b->v, &c->v, (ge.cmd[GE_SHADEMODE] & 1) ? &c->v : &provoking->v);   //Arreglo
+		return;   //Arreglo
+	}   //Arreglo
 	if(!(ge.cmd[GE_SHADEMODE] & 1)){
 		/* Sombreado plano: así el orden del recorte no importa */
 		GeVertex c2 = c->v;
@@ -1534,6 +1538,10 @@ static void add_tri_flat(const GeClipVertex *a, const GeClipVertex *b, const GeC
 
 /* add_tri_flat con el área ya comprobada (positiva) */
 static void add_tri_ccw(const GeClipVertex *a, const GeClipVertex *b, const GeClipVertex *c, const GeClipVertex *provoking){
+	if(ge_charola_tris){   //Arreglo
+		ge_raster_triangle_ccw_c(&a->v, &b->v, &c->v, (ge.cmd[GE_SHADEMODE] & 1) ? &c->v : &provoking->v);   //Arreglo
+		return;   //Arreglo
+	}   //Arreglo
 	if(!(ge.cmd[GE_SHADEMODE] & 1)){
 		GeVertex c2 = c->v;
 		c2.color0 = provoking->v.color0;
@@ -1652,6 +1660,7 @@ static void process_triangle(const GeClipVertex *v0, const GeClipVertex *v1, con
 		return;
 	}
 	ge_tri_flags |= GE_TRI_CLIPPED;
+	if(ge_charola_tris) ge_raster_charola_vaciar();   //Arreglo
 
 	/* Recorte como el GE (gpu/probe exp43, exp44): con un vértice fuera (o),
 	   el cuadrilátero se parte desde el vértice anterior (p) en el orden
@@ -1679,10 +1688,15 @@ static void process_triangle(const GeClipVertex *v0, const GeClipVertex *v1, con
 		tris[0][0] = src[in]; tris[0][1] = &made[0]; tris[0][2] = &made[1];
 		num_tris = 1;
 	}
-	for(i = 0; i < num_tris; i++){
-		if(outside_range(tris[i][0]) || outside_range(tris[i][1]) || outside_range(tris[i][2])) continue;
-		add_tri_flat(tris[i][0], tris[i][1], tris[i][2], provoking);
-	}
+	{   //Arreglo
+		int charola = ge_charola_tris;   //Arreglo
+		ge_charola_tris = 0;   //Arreglo
+		for(i = 0; i < num_tris; i++){
+			if(outside_range(tris[i][0]) || outside_range(tris[i][1]) || outside_range(tris[i][2])) continue;
+			add_tri_flat(tris[i][0], tris[i][1], tris[i][2], provoking);
+		}
+		ge_charola_tris = charola;   //Arreglo
+	}   //Arreglo
 }
 
 /* --- Ensamblado (SubmitPrimitive) ------------------------------------------ */
@@ -1848,6 +1862,7 @@ static inline const GeClipVertex *vsource_ref(const VSource *s, int vtx, GeClipV
    se reutiliza en la siguiente */
 static void window_keep(const GeClipVertex **w){
 	int i;
+	if(ge_charola_tris) ge_raster_charola_vaciar();   //Arreglo
 	for(i = 0; i < 4; i++){
 		if(w[i] != &data_[i]) copy_cv(&data_[i], w[i]);
 		w[i] = &data_[i];
@@ -2082,6 +2097,7 @@ static void submit_primitive_body(const VSource *vr, u32 prim_type, int vertex_c
 	} else prim_type = prev_prim_;
 
 	ge_raster_begin();
+	ge_charola_tris = refs && (vr->batch || vr->use_cache) && ge_hw && ge_hw->triangles && opt_on[OPT_GE_CHAROLAS_ENVIO];   //Arreglo
 
 	/* Se permiten 0 vértices con data_index_ > 0: modo inmediato */
 	switch(prim_type){
@@ -2205,6 +2221,7 @@ static void submit_primitive_body(const VSource *vr, u32 prim_type, int vertex_c
 	default:
 		break;
 	}
+	if(ge_charola_tris){ ge_raster_charola_vaciar(); ge_charola_tris = 0; }   //Arreglo
 }
 
 static void load_morph_weights(void){

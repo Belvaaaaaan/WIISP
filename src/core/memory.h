@@ -127,6 +127,7 @@ void mem_note_write(u32 addr, u32 len);
 /* Sin rango (sceKernelDcacheWritebackAll): solo cuenta */
 void mem_note_write_all(void);
 extern u32 mem_write_all_hints;
+extern u32 mem_write_notes;   //Arreglo
 u32  mem_write_stamp_take(void);
 int  mem_written_since(u32 addr, u32 len, u32 stamp);
 

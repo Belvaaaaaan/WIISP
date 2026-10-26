@@ -8,25 +8,39 @@ Las de savedata no entran (comparten la carpeta de partidas). Para ver en
 qué dibujo y en qué función empiezan a ser distintas: GX_TRAZA=1 (ver
 stub_estado.c) con un programa y diff de lo que sale por stderr.
 
-    ab_versiones.py CLI_GX_A CLI_GX_B PSPAUTOTESTS LISTA [hilos]
+    ab_versiones.py CLI_GX_A CLI_GX_B PSPAUTOTESTS LISTA [hilos] [--a OPCION=V]... [--b OPCION=V]... [--fifo]
+
+--a/--b: interruptores para cada lado (el mismo CLI con --opt distintos
+sirve para un A/B de un interruptor del renderizador de GX). --fifo: de la
+línea [GX] solo cuenta la huella del FIFO (los triángulos con su estado,
+igual con un GX_Begin por triángulo o uno para muchos: ge_charolas_envio).
 
 SPDX-License-Identifier: GPL-2.0-or-later
 """
 import sys, subprocess, re, pathlib, concurrent.futures as cf
 
-a_cli, b_cli, root, lista = sys.argv[1], sys.argv[2], pathlib.Path(sys.argv[3]), sys.argv[4]
-hilos = int(sys.argv[5]) if len(sys.argv) > 5 else 4
+args = sys.argv[1:]
+opts = {'--a': [], '--b': []}
+fifo = '--fifo' in args
+if fifo: args.remove('--fifo')
+for k in ('--a', '--b'):
+    while k in args:
+        i = args.index(k); opts[k] += ['--opt', args[i + 1]]; del args[i:i + 2]
+a_cli, b_cli, root, lista = args[0], args[1], pathlib.Path(args[2]), args[3]
+hilos = int(args[4]) if len(args) > 4 else 4
 tests = [l.strip() for l in open(lista) if l.strip() and not l.startswith('#') and 'savedata' not in l]
 
 
-def run(cli, t):
-    r = subprocess.run(['qemu-ppc', '-E', 'MALLOC_PERTURB_=165', cli, '--run', '--quiet', '--frames', '2400', '--root', str(root),
-                        str(root / 'tests' / (t + '.prx'))], capture_output=True, timeout=1200)
-    return r.stdout
+def run(cli, t, extra):
+    r = subprocess.run(['qemu-ppc', '-E', 'MALLOC_PERTURB_=165', cli, '--run', '--quiet', '--frames', '2400', '--root', str(root)] +
+                       extra + [str(root / 'tests' / (t + '.prx'))], capture_output=True, timeout=1200)
+    out = r.stdout
+    if fifo: out = re.sub(rb'\[GX\] [^;]*; ', b'[GX] ', out)
+    return out
 
 
 def both(t):
-    a, b = run(a_cli, t), run(b_cli, t)
+    a, b = run(a_cli, t, opts['--a']), run(b_cli, t, opts['--b'])
     ga, gb = re.findall(rb'\[GX\] .*', a), re.findall(rb'\[GX\] .*', b)
     return t, a == b, ga[-1].decode() if ga else '', gb[-1].decode() if gb else ''
 
