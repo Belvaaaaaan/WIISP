@@ -335,6 +335,7 @@ u32 ge_test_census_group(u32 cmd, u32 g);
 int ge_test_run_list(u32 pc, u32 end, u32 *fin);   //Arreglo
 int ge_test_cmd_con_caso(u32 cmd);   //Arreglo
 int ge_test_cmd_matriz(u32 cmd);   //Arreglo
+void ge_test_romper_racha(int modo);   //Arreglo
 int ge_test_pico(u32 pc, u32 stall, u32 vaddr_tras);   //Arreglo
 
 /* Texels del nivel `level` de la textura actual (estado de ge_raster_begin)

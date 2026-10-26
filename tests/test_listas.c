@@ -358,6 +358,29 @@ void test_listas(void){
 		CHECK_EQ(malos, 0u);
 		CHECK_EQ(verif_mal, 0u);
 		CHECK(rachas > 1500);
+		{
+			u32 modo, vistos[4] = { 0, 0, 0, 0 };
+			opt_on[OPT_GE_CMD_HUESOS] = 1;
+			opt_on[OPT_GE_VERIF] = 1;
+			for(modo = 1; modo <= 3; modo++){
+				Foto f;
+				for(i = 0; i < 256; i++) ini.cmd[i] = lrnd() & 0xFFFFFF;
+				lp = 0x08D60000u;
+				lcmd(GE_BONEMATRIXNUMBER, 0);
+				for(i = 0; i < 12; i++) lcmd(GE_BONEMATRIXDATA, 0x3F8000u);
+				lcmd(GE_NOP, 0);
+				ge_test_romper_racha((int)modo);
+				correr(&ini, 0x08D60000u, lp, 1, &f);
+				ge_test_romper_racha(0);
+				vistos[modo] = ge_stats.ch_verif_bad;
+			}
+			opt_on[OPT_GE_VERIF] = 0;
+			printf("  con ge_verificar y el atajo estropeado a proposito: huesos %u, numero %u, comando actual %u rachas distintas\n",
+			       (unsigned)vistos[1], (unsigned)vistos[2], (unsigned)vistos[3]);
+			CHECK_EQ(vistos[1], 1u);
+			CHECK_EQ(vistos[2], 1u);
+			CHECK_EQ(vistos[3], 1u);
+		}
 		CHECK(rcmds > 40000);
 		CHECK(verif_n > 500);
 	}

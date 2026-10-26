@@ -2996,22 +2996,26 @@ Metodología acordada (detalle en `docs/HOJA_DE_RUTA.md`): primero medir
   `ge_bbox_llamada` y el censo `prof_huesos` (0.5.23) y la prueba de cada
   llamada más barata (`ge_bbox_orden`, `ge_bbox_aabb`, 0.5.23.1) y la
   banda de guarda y el repaso por triángulos (`ge_bbox_guarda`,
-  `ge_bbox_triangulos`, 0.5.23.2).
+  `ge_bbox_triangulos`, 0.5.23.2; el repaso, apagado desde la 0.5.23.3) y
+  las rachas de huesos (`ge_cmd_huesos`, 0.5.23.3).
 - Herramientas para medir sin el Wii (banco de qemu con el código de
   devkitPPC, perfil por función, psq_l emulado, A/B) y para leer los
   registros del Wii (`ventanas.py`): `tools/banco/LEEME.md`. El entorno
   (devkitPPC, qemu, pspautotests, PPSSPP): `tools/setup_entorno.sh`.
-- **Siguiente:** leer los registros de la 0.5.23.2 (`ventanas.py sin=...
-  con=... verif=... censo=...`):
-  - con frente a sin: velocidad de las peleas y las llamadas fuera por la
-    banda y por sus triángulos;
-  - verif: 0 distintos;
-  - censo: los ms del repaso y el reparto de las llamadas que no dibujan
-    nada. Si el repaso cuesta más de lo que salta, se apaga (su
-    interruptor) o se deja solo para las que no se ven por su primer
-    vértice.
-  Después, el punto 3 (0.5.23.3, rachas de huesos) y el 4 (0.5.23.4,
-  `ge_charolas` y el diseño del IR). Lo que sigue es de antes de la 0.5.23:
+- **Siguiente:** leer los registros de la 0.5.23.3 (`ventanas.py sin=...
+  con=... verif=... imagenes=...`):
+  - con frente a sin: velocidad de las peleas, "M ciclos (PMC)", "ciclos
+    por comando" y "ciclos por llamada (comandos)" (deberían bajar), y las
+    rachas de huesos (filas nuevas; en la pelea, ~120 mil rachas y ~4,6 M
+    comandos, datos y números, por ventana si el censo de la 0.5.23 sigue
+    valiendo);
+  - verif: "Verificacion de las rachas de huesos" con 0 distintas (y todo
+    lo demás a 0);
+  - imagenes: las 12 capturas de siempre (9E8BC705 ... E9392291).
+  Después, el punto 4 (0.5.23.4, 1.4 `ge_charolas` y el diseño del IR).
+  Para las mutaciones, `tools/banco/mutar.py` (con `--solo` de las suites
+  del código tocado y `--asan` para el repaso de las que sobreviven).
+  Lo que sigue es de antes de la 0.5.23:
   Si la prueba de cada llamada cuesta más de lo que salta, se apaga
   `ge_bbox_llamada` (su interruptor) o se limita a las cajas dudosas
   grandes. Después, 1.4 `ge_charolas` (juntar llamadas: lo que queda

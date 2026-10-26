@@ -1207,6 +1207,10 @@ static u32 racha_huesos(const u8 *ram, u32 off, u32 n){   //Arreglo
 	return n;
 }
 
+static int racha_romper;   //Arreglo
+
+void ge_test_romper_racha(int modo){ racha_romper = modo; }   //Arreglo
+
 static u32 __attribute__((noinline)) verificar_huesos(DisplayList *l, const u8 *ram, u32 off, u32 n){   //Arreglo
 	static float antes[96], atajo[96];
 	u32 pc = l->pc, c2a = ge.cmd[GE_BONEMATRIXNUMBER], c2b = ge.cmd[GE_BONEMATRIXDATA], cur = ge.cur_cmd, cmds = ge_stats.commands;
@@ -1220,6 +1224,9 @@ static u32 __attribute__((noinline)) verificar_huesos(DisplayList *l, const u8 *
 	ge_stats.ch_cmds -= n;
 	memcpy(atajo, ge.bone, sizeof(atajo));
 	r2a = ge.cmd[GE_BONEMATRIXNUMBER]; r2b = ge.cmd[GE_BONEMATRIXDATA]; rcur = ge.cur_cmd; rcmds = ge_stats.commands; rsucio = ge_sucio;
+	if(racha_romper == 1) atajo[0] = -atajo[0] - 1.0f;
+	if(racha_romper == 2) r2a ^= 1;
+	if(racha_romper == 3) rcur ^= 1;
 	memcpy(ge.bone, antes, sizeof(antes));
 	ge.cmd[GE_BONEMATRIXNUMBER] = c2a; ge.cmd[GE_BONEMATRIXDATA] = c2b; ge.cur_cmd = cur; ge_stats.commands = cmds; ge_sucio = sucio;
 	for(i = 0; i < n; i++){

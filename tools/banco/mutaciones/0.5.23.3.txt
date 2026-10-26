@@ -177,3 +177,24 @@
 	for(i = 1; i < n; i++){
 		l->pc = pc + 4 * i;
 ===
+=== verificar sin comparar el numero
+@ src/gpu/ge.c
+<<<
+	malo = memcmp(atajo, ge.bone, sizeof(atajo)) || ge.cmd[GE_BONEMATRIXNUMBER] != r2a || ge.cmd[GE_BONEMATRIXDATA] != r2b ||
+>>>
+	malo = memcmp(atajo, ge.bone, sizeof(atajo)) || ge.cmd[GE_BONEMATRIXDATA] != r2b ||
+===
+=== verificar sin comparar el comando actual
+@ src/gpu/ge.c
+<<<
+	       ge.cur_cmd != rcur || ge_stats.commands != rcmds || ge_sucio != rsucio || ge.vaddr != vaddr || ge.iaddr != iaddr ||
+>>>
+	       ge_stats.commands != rcmds || ge_sucio != rsucio || ge.vaddr != vaddr || ge.iaddr != iaddr ||
+===
+=== verificar sin deshacer los huesos
+@ src/gpu/ge.c
+<<<
+	memcpy(ge.bone, antes, sizeof(antes));
+>>>
+	(void)antes;
+===
