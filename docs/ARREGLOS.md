@@ -84,6 +84,8 @@ se arregló o cambió y una descripción breve. El detalle está en
 - `core/opt.h`, `core/opt.c`: `ge_charolas` (estaba reservado),
   `ge_charolas_sprites`, `ge_charolas_envio`, `ge_charolas_tiras`,
   `ge_charolas_ge`, `ge_clut_igual` y `ge_estado_clave`.
+- `tests/test_listas.c`: prueba de `ge_clut_igual` (la misma paleta, más
+  grande, cambiada dentro y fuera de lo que se carga, más pequeña).
 - `tests/test_vdec.c`: el renderizador que lo apunta todo recibe también
   las tandas; vueltas nuevas sin el envío por charolas y sin las tiras,
   iguales a la referencia y entre sí (contadores incluidos).

@@ -3114,15 +3114,26 @@ periodo y una entrada contigua; si no, `tc_again`.
 
 Banco de qemu (`bench_lista`, código de devkitPPC, instrucciones por
 llamada sin el psq_l emulado; cada columna añade un interruptor a la
-anterior; siempre los seis en la línea de órdenes, ver LEEME):
+anterior; siempre los siete en la línea de órdenes, ver LEEME):
 
-TABLA_BANCO
+| Escena | Apagado | `ge_charolas` | `_sprites` | `_envio` | `_ge` | `_tiras` | `ge_clut_igual` | `ge_estado_clave` | Total |
+|---|---|---|---|---|---|---|---|---|---|
+| 11 (DBZ, 0xC301) | 25.534 | 23.985 | 23.985 | 21.390 | 21.213 | 19.357 | 19.357 | 19.357 | −24,2 % |
+| 12 (sprites, vtype 0) | 4.352 | 4.363 | 2.979 | 2.979 | 2.802 | 2.802 | 2.802 | 2.802 | −35,6 % |
+| 0 (0x11A, solo la primitiva) | 18.148 | 16.599 | 16.599 | 14.004 | 13.827 | 11.980 | 11.980 | 11.980 | −34,0 % |
+| 1 (+ textura y paleta en cada llamada) | 19.763 | 19.937 | 19.937 | 17.481 | 17.304 | 15.457 | 13.592 | 13.592 | −31,2 % |
+| 2 (+ 4 huesos y la matriz de mundo) | 24.520 | 24.694 | 24.694 | 22.238 | 22.061 | 20.214 | 18.349 | 18.349 | −25,2 % |
+
+Solos, sin charolas: `ge_clut_igual` −3 en las escenas 1 y 2 (no vuelve a
+resumir la paleta) y `ge_estado_clave` 0 (en el banco, cada textura se
+emite una vez).
 
 - La escena 11 (como la pelea de DBZ: 4 huesos y la matriz de mundo en
   cada llamada, una textura): −24 %. La escena 12 (sprites de uno en uno):
-  −36 %. La escena 1 (la textura y la paleta en cada llamada, con los
-  mismos valores): sin `ge_clut_igual` la charola nunca sigue (+174 con
-  `ge_charolas` sola: apuntarla sin usarla) y con él −31 % en total.
+  −36 %. En las escenas 1 y 2 (la textura y la paleta en cada llamada, con
+  los mismos valores) sin `ge_clut_igual` la charola nunca sigue (+174 con
+  `ge_charolas` sola: apuntarla sin usarla, y lo que bajan las demás
+  columnas es del envío y las tiras); con él, −31 % y −25 % en total.
 - En la escena 11 lo que queda por llamada fuera de vértices y triángulos
   es poco (`gx_begin`, `ch_textura`, `ge_raster_begin`, `vsource_init` y
   el vaciado de la lista suman ~270): el resto es leer vértices (~383 por
@@ -3140,7 +3151,56 @@ TABLA_BANCO
 
 Verificación:
 
-VERIFICACION
+- Pruebas (x86 con ASan, PowerPC y devkitPPC bajo qemu): 167.152
+  comprobaciones, 0 fallos en las tres; huellas de test_vdec las de
+  siempre (4D4A1D8B, 0657B177, B3A2BCD3). `test_vdec`: vueltas nuevas sin
+  el envío por charolas y sin las tiras, iguales a la referencia y entre sí
+  (contadores incluidos). `test_listas`: prueba de `ge_clut_igual` (la
+  misma paleta, más grande, cambiada dentro y fuera de lo que se carga,
+  más pequeña; con y sin el interruptor).
+- pspautotests 275/275.
+- Banco de las charolas (`banco_charolas.sh`, código de devkitPPC sobre la
+  libogc que guarda el estado, huella del FIFO): los siete apagados contra
+  los siete encendidos, 60 semillas × `CAMBIOS` 2, 3, 5, 10, 15 y 40: 0
+  distintas; lo mismo con `ge_verificar` en las dos (modo `verif`): 0
+  distintas y todos los contadores de la verificación a 0. Encontró el
+  fallo del atajo de la textura (arreglado) y el falso aviso de
+  `ch_verif_listo` (arreglado).
+- A/B con el CLI de GX en las 555 pspautotests (`ab_versiones.py`), 0
+  distintos en todas: la 0.5.23.3 contra la 0.5.23.4 con los siete
+  apagados (`--sin-fifo`); los siete apagados contra encendidos (`--fifo`);
+  cada interruptor añadido sobre el anterior (`ge_charolas`, sprites,
+  envío, `ge_charolas_ge`, tiras; con el código de antes de
+  `ge_clut_igual`); `ge_clut_igual` y `ge_estado_clave`, con y sin
+  charolas.
+- A/B en x86 (`ab_opt.py`, exacto y MR, 572 programas) de `ge_charolas_ge`
+  y `ge_clut_igual` juntos: los de siempre (`io/`, `malloc`, savedata) a
+  la vez; de uno en uno, 0 distintos (el control `prof_vertices`, que solo
+  mide, sale con `malloc/malloc` distinto).
+- `ge_verificar` con el CLI de GX en las 110 de `gpu/` (exacto y MR): 0
+  líneas `[VERIF]` (antes de `ge_estado_clave`, 9 falsos avisos en 5
+  programas).
+- Mutaciones:
+  - GE (`mutaciones/0.5.23.4.txt`, `mutar.py`, 31): 25 detectadas
+    (las 4 de `ge_clut_igual` por la prueba nueva de `test_listas`) y 6
+    equivalentes: `WNEG` (redundante con el recorte), el redondeo de la
+    tijera y 4 vaciados de la lista redundantes.
+  - GX (`mutaciones/0.5.23.4_gx.txt`, `mutar_gx.py` contra el banco, 36):
+    25 detectadas; 8 equivalentes (la clave sin el grupo D: todo comando de
+    D también está en R y sube `ge_raster_gen`; no borrar D o no apuntar
+    desde los sprites, solo velocidad; `targets_dirty` en `gx_begin`,
+    `set_pf` y `blit`: cortes redundantes; apuntar desde líneas y puntos y
+    `ch_spr` sin volver a 0, que da lo mismo); y las 3 del verificador o de
+    `ge_estado_clave` (no cambian lo que sale, solo lo que ve
+    `ge_verificar`).
+  - Con `mutar_gx.py --verif` (lo que vería `ge_verificar` en el Wii): ve
+    las de la clave (rasterizador, paleta), apuntar sin dibujar,
+    `tc_again` sin `need_check`, el envío, `ge_clut_igual`, la clave de
+    antes de emitir y la comprobación pendiente sin quitar. No ve el código
+    que solo corre al seguir la charola (`ch_textura`, la textura pendiente
+    de los sprites, `mem_write_notes`): con `ge_verificar` esa llamada se
+    rehace entera. Eso lo cubren el banco y los A/B.
+- Compilación para el Wii: `wiisp.dol` 0.5.23.4.
 
 Autotest (4 registros y un `.capturas.txt`; `prof_tirones`,
 `prof_ventana_juego`, `ventana 600` y `ge_bbox_triangulos 0`):
