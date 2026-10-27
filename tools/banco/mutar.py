@@ -76,7 +76,9 @@ def base(var, salida, hilos):
 def enlazar(var, dirobj, salida_bin, cambio=None):
     v = VARIANTES[var]
     objs = [objeto(dirobj, f) for f in fuentes()]
-    if cambio: objs = [cambio[1] if o == objeto(dirobj, cambio[0]) else o for o in objs]
+    if cambio:
+        cambios = cambio if isinstance(cambio, dict) else {cambio[0]: cambio[1]}
+        objs = [next((n for f, n in cambios.items() if o == objeto(dirobj, f)), o) for o in objs]
     r = subprocess.run([v['cc']] + v['flags'] + ['-o', salida_bin] + objs + v['ld'], cwd=RAIZ, capture_output=True, text=True)
     return r.returncode == 0, r.stderr
 
@@ -103,6 +105,22 @@ def mutar(var, dirobj, salida, k, m, solo, limite):
     msrc = os.path.join(d, m['archivo'])
     os.makedirs(os.path.dirname(msrc), exist_ok=True)
     open(msrc, 'w', encoding='utf-8').write(src.replace(m['antes'], m['despues']))
+    if m['archivo'].endswith('.h'):
+        # Una cabecera: se recompilan los .c que la incluyen, con la copia mutada delante
+        nombre = os.path.basename(m['archivo'])
+        usan = [f for f in fuentes() if re.search(r'#include\s+"([^"]*/)?' + re.escape(nombre) + '"',
+                                                    open(os.path.join(RAIZ, f), encoding='utf-8', errors='replace').read())]
+        if not usan: return 'sin quien la incluya', 0, ''
+        cambios = {}
+        for i, f in enumerate(usan):
+            o = os.path.join(d, 'mutado%d.o' % i)
+            ok, err = compilar(var, f, o, ['-iquote', os.path.join(d, 'src'), '-iquote', os.path.dirname(msrc)])
+            if not ok: return 'no compila', 0, err.strip().splitlines()[0] if err.strip() else ''
+            cambios[f] = o
+        binario = os.path.join(d, 'tests')
+        ok, err = enlazar(var, dirobj, binario, cambios)
+        if not ok: return 'no enlaza', 0, err.strip().splitlines()[-1] if err.strip() else ''
+        return correr(var, binario, solo, limite)
     mobj = os.path.join(d, 'mutado.o')
     ok, err = compilar(var, msrc, mobj, ['-iquote', os.path.dirname(os.path.join(RAIZ, m['archivo']))])
     if not ok: return 'no compila', 0, err.strip().splitlines()[0] if err.strip() else ''
@@ -124,7 +142,7 @@ def main():
     solo = opcion('--solo'); hilos = int(opcion('--hilos', str(os.cpu_count() or 4)))
     estas = opcion('--solo-estas'); asan = bandera('--asan'); ppc = bandera('--ppc')
     muts = leer_mutaciones(args[0])
-    if estas: muts = [m for m in muts if m['nombre'] in estas.split(',')]
+    if estas: muts = [m for m in muts if m['nombre'] in estas.split('|' if '|' in estas else ',')]
     salida = os.path.join(os.environ.get('SALIDA', '/tmp/banco'), 'mutar')
     t0 = time.time()
     dirobj = base('o2', salida, hilos)

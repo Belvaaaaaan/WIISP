@@ -448,6 +448,8 @@ static void __attribute__((constructor)) estado_tabla(void){
 	estado_grupo[GE_LIGHTMODE] |= GE_SUCIO_D;   //Arreglo
 }
 
+u32 ge_grupo_de(u32 cmd){ return estado_grupo[cmd & 0xFF]; }   //Arreglo
+
 /* Pruebas: cambia los grupos de un comando (para meter fallos a propósito) */
 u32 ge_test_census_group(u32 cmd, u32 g){
 	u32 old = estado_grupo[cmd & 0xFF];

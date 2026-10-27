@@ -44,6 +44,10 @@ def parse(path):
         if m: w.update(ch_ll=int(m.group(1)), ch_pct=int(m.group(2)))
         m = re.search(r'Charolas \(ge_charolas\):.*?sin charola abierta (\d+), con otra clave (\d+), textura que volver a buscar (\d+)', l)
         if m: w.update(ch_sin=int(m.group(1)), ch_clave=int(m.group(2)), ch_tex=int(m.group(3)))
+        m = re.search(r'indices CI8 calculados (\d+) \((\d+) ms(?:; esperando a la GPU (\d+) ms)?', l)
+        if m: w.update(ci8_n=int(m.group(1)), ci8_ms=int(m.group(2)), **({'ci8_esp': int(m.group(3))} if m.group(3) else {}))
+        m = re.search(r'Repetidas \(prof_repetidos\): .*?iguales a otra del mismo cuadro .*?\(([\d.]+)%;.*?otras matrices o estado: \d+ llamadas, \d+ vertices \(([\d.]+)%\); solo los mismos datos: \d+ llamadas, \d+ vertices \(([\d.]+)%\); iguales a una del cuadro anterior: \d+ llamadas, \d+ vertices \(([\d.]+)%\)', l)
+        if m: w.update(rp_igual=num(m.group(1)), rp_huesos=num(m.group(2)), rp_datos=num(m.group(3)), rp_ant=num(m.group(4)))
         m = re.search(r'Verificacion de las charolas \(ge_verificar\): (\d+) llamadas.*?comparadas, (\d+) distintas', l)
         if m: w.update(chv=int(m.group(1)), chv_mal=int(m.group(2)))
         m = re.search(r'Envio por charolas \(ge_charolas_envio\): (\d+) tandas, (\d+) triangulos.*?y (\d+) por el camino', l)
@@ -74,6 +78,12 @@ cols = [('real', 's reales', '{:7.1f}'), ('vel', '% velocidad', '{:7.1f}'), ('ti
         ('ch_sin', 'sin charola abierta', '{:7d}'), ('ch_clave', 'con otra clave', '{:7d}'),
         ('ch_tex', 'textura que volver a buscar', '{:7d}'), ('chv', 'charolas comparadas (ge_verificar)', '{:7d}'),
         ('chv_mal', 'charolas distintas (tiene que ser 0)', '{:7d}'),
+        ('ci8_n', 'indices CI8 calculados', '{:7d}'), ('ci8_ms', 'ms en los indices CI8', '{:7d}'),
+        ('ci8_esp', 'de ellos esperando a la GPU', '{:7d}'),
+        ('rp_igual', '% vertices como otra llamada del cuadro', '{:7.1f}'),
+        ('rp_huesos', '% mismos datos y huesos, otras matrices', '{:7.1f}'),
+        ('rp_datos', '% solo los mismos datos', '{:7.1f}'),
+        ('rp_ant', '% como una del cuadro anterior', '{:7.1f}'),
         ('ce_tandas', 'tandas (ge_charolas_envio)', '{:7d}'), ('ce_juntos', 'miles de triangulos juntos', '{:7.0f}'),
         ('ce_sueltos', 'miles de triangulos sueltos', '{:7.0f}')]
 print('ventana     ' + ''.join(f'{k[:7]:>7}' for k, _ in runs))

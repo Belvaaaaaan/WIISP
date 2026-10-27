@@ -18,6 +18,7 @@
 #define WIISP_GX_TILES_H
 
 #include <stdint.h>
+#include <string.h>   //Arreglo
 
 /* Byte (x, y) de una textura RGBA8 de GX de `w` texels de ancho (múltiplo
    de 4): ahí van alfa y rojo; 32 bytes más allá, verde y azul */
@@ -102,6 +103,70 @@ static inline void gx_ci8_from_rgba8_565(uint8_t *dst, int dst_w, const uint8_t 
 								d[r * 8 + k * 4 + c] = (uint8_t)((v >> shift) & mask);
 							}
 					}
+				}
+			}
+		}
+	}
+}
+
+static inline uint32_t gx_be32(const uint8_t *p){   //Arreglo
+	uint32_t w;
+	memcpy(&w, p, 4);
+#if __BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__   //Arreglo
+	w = __builtin_bswap32(w);
+#endif   //Arreglo
+	return w;
+}
+
+static inline void gx_put_be32(uint8_t *p, uint32_t w){   //Arreglo
+#if __BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__   //Arreglo
+	w = __builtin_bswap32(w);
+#endif   //Arreglo
+	memcpy(p, &w, 4);
+}
+
+static inline void gx_ci8_from_rgba8_565_palabras(uint8_t *dst, int dst_w, const uint8_t *src, int src_w, int h,   //Arreglo
+                                                  unsigned shift, unsigned mask){
+	int tiles8 = dst_w >> 3, src_tiles = src_w >> 2, ty, tx, r, k, conr = shift < 5, par = shift <= 13;
+	uint32_t m2 = mask | (mask << 16);
+	for(ty = 0; ty < h >> 2; ty++){
+		const uint8_t *srow = src + ((ty * src_tiles) << 6);
+		uint8_t *d = dst + ((ty * tiles8) << 5);
+		for(tx = 0; tx < tiles8; tx++, d += 32){
+#ifdef GEKKO   //Arreglo
+			__asm__ volatile("dcbz 0, %0" : : "r"(d) : "memory");
+#endif   //Arreglo
+			for(k = 0; k < 2; k++){
+				int x0 = tx * 8 + k * 4;
+				uint8_t *o = d + k * 4;
+				const uint8_t *ar, *gb;
+				if(x0 >= src_w){
+					for(r = 0; r < 4; r++) gx_put_be32(o + r * 8, 0);
+					continue;
+				}
+				ar = srow + ((x0 >> 2) << 6);
+				gb = ar + 32;
+				if(par){
+					for(r = 0; r < 4; r++){
+						uint32_t w0 = gx_be32(gb + r * 8), w1 = gx_be32(gb + r * 8 + 4);
+						uint32_t hi = (w0 & 0xFFFF0000u) | (w1 >> 16), lo = (w0 << 16) | (w1 & 0xFFFFu);
+						uint32_t vh = ((hi >> 5) & 0x07E007E0u) | ((hi << 8) & 0xF800F800u);
+						uint32_t vl = ((lo >> 5) & 0x07E007E0u) | ((lo << 8) & 0xF800F800u);
+						if(conr){
+							uint32_t a0 = gx_be32(ar + r * 8), a1 = gx_be32(ar + r * 8 + 4);
+							vh |= (((a0 & 0xFFFF0000u) | (a1 >> 16)) >> 3) & 0x001F001Fu;
+							vl |= (((a0 << 16) | (a1 & 0xFFFFu)) >> 3) & 0x001F001Fu;
+						}
+						gx_put_be32(o + r * 8, (((vh >> shift) & m2) << 8) | ((vl >> shift) & m2));
+					}
+					continue;
+				}
+				for(r = 0; r < 4; r++){
+					uint32_t w0 = gx_be32(gb + r * 8), w1 = gx_be32(gb + r * 8 + 4);
+					uint32_t v0 = ((w0 >> 21) & 0x7E0u) | ((w0 >> 8) & 0xF800u), v1 = ((w0 >> 5) & 0x7E0u) | ((w0 << 8) & 0xF800u);
+					uint32_t v2 = ((w1 >> 21) & 0x7E0u) | ((w1 >> 8) & 0xF800u), v3 = ((w1 >> 5) & 0x7E0u) | ((w1 << 8) & 0xF800u);
+					gx_put_be32(o + r * 8, (((v0 >> shift) & mask) << 24) | (((v1 >> shift) & mask) << 16) |
+					                       (((v2 >> shift) & mask) << 8) | ((v3 >> shift) & mask));
 				}
 			}
 		}

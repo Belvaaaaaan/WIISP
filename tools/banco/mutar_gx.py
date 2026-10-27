@@ -94,7 +94,7 @@ def main():
     VERIF = '--verif' in args
     if VERIF: args.remove('--verif')
     muts = leer_mutaciones(args[0])
-    if estas: muts = [m for m in muts if m['nombre'] in estas.split(',')]
+    if estas: muts = [m for m in muts if m['nombre'] in estas.split('|' if '|' in estas else ',')]
     salida_dir = os.path.join(os.environ.get('SALIDA', '/tmp/banco'), 'mutar_gx')
     base = os.path.join(salida_dir, 'base'); os.makedirs(base, exist_ok=True)
     t0 = time.time()

@@ -151,4 +151,25 @@ void test_gxtiles(void){
 		CHECK(!memcmp(whole, bands, sizeof(whole)));
 	}
 	test_clut_gpu();
+	{   //Arreglo
+		static u8 tile[64 * 32 * 4] __attribute__((aligned(32)));
+		static u8 c1[128 * 32] __attribute__((aligned(32))), c2[128 * 32] __attribute__((aligned(32)));
+		static const unsigned mascaras[] = { 0xFF, 0x01, 0x03, 0x7F, 0x80, 0x1F };
+		unsigned shift, mi, malos = 0, casos = 0;
+		printf("Indices CI8 por palabras (ge_ci8_rapido) contra los de siempre\n");
+		for(shift = 0; shift < 32; shift++)
+			for(mi = 0; mi < 7; mi++){
+				int sw = 4 * (1 + (int)(rnd() % 16)), h = 4 * (1 + (int)(rnd() % 8)), dw = 8 * (((sw + 7) >> 3) + (int)(rnd() % 3)), i;
+				unsigned mask = mi < 6 ? mascaras[mi] : (rnd() & 0xFF);
+				for(i = 0; i < (int)sizeof(tile); i++) tile[i] = (u8)rnd();
+				memset(c1, 0xEE, sizeof(c1));
+				memset(c2, 0xEE, sizeof(c2));
+				gx_ci8_from_rgba8_565(c1, dw, tile, sw, h, shift, mask);
+				gx_ci8_from_rgba8_565_palabras(c2, dw, tile, sw, h, shift, mask);
+				malos += memcmp(c1, c2, sizeof(c1)) != 0;
+				casos++;
+			}
+		printf("  %u casos (32 desplazamientos x 7 mascaras, anchos y destinos al azar): %u distintos\n", casos, malos);
+		CHECK_EQ(malos, 0u);
+	}
 }

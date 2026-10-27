@@ -10,6 +10,7 @@
 #include "gpu/ge_math.h"
 #include "core/memory.h"
 #include "core/opt.h"
+#include "hle/hle.h"
 #include "test.h"
 
 static u32 ls = 0x5EED2110u;
@@ -440,6 +441,65 @@ void test_listas(void){
 		}
 		CHECK_EQ(datos[1], 0u);
 		opt_on[OPT_PROF_HUESOS] = 0;
+	}
+
+	{   //Arreglo
+		static const u32 m1[12] = { 0x3F8000u, 0, 0, 0, 0x3F8000u, 0, 0, 0, 0x3F8000u, 0x3F0000u, 0, 0 };
+		u32 c0, j, k, vt = (2u << 7) | (1u << 9) | (1u << 14);
+		printf("Censo de las llamadas repetidas (prof_repetidos)\n");
+		ge_vertex_reset();
+		ge.cmd[GE_VERTEXTYPE] = 0;
+		opt_on[OPT_PROF_REPETIDOS] = 1;
+		memset(&ge_stats, 0, sizeof(ge_stats));
+		hle_stat_flips += 7;
+		c0 = 0;
+		for(k = 0; k < 2; k++){
+			lp = 0x08D40000u;
+			lcmd(GE_VERTEXTYPE, vt);
+			lcmd(GE_BASE, (L_VERT >> 8) & 0x0F0000);
+			if(k == 0){
+				lcmd(GE_VADDR, L_VERT & 0xFFFFFC); lcmd(GE_PRIM, (GE_PRIM_TRIANGLES << 16) | 3);   /* nueva */
+				lcmd(GE_VADDR, L_VERT & 0xFFFFFC); lcmd(GE_PRIM, (GE_PRIM_TRIANGLES << 16) | 3);   /* igual */
+				lcmd(GE_WORLDMATRIXNUMBER, 0);
+				for(j = 0; j < 12; j++) lcmd(GE_WORLDMATRIXDATA, m1[j] + (j == 9 ? 0x100u : 0u));
+				lcmd(GE_VADDR, L_VERT & 0xFFFFFC); lcmd(GE_PRIM, (GE_PRIM_TRIANGLES << 16) | 3);   /* otra matriz */
+				lcmd(GE_BONEMATRIXNUMBER, 0);
+				for(j = 0; j < 12; j++) lcmd(GE_BONEMATRIXDATA, m1[j] + (j == 10 ? 0x200u : 0u));
+				lcmd(GE_VADDR, L_VERT & 0xFFFFFC); lcmd(GE_PRIM, (GE_PRIM_TRIANGLES << 16) | 3);   /* otros huesos */
+				lcmd(GE_VADDR, (L_VERT + 0x400) & 0xFFFFFC); lcmd(GE_PRIM, (GE_PRIM_TRIANGLES << 16) | 3);   /* otros datos */
+			} else {
+				lcmd(GE_VADDR, (L_VERT + 0x400) & 0xFFFFFC); lcmd(GE_PRIM, (GE_PRIM_TRIANGLES << 16) | 3);   /* la del cuadro anterior */
+				lcmd(GE_VADDR, (L_VERT + 0x400) & 0xFFFFFC); lcmd(GE_PRIM, (GE_PRIM_TRIANGLES << 16) | 3);   /* igual */
+			}
+			lcmd(GE_NOP, 0);
+			ge_test_run_list(0x08D40000u, lp, NULL);
+			if(!k) c0 = ge_stats.rp_cuadros;
+			hle_stat_flips++;
+		}
+		memcpy(mem_ptr(L_VERT + 0x800, 64), mem_ptr(L_VERT + 0x400, 64), 64);
+		for(k = 0; k < 2; k++){   /* el mismo contenido en otra direccion; luego, otro contenido en esa */
+			if(k) mem_ptr(L_VERT + 0x800, 4)[1] ^= 0x40;
+			lp = 0x08D40000u;
+			lcmd(GE_VADDR, (L_VERT + 0x800) & 0xFFFFFC); lcmd(GE_PRIM, (GE_PRIM_TRIANGLES << 16) | 3);
+			lcmd(GE_NOP, 0);
+			ge_test_run_list(0x08D40000u, lp, NULL);
+		}
+		printf("  %u cuadros, %u llamadas (%u vertices): iguales %u, mismos datos y huesos %u, mismos datos %u, del cuadro anterior %u\n",
+		       (unsigned)ge_stats.rp_cuadros, (unsigned)ge_stats.rp_llamadas, (unsigned)ge_stats.rp_vertices,
+		       (unsigned)ge_stats.rp_igual_ll, (unsigned)ge_stats.rp_huesos_ll, (unsigned)ge_stats.rp_datos_ll,
+		       (unsigned)ge_stats.rp_anterior_ll);
+		CHECK_EQ(c0, 1u);
+		CHECK_EQ(ge_stats.rp_cuadros, 3u);
+		CHECK_EQ(ge_stats.rp_llamadas, 9u);
+		CHECK_EQ(ge_stats.rp_vertices, 27u);
+		CHECK_EQ(ge_stats.rp_vert_huesos, 27u);
+		CHECK_EQ(ge_stats.rp_igual_ll, 2u);
+		CHECK_EQ(ge_stats.rp_igual_vh, 6u);
+		CHECK_EQ(ge_stats.rp_huesos_ll, 1u);
+		CHECK_EQ(ge_stats.rp_datos_ll, 1u);
+		CHECK_EQ(ge_stats.rp_anterior_ll, 1u);
+		CHECK_EQ(ge_stats.rp_lleno, 0u);
+		opt_on[OPT_PROF_REPETIDOS] = 0;
 	}
 
 	{   //Arreglo

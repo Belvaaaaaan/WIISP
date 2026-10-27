@@ -2674,6 +2674,95 @@ static void __attribute__((noinline)) bb_verificar(void){   //Arreglo
 		              (unsigned)bb_fin.prim, (unsigned)ge.vaddr, (unsigned)bb_fin.vaddr);
 }
 
+#define REP_N 8192   //Arreglo
+static u32 rep_tab[2][REP_N], rep_huesos[REP_N], rep_datos[REP_N], rep_n[4];   //Arreglo
+static int rep_cur, rep_ncmds = -1;   //Arreglo
+static u64 rep_flip;   //Arreglo
+static u8 rep_cmds[256];   //Arreglo
+
+static inline u32 rep_mezcla(u32 h, u32 w){ h ^= w; h *= 0x01000193u; return h ^ (h >> 15); }   //Arreglo
+
+static u32 rep_bytes(u32 h, const u8 *p, u32 n){   //Arreglo
+	u32 w;
+	for(; n >= 4; n -= 4, p += 4){ memcpy(&w, p, 4); h = rep_mezcla(h, w); }
+	for(; n; n--) h = rep_mezcla(h, *p++);
+	return h;
+}
+
+static int rep_esta(const u32 *t, u32 k){   //Arreglo
+	u32 i = k & (REP_N - 1);
+	while(t[i]){ if(t[i] == k) return 1; i = (i + 1) & (REP_N - 1); }
+	return 0;
+}
+
+static void rep_pon(u32 *t, int cual, u32 k){   //Arreglo
+	u32 i = k & (REP_N - 1);
+	if(rep_n[cual] >= REP_N / 2){ ge_stats.rp_lleno++; return; }
+	while(t[i]){ if(t[i] == k) return; i = (i + 1) & (REP_N - 1); }
+	t[i] = k;
+	rep_n[cual]++;
+}
+
+static void __attribute__((noinline)) censo_repetidos(const VFormat *f, u32 vaddr, u32 iaddr, u32 count){   //Arreglo
+	u32 hd, hh, hf, maxv = count, i;
+	const u8 *p;
+	int igual;
+	if(rep_ncmds < 0){
+		rep_ncmds = 0;
+		for(i = 0; i < 256; i++)
+			if(ge_grupo_de(i) & (GE_SUCIO_V | GE_SUCIO_T | GE_SUCIO_P)) rep_cmds[rep_ncmds++] = (u8)i;
+	}
+	if(hle_stat_flips != rep_flip){
+		rep_flip = hle_stat_flips;
+		rep_cur ^= 1;
+		memset(rep_tab[rep_cur], 0, sizeof(rep_tab[0]));
+		memset(rep_huesos, 0, sizeof(rep_huesos));
+		memset(rep_datos, 0, sizeof(rep_datos));
+		rep_n[rep_cur] = rep_n[2] = rep_n[3] = 0;
+		ge_stats.rp_cuadros++;
+	}
+	hd = rep_mezcla(rep_mezcla(rep_mezcla(0x811C9DC5u, f->vtype), vaddr), count);
+	if(f->idx){
+		u32 isz = idx_size[f->idx];
+		const u8 *ip = mem_ptr_r(iaddr, count * isz);
+		hd = rep_mezcla(hd, iaddr);
+		if(ip){
+			hd = rep_bytes(hd, ip, count * isz);
+			maxv = 0;
+			for(i = 0; i < count; i++){
+				u32 x = isz == 1 ? ip[i] : isz == 2 ? (u32)ip[i * 2] | ((u32)ip[i * 2 + 1] << 8) :
+				        (u32)ip[i * 4] | ((u32)ip[i * 4 + 1] << 8) | ((u32)ip[i * 4 + 2] << 16) | ((u32)ip[i * 4 + 3] << 24);
+				if(x + 1 > maxv) maxv = x + 1;
+			}
+		}
+	}
+	p = maxv && maxv <= 65536 ? mem_ptr_r(vaddr, maxv * f->size) : NULL;
+	hd = p ? rep_bytes(hd, p, maxv * f->size) : rep_mezcla(hd, 0xDEADu);
+	hh = f->nweights ? rep_bytes(hd, (const u8 *)ge.bone, (u32)f->nweights * 48u) : hd;
+	hf = rep_bytes(hh, (const u8 *)ge.world, sizeof(ge.world));
+	hf = rep_bytes(hf, (const u8 *)ge.view, sizeof(ge.view));
+	hf = rep_bytes(hf, (const u8 *)ge.proj, sizeof(ge.proj));
+	hf = rep_bytes(hf, (const u8 *)ge.tgen, sizeof(ge.tgen));
+	for(i = 0; i < (u32)rep_ncmds; i++) hf = rep_mezcla(hf, ge.cmd[rep_cmds[i]]);
+	hd |= !hd; hh |= !hh; hf |= !hf;
+	ge_stats.rp_llamadas++;
+	ge_stats.rp_vertices += count;
+	if(f->nweights) ge_stats.rp_vert_huesos += count;
+	igual = rep_esta(rep_tab[rep_cur], hf);
+	if(igual){
+		ge_stats.rp_igual_ll++;
+		ge_stats.rp_igual_v += count;
+		if(f->nweights) ge_stats.rp_igual_vh += count;
+	} else {
+		if(rep_esta(rep_huesos, hh)){ ge_stats.rp_huesos_ll++; ge_stats.rp_huesos_v += count; }
+		else if(rep_esta(rep_datos, hd)){ ge_stats.rp_datos_ll++; ge_stats.rp_datos_v += count; }
+		if(rep_esta(rep_tab[rep_cur ^ 1], hf)){ ge_stats.rp_anterior_ll++; ge_stats.rp_anterior_v += count; }
+		rep_pon(rep_tab[rep_cur], rep_cur, hf);
+	}
+	rep_pon(rep_huesos, 2, hh);
+	rep_pon(rep_datos, 3, hd);
+}
+
 void ge_draw_prim(u32 prim, u32 count){
 	VFormat fl;   //Arreglo
 	const VFormat *fp = &fl;   //Arreglo
@@ -2739,6 +2828,7 @@ void ge_draw_prim(u32 prim, u32 count){
 			bb_fin.prims = ge_stats.primitives;   //Arreglo
 			bbv = 1;   //Arreglo
 		}   //Arreglo
+		if(opt_on[OPT_PROF_REPETIDOS]) censo_repetidos(fp, vaddr, iaddr, count);   //Arreglo
 		vsource_init(&vr, fp, vaddr, iaddr, (int)count);   //Arreglo
 		vsource_batch(&vr, (int)count);
 		prof_ge_leave(phase);

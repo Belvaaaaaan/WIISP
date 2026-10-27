@@ -168,7 +168,8 @@ static GXTlutObj tlut_obj;
 static int tlut_pos, tlut_used, tlut_loaded = -1;
 /* Censo de este camino */
 static unsigned clut_gpu_uses[3], clut_gpu_fallbacks, clut_ci_builds, clut_tlut_loads;
-static u64 clut_ci_ticks;
+static u64 clut_ci_ticks, clut_ci_espera;   //Arreglo
+static unsigned ci8_verif, ci8_verif_mal;   //Arreglo
 static float pos_off;
 
 /* Perfilado (ticks del Wii) */
@@ -1788,8 +1789,23 @@ static int build_ci565(Surface *ts, u32 shift, u32 mask){
 	int cw = ci_width(ts);
 	if(!ensure_ci(ts)){ prof_switch(old); return 0; }
 	wait_gpu();   /* la copia de efb_to_tex puede no haber terminado */
+	clut_ci_espera += gettime() - t0;   //Arreglo
 	DCInvalidateRange(ts->tex, (u32)(ts->w * ts->h * 4));
-	gx_ci8_from_rgba8_565(ts->ci, cw, ts->tex, ts->w, ts->h, shift, mask);
+	if(opt_on[OPT_GE_CI8_RAPIDO]) gx_ci8_from_rgba8_565_palabras(ts->ci, cw, ts->tex, ts->w, ts->h, shift, mask);   //Arreglo
+	else gx_ci8_from_rgba8_565(ts->ci, cw, ts->tex, ts->w, ts->h, shift, mask);   //Arreglo
+	if(opt_on[OPT_GE_CI8_RAPIDO] && opt_on[OPT_GE_VERIF]){   //Arreglo
+		static u8 *ref;
+		static u32 ref_bytes;
+		u32 bytes = (u32)cw * (u32)ts->h;
+		if(ref_bytes < bytes){ free(ref); ref = memalign(32, bytes); ref_bytes = ref ? bytes : 0; }
+		if(ref){
+			gx_ci8_from_rgba8_565(ref, cw, ts->tex, ts->w, ts->h, shift, mask);
+			ci8_verif++;
+			if(memcmp(ref, ts->ci, bytes) && ci8_verif_mal++ < 16)
+				hle_log_quiet("[VERIF] indices CI8: los de ge_ci8_rapido salen distintos de los de siempre (desplazamiento %u, mascara %02X)\n",
+				              (unsigned)shift, (unsigned)mask);
+		}
+	}   //Arreglo
 	DCFlushRange(ts->ci, (u32)cw * (u32)ts->h);
 	GX_InvalidateTexAll();
 	ts->ci_kind = CI_565;
@@ -3348,9 +3364,9 @@ void gx_ge_rtt_report(char *buf, size_t size){
 	if(len < size)
 		len += (size_t)snprintf(buf + len, size - len,
 		        "rtt: paleta desde la GPU (ge_rtt_gpu): CLUT32 por alfa %u, CLUT16 sobre 565 %u, vueltas a la CPU %u; "
-		        "indices CI8 calculados %u (%u ms), TLUT cargadas %u | relleno sin bajar (ge_fb_relleno) %u | "
+		        "indices CI8 calculados %u (%u ms; esperando a la GPU %u ms; con ge_verificar %u comparados, %u distintos), TLUT cargadas %u | relleno sin bajar (ge_fb_relleno) %u | "
 		        "huecos (ge_fb_hueco): hechos %u, llenados %u, borrados %u, filas bajadas %u y subidas %u (%u ms)\n",
-		        clut_gpu_uses[CI_A8], clut_gpu_uses[CI_565], clut_gpu_fallbacks, clut_ci_builds, tk_ms(clut_ci_ticks),
+		        clut_gpu_uses[CI_A8], clut_gpu_uses[CI_565], clut_gpu_fallbacks, clut_ci_builds, tk_ms(clut_ci_ticks), tk_ms(clut_ci_espera), ci8_verif, ci8_verif_mal,
 		        clut_tlut_loads, rtt_pad_skips, hole_made, hole_filled, hole_skips, hole_rows_dl, hole_rows_up,
 		        tk_ms(hole_ticks));
 	/* Cargas de paleta dentro de búferes dibujados */
@@ -3483,7 +3499,8 @@ void gx_ge_rtt_report(char *buf, size_t size){
 	rtt_npair = 0;
 	memset(clut_gpu_uses, 0, sizeof(clut_gpu_uses));
 	clut_gpu_fallbacks = clut_ci_builds = clut_tlut_loads = 0;
-	clut_ci_ticks = 0;
+	clut_ci_ticks = clut_ci_espera = 0;   //Arreglo
+	ci8_verif = ci8_verif_mal = 0;   //Arreglo
 	rtt_pad_skips = 0;
 	hole_made = hole_filled = hole_skips = hole_rows_dl = hole_rows_up = 0;
 	hole_ticks = 0;

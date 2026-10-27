@@ -1,0 +1,112 @@
+=== ci8: pares tambien con desplazamiento 14
+@ src/wii/gx_tiles.h
+<<<
+conr = shift < 5, par = shift <= 13;
+>>>
+conr = shift < 5, par = shift <= 14;
+===
+=== ci8: sin el rojo con desplazamiento 4
+@ src/wii/gx_tiles.h
+<<<
+conr = shift < 5, par = shift <= 13;
+>>>
+conr = shift < 4, par = shift <= 13;
+===
+=== ci8: mascara doble sin la mitad alta
+@ src/wii/gx_tiles.h
+<<<
+	uint32_t m2 = mask | (mask << 16);
+>>>
+	uint32_t m2 = mask;
+===
+=== ci8: pares, verde con un bit de menos
+@ src/wii/gx_tiles.h
+<<<
+						uint32_t vh = ((hi >> 5) & 0x07E007E0u) | ((hi << 8) & 0xF800F800u);
+>>>
+						uint32_t vh = ((hi >> 5) & 0x07E007C0u) | ((hi << 8) & 0xF800F800u);
+===
+=== ci8: pares, azul de los impares desplazado de menos
+@ src/wii/gx_tiles.h
+<<<
+						uint32_t vl = ((lo >> 5) & 0x07E007E0u) | ((lo << 8) & 0xF800F800u);
+>>>
+						uint32_t vl = ((lo >> 5) & 0x07E007E0u) | ((lo << 7) & 0xF800F800u);
+===
+=== ci8: pares, el rojo desplazado de menos
+@ src/wii/gx_tiles.h
+<<<
+							vh |= (((a0 & 0xFFFF0000u) | (a1 >> 16)) >> 3) & 0x001F001Fu;
+>>>
+							vh |= (((a0 & 0xFFFF0000u) | (a1 >> 16)) >> 2) & 0x001F001Fu;
+===
+=== ci8: pares, el orden de los bytes
+@ src/wii/gx_tiles.h
+<<<
+						gx_put_be32(o + r * 8, (((vh >> shift) & m2) << 8) | ((vl >> shift) & m2));
+>>>
+						gx_put_be32(o + r * 8, (((vl >> shift) & m2) << 8) | ((vh >> shift) & m2));
+===
+=== ci8: uno a uno, azul del cuarto desplazado de menos
+@ src/wii/gx_tiles.h
+<<<
+					uint32_t v2 = ((w1 >> 21) & 0x7E0u) | ((w1 >> 8) & 0xF800u), v3 = ((w1 >> 5) & 0x7E0u) | ((w1 << 8) & 0xF800u);
+>>>
+					uint32_t v2 = ((w1 >> 21) & 0x7E0u) | ((w1 >> 8) & 0xF800u), v3 = ((w1 >> 5) & 0x7E0u) | ((w1 << 7) & 0xF800u);
+===
+=== ci8: columnas de mas sin poner a cero
+@ src/wii/gx_tiles.h
+<<<
+					for(r = 0; r < 4; r++) gx_put_be32(o + r * 8, 0);
+>>>
+					(void)0;
+===
+=== repetidas: sin la matriz de mundo
+@ src/gpu/ge_vertex.c
+<<<
+	hf = rep_bytes(hh, (const u8 *)ge.world, sizeof(ge.world));
+>>>
+	hf = hh;
+===
+=== repetidas: sin los huesos
+@ src/gpu/ge_vertex.c
+<<<
+	hh = f->nweights ? rep_bytes(hd, (const u8 *)ge.bone, (u32)f->nweights * 48u) : hd;
+>>>
+	hh = hd;
+===
+=== repetidas: sin cambiar de cuadro
+@ src/gpu/ge_vertex.c
+<<<
+	if(hle_stat_flips != rep_flip){
+>>>
+	if(0){
+===
+=== repetidas: el cuadro anterior es el de ahora
+@ src/gpu/ge_vertex.c
+<<<
+		if(rep_esta(rep_tab[rep_cur ^ 1], hf)){ ge_stats.rp_anterior_ll++; ge_stats.rp_anterior_v += count; }
+>>>
+		if(rep_esta(rep_tab[rep_cur], hf)){ ge_stats.rp_anterior_ll++; ge_stats.rp_anterior_v += count; }
+===
+=== repetidas: sin los datos de los vertices
+@ src/gpu/ge_vertex.c
+<<<
+	hd = p ? rep_bytes(hd, p, maxv * f->size) : rep_mezcla(hd, 0xDEADu);
+>>>
+	(void)p;
+===
+=== repetidas: sin la direccion
+@ src/gpu/ge_vertex.c
+<<<
+	hd = rep_mezcla(rep_mezcla(rep_mezcla(0x811C9DC5u, f->vtype), vaddr), count);
+>>>
+	hd = rep_mezcla(rep_mezcla(0x811C9DC5u, f->vtype), count);
+===
+=== repetidas: vertices con huesos sin contar
+@ src/gpu/ge_vertex.c
+<<<
+		if(f->nweights) ge_stats.rp_igual_vh += count;
+>>>
+		(void)0;
+===

@@ -332,6 +332,7 @@ void ge_raster_reset(void);
 void ge_test_execute(u32 op);
 /* Pruebas: cambia los grupos del censo de estado de un comando y devuelve los de antes */
 u32 ge_test_census_group(u32 cmd, u32 g);
+u32 ge_grupo_de(u32 cmd);   //Arreglo
 int ge_test_run_list(u32 pc, u32 end, u32 *fin);   //Arreglo
 int ge_test_cmd_con_caso(u32 cmd);   //Arreglo
 int ge_test_cmd_matriz(u32 cmd);   //Arreglo
