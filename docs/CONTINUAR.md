@@ -3414,6 +3414,34 @@ instrucciones y BF55BF17 en el caso de Strikers); en `censo`, la línea
 "Repetidas, que cambia entre las dos pasadas" de la pelea; imagenes, las
 12 capturas y la verificación a 0.
 
+### Resultado de la 0.5.23.6 en el Wii (DBZ: con / censo / imagenes)
+
+- Capturas las de siempre; verificación a 0.
+- Velocidad: igual que la 0.5.23.5 (esta versión solo mide). La pelea sale
+  +1,9 % de ciclos, pero es la variación de los índices CI8 entre
+  corridas: 820 ms frente a 519 con el mismo código (la conversión, sin la
+  espera, 652 frente a 378: depende de dónde caen los búferes en memoria
+  y en caché). Una vía por la GPU (copia del EFB) quitaría también esa
+  variación.
+- Autoprueba de paired singles (FPSCR 82028004: NI 1, RN 0; HID2 PSE 1):
+  2^23 pares, 109 M operaciones por carril. `ps_add`, `ps_sub`, `ps_mul`,
+  `ps_madd`, `ps_msub`, `ps_nmadd`, `ps_nmsub`, `ps_muls0/1` y
+  `ps_madds0/1`: **0 distintos**. Strikers: `fmadds` y `ps_madd` dan
+  BF55BF17 (los dos carriles). Solo `ps_sum0`/`ps_sum1` en el carril que
+  se copia (~152 mil de cada una): con NI = 1, un denormal que se copia sin
+  cuentas sale como cero con su signo. Las cuentas son exactas; no copiar
+  denormales con `ps_sum` (o no depender de ese carril).
+- Censo: el 31,3 % / 29,4 % de vértices repetidos son todos con huesos y
+  en todos cambian la matriz de mundo, la proyección y los comandos REGION2
+  (0x16), escala del viewport en x e y (0x42, 0x43), escala y
+  desplazamiento de la textura (0x48-0x4B), OFFSETX/Y (0x4C, 0x4D) y los
+  colores del material (0x55-0x57). Es el mismo personaje en la misma pose
+  dibujado otra vez en otro sitio y tamaño (otra región, otra cámara,
+  otros colores): ¿su sombra o un retrato en una textura? Se puede
+  reutilizar el resultado de los huesos (y la decodificación), no la
+  posición final: ~130 de ~490 ciclos por vértice en el 31 %, ~2 % de la
+  pelea.
+
 ### Para el siguiente chat (empezar aquí)
 
 Metodología acordada (detalle en `docs/HOJA_DE_RUTA.md`): primero medir
