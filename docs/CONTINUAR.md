@@ -3335,6 +3335,85 @@ Qué mirar (`ventanas.py sin=... con=... censo=... imagenes=...`):
 - imagenes: las 12 capturas de siempre y 0 en la verificación (también en
   "indices CI8 ... distintos").
 
+### Resultado de la 0.5.23.5 en el Wii (DBZ: sin / con / censo / imagenes)
+
+- Las 12 capturas de siempre; verificación 0 (índices CI8: 676 cálculos
+  comparados en la pelea, 0 distintos).
+- Índices CI8: de 1.016 a 519 ms (3600-4200), de 1.208 a 618 y de 499 a
+  255 (−49 %). Esperando a la GPU solo ~140-165 ms por ventana: la
+  conversión pasó de ~850 a ~380 ms (−55 %, más que las instrucciones:
+  pesaban los accesos a memoria). Lo que queda, ~2,5 % de la pelea.
+- Pelea, `sin` frente a `con`: ciclos −2,7 / −3,3 / −3,0 %; velocidad de
+  48,3 a 49,7, de 49,8 a 51,5 y de 45,3 a 46,7 %. Escena de 86,8 a 85,3 s.
+  Frente a la 0.5.23.4 (`con`), ~−1,5 %: en aquella corrida los CI8
+  tardaron 733 ms y en el `sin` de esta 1.016 (varía entre corridas; es
+  justo la diferencia de ciclos).
+- Censo: iguales a otra llamada del mismo cuadro 0,0 %; iguales al cuadro
+  anterior 0,0 %; con los mismos datos y huesos y otras matrices o estado,
+  31,3 % y 29,4 % de los vértices (~100 mil llamadas por ventana). Un
+  modelo con la misma pose se dibuja dos veces con algo distinto (¿el
+  borde de los personajes, sombras?). "Con huesos" salía 100 %: fallo del
+  censo (contaba el número de pesos, nunca 0), arreglado en la 0.5.23.6.
+
+### v0.5.23.6: qué cambia entre las dos pasadas y autoprueba de paired singles
+
+Solo medidas, para decidir la siguiente optimización:
+1. Censo `prof_repetidos` afinado (detalle en ARREGLOS): de las llamadas
+   con los mismos datos y huesos que otra del cuadro, qué cambia (mundo,
+   vista, proyección, matriz de textura, comandos) y cuáles con huesos; y
+   qué comandos cambian. Si cambia solo la matriz de mundo o solo
+   comandos que no mueven los vértices, se puede reutilizar el resultado
+   de los huesos (caché de huesos) o, con solo comandos de color o luz,
+   casi todo el vértice.
+2. Autoprueba de paired singles (`prueba_ps`), la de la investigación del
+   usuario: cada carril de las instrucciones de pares contra la
+   instrucción escalar, bit a bit, con 2^23 pares (casos raros incluidos)
+   y el caso de Mario Strikers (`fmadds` debe dar BF55BF17). Si sale 0 en
+   todas, leer vértices (22 % de la pelea) puede ir de dos en dos con el
+   mismo resultado, imitando lo que compila GCC (con `-ffp-contract=fast`,
+   `a*b+c` sale como `fmadds`: hay que usar `ps_madd` justo donde el
+   escalar usa `fmadds`, y `ps_mul` + `ps_add` donde usa `fmuls` +
+   `fadds`). En qemu no se puede correr (no tiene paired singles): solo
+   en el Wii.
+
+Investigación del usuario (otro chat), resumida: los paired singles dan
+por carril lo mismo que los escalares (Dolphin usa las mismas funciones;
+`fmadds` redondea una vez); los BAT libres con nuestra libogc (v3.2.1)
+son DBAT2, 6, 7 (y 3 sin locked cache), y 32 MB en 0x08000000 sobre el
+inicio de MEM2 se pueden mapear (la RAM de la PSP ya está en 0x90000800;
+nuestra libogc no tiene `__myArena2Lo`: habría que usar
+`SYS_SetArena2Lo`); Lightrec (el dynarec de WiiSX, MIPS a PowerPC en el
+Wii, con IR) es el antecedente a estudiar para el IR; las copias del EFB
+R8/GB8 sirven como CI8/CI14X2 (los índices CI8 sin la CPU, si hiciera
+falta).
+
+Verificación:
+
+- Pruebas (x86 con ASan, PowerPC y devkitPPC bajo qemu): 167.435
+  comprobaciones, 0 fallos en las tres; huellas de siempre (4D4A1D8B,
+  0657B177, B3A2BCD3).
+- pspautotests 275/275.
+- Mutaciones (`mutaciones/0.5.23.6.txt`, `mutar.py --solo listas`): 6 de 6
+  detectadas.
+- A/B con el CLI de GX (555): la 0.5.23.5 contra la 0.5.23.6 y
+  `prof_repetidos` 0/1: 0 distintos. En x86 (572), `prof_repetidos` 0/1: 0
+  distintos.
+- `ge_verificar` en las 110 de `gpu/` (exacto y MR): 0 líneas `[VERIF]`.
+- La autoprueba de paired singles no se puede correr en qemu: se revisó el
+  desensamblado (mismos registros y orden de operandos en las dos
+  versiones de cada cuenta) y se corre en el Wii.
+- Compilación para el Wii: `wiisp.dol` 0.5.23.6.
+
+Autotest (3 registros y un `.capturas.txt`):
+- con: todo encendido, con `prueba_ps` (líneas `[PRUEBA]` al principio);
+- censo: con `prof_repetidos`;
+- imagenes: con `ge_verificar` y las 12 capturas, sin `prof_pmc`.
+
+Qué mirar: las líneas `[PRUEBA]` de `con` (0 distintos en todas las
+instrucciones y BF55BF17 en el caso de Strikers); en `censo`, la línea
+"Repetidas, que cambia entre las dos pasadas" de la pelea; imagenes, las
+12 capturas y la verificación a 0.
+
 ### Para el siguiente chat (empezar aquí)
 
 Metodología acordada (detalle en `docs/HOJA_DE_RUTA.md`): primero medir
@@ -3368,9 +3447,10 @@ Metodología acordada (detalle en `docs/HOJA_DE_RUTA.md`): primero medir
   devkitPPC, perfil por función, psq_l emulado, A/B) y para leer los
   registros del Wii (`ventanas.py`): `tools/banco/LEEME.md`. El entorno
   (devkitPPC, qemu, pspautotests, PPSSPP): `tools/setup_entorno.sh`.
-- **Siguiente:** leer los registros de la 0.5.23.5 (`ventanas.py sin=...
-  con=... censo=... imagenes=...`; qué mirar, en su sección de arriba) y
-  decidir con el censo: caché de vértices o de huesos, o el diseño del IR.
+- **Siguiente:** leer los registros de la 0.5.23.6 (las líneas `[PRUEBA]`
+  y la de "Repetidas, que cambia..."; qué mirar, en su sección de arriba)
+  y decidir: caché de huesos o de vértices, leer vértices con paired
+  singles, o el diseño del IR (estudiando antes Lightrec).
   Lo de la 0.5.23.4 (ya leído, ver su resultado):
   velocidad y ciclos de las peleas, el % de llamadas que siguen la charola
   y por qué no siguen las demás (si "con otra clave" pesa mucho, mirar qué

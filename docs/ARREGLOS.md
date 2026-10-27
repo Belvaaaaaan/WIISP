@@ -5,6 +5,32 @@ la 0.5.17.2; antes se marcaban con `//arreglo`). Aquí va, por versión, qué
 se arregló o cambió y una descripción breve. El detalle está en
 `docs/CONTINUAR.md`.
 
+## 0.5.23.6
+
+- `gpu/ge_vertex.c`: censo `prof_repetidos` arreglado y afinado. "Con
+  huesos" se contaba con el número de pesos (que nunca es 0) y no con el
+  formato de los pesos: salía 100 %. Ahora, de las llamadas con los mismos
+  datos y huesos que otra del mismo cuadro, qué cambia entre las dos
+  pasadas (matriz de mundo, vista, proyección, matriz de textura, algún
+  comando de los grupos V, T y P, o una combinación) y cuántas tienen
+  huesos; y qué comandos cambian (un resumen de 16 bits de cada comando de
+  la primera pasada). Línea `[TIEMPOS] Repetidas, que cambia...`
+  (`ge_repetidas_report`).
+- `wii/broadway.c`, `wii/main.c`: autoprueba de paired singles
+  (`prueba_ps`, apagada). Al empezar cada corrida del guion, 2^23 pares al
+  azar (normales, enteros al azar, pequeños, casos raros: ±0, ±infinito,
+  NaN silenciosos y señalizadores, denormales, el caso de Mario Strikers) y
+  sumas que se cancelan; cada carril de `ps_add`, `ps_sub`, `ps_mul`,
+  `ps_madd`, `ps_msub`, `ps_nmadd`, `ps_nmsub`, `ps_sum0`, `ps_sum1`,
+  `ps_muls0/1` y `ps_madds0/1` contra `fadds`, `fsubs`, `fmuls`, `fmadds`,
+  `fmsubs`, `fnmadds` y `fnmsubs`, bit a bit. Escribe FPSCR (NI, RN),
+  HID2 (PSE), el caso de Strikers y lo distinto por instrucción (líneas
+  `[PRUEBA]`).
+- `core/opt.h`, `core/opt.c`: `prueba_ps`.
+- `tests/test_listas.c`: el censo con un comando cambiado y con la matriz
+  de mundo cambiada. `mutaciones/0.5.23.6.txt`.
+- `hle/hle.h`, `dist/apps/wiisp/meta.xml`: versión 0.5.23.6.
+
 ## 0.5.23.5
 
 - `wii/gx_tiles.h`, `wii/gx_ge.c`: `ge_ci8_rapido` (encendido). Los índices

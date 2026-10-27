@@ -366,6 +366,15 @@ huesos y otra cámara? Decide si hay una caché de vértices transformados o de
 huesos que valga la pena. Sigue: según el censo, esa caché; si no, el diseño
 del IR.
 
+Resultado de la 0.5.23.5: índices CI8 −49 % (ya ~2,5 % de la pelea, casi
+sin espera a la GPU), pelea ~−3 %. El censo: 0 % de vértices idénticos en
+el cuadro y ~30 % con los mismos datos y huesos y algo distinto.
+
+Hecha (v0.5.23.6): solo medidas. El censo dice qué cambia entre las dos
+pasadas; la autoprueba `prueba_ps` comprueba en el Wii que los paired
+singles dan lo mismo que los escalares, carril a carril. Con eso se decide
+entre la caché de huesos, leer vértices con paired singles o el IR.
+
 Primera tanda acordada (todas "más barato", verificables en el PC):
 0.1 `prof_espera`, **skinning rápido** (`ge_skin_rapido`), **matrices al
 cambiar** (`ge_mtx_cache`), **color constante** (`ge_color_const`), 2.1
