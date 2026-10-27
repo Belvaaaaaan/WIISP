@@ -17,7 +17,9 @@
 **/
 
 #include <stdio.h>
+#include <string.h>   //Arreglo
 #include <gccore.h>
+#include <ogc/lwp_watchdog.h>   //Arreglo
 #include "wii/wii.h"
 #include "hle/hle.h"
 #include "core/prof.h"
@@ -120,4 +122,122 @@ void broadway_pmc_init(void){
 	pmc_modo(0);   //arreglo
 	prof_pmc_read = pmc_read;
 	prof_pmc_modo_fn = pmc_modo;   //arreglo
+}
+
+#define PSQ_L(r, p) __asm__ volatile("psq_l %0,0(%1),0,0" : "=f"(r) : "b"(p))   //Arreglo
+#define PSQ_ST(r, p) __asm__ volatile("psq_st %0,0(%1),0,0" : : "f"(r), "b"(p) : "memory")   //Arreglo
+#define PS3(ins, d, a, c, b) __asm__ volatile(ins " %0,%1,%2,%3" : "=f"(d) : "f"(a), "f"(c), "f"(b))   //Arreglo
+#define PS2(ins, d, a, b) __asm__ volatile(ins " %0,%1,%2" : "=f"(d) : "f"(a), "f"(b))   //Arreglo
+#define FS3(ins, a, c, b) ({ float d_; __asm__ volatile(ins " %0,%1,%2,%3" : "=f"(d_) : "f"(a), "f"(c), "f"(b)); d_; })   //Arreglo
+#define FS2(ins, a, b) ({ float d_; __asm__ volatile(ins " %0,%1,%2" : "=f"(d_) : "f"(a), "f"(b)); d_; })   //Arreglo
+
+enum { PSP_ADD, PSP_SUB, PSP_MUL, PSP_MADD, PSP_MSUB, PSP_NMADD, PSP_NMSUB, PSP_SUM0, PSP_SUM1, PSP_MULS0, PSP_MULS1,
+       PSP_MADDS0, PSP_MADDS1, PSP_N };   //Arreglo
+static const char *const psp_nombre[PSP_N] = { "ps_add", "ps_sub", "ps_mul", "ps_madd", "ps_msub", "ps_nmadd", "ps_nmsub",
+                                               "ps_sum0", "ps_sum1", "ps_muls0", "ps_muls1", "ps_madds0", "ps_madds1" };   //Arreglo
+
+static u32 psp_bits(float f){ u32 u; memcpy(&u, &f, 4); return u; }   //Arreglo
+static float psp_f(u32 u){ float f; memcpy(&f, &u, 4); return f; }   //Arreglo
+
+static void __attribute__((noinline)) psp_pares(const float *a, const float *b, const float *c, float out[PSP_N][2]){   //Arreglo
+	double fa, fb, fc, d;
+	PSQ_L(fa, a); PSQ_L(fb, b); PSQ_L(fc, c);
+	PS2("ps_add", d, fa, fb); PSQ_ST(d, out[PSP_ADD]);
+	PS2("ps_sub", d, fa, fb); PSQ_ST(d, out[PSP_SUB]);
+	PS2("ps_mul", d, fa, fc); PSQ_ST(d, out[PSP_MUL]);
+	PS3("ps_madd", d, fa, fc, fb); PSQ_ST(d, out[PSP_MADD]);
+	PS3("ps_msub", d, fa, fc, fb); PSQ_ST(d, out[PSP_MSUB]);
+	PS3("ps_nmadd", d, fa, fc, fb); PSQ_ST(d, out[PSP_NMADD]);
+	PS3("ps_nmsub", d, fa, fc, fb); PSQ_ST(d, out[PSP_NMSUB]);
+	PS3("ps_sum0", d, fa, fc, fb); PSQ_ST(d, out[PSP_SUM0]);
+	PS3("ps_sum1", d, fa, fc, fb); PSQ_ST(d, out[PSP_SUM1]);
+	PS2("ps_muls0", d, fa, fc); PSQ_ST(d, out[PSP_MULS0]);
+	PS2("ps_muls1", d, fa, fc); PSQ_ST(d, out[PSP_MULS1]);
+	PS3("ps_madds0", d, fa, fc, fb); PSQ_ST(d, out[PSP_MADDS0]);
+	PS3("ps_madds1", d, fa, fc, fb); PSQ_ST(d, out[PSP_MADDS1]);
+}
+
+static void __attribute__((noinline)) psp_escalares(const float *a, const float *b, const float *c, float out[PSP_N][2]){   //Arreglo
+	int i;
+	for(i = 0; i < 2; i++){
+		float x = a[i], y = b[i], z = c[i];
+		out[PSP_ADD][i] = FS2("fadds", x, y);
+		out[PSP_SUB][i] = FS2("fsubs", x, y);
+		out[PSP_MUL][i] = FS2("fmuls", x, z);
+		out[PSP_MADD][i] = FS3("fmadds", x, z, y);
+		out[PSP_MSUB][i] = FS3("fmsubs", x, z, y);
+		out[PSP_NMADD][i] = FS3("fnmadds", x, z, y);
+		out[PSP_NMSUB][i] = FS3("fnmsubs", x, z, y);
+		out[PSP_MULS0][i] = FS2("fmuls", x, c[0]);
+		out[PSP_MULS1][i] = FS2("fmuls", x, c[1]);
+		out[PSP_MADDS0][i] = FS3("fmadds", x, c[0], y);
+		out[PSP_MADDS1][i] = FS3("fmadds", x, c[1], y);
+	}
+	out[PSP_SUM0][0] = FS2("fadds", a[0], b[1]);
+	out[PSP_SUM0][1] = c[1];
+	out[PSP_SUM1][0] = c[0];
+	out[PSP_SUM1][1] = FS2("fadds", a[0], b[1]);
+}
+
+static u32 psp_rs = 0x2545F491u;   //Arreglo
+static u32 psp_rnd(void){ psp_rs ^= psp_rs << 13; psp_rs ^= psp_rs >> 17; psp_rs ^= psp_rs << 5; return psp_rs; }   //Arreglo
+
+static u32 psp_valor(void){   //Arreglo
+	static const u32 raros[] = { 0x00000000u, 0x80000000u, 0x7F800000u, 0xFF800000u, 0x7FC00000u, 0xFFC00000u, 0x7F800001u,
+	                             0x7FA00000u, 0x7FC12345u, 0x00000001u, 0x80000001u, 0x007FFFFFu, 0x807FFFFFu, 0x00800000u,
+	                             0x80800000u, 0x7F7FFFFFu, 0xFF7FFFFFu, 0x3F800000u, 0xBF800000u, 0x33800000u, 0x34000000u,
+	                             0x42480000u, 0xBC88CC38u, 0x1B1C72A0u, 0x00400000u, 0x0C000000u, 0x72000000u };
+	u32 r = psp_rnd(), k = r % 100;
+	if(k < 25) return psp_rnd();
+	if(k < 85) return (psp_rnd() & 0x807FFFFFu) | ((107u + psp_rnd() % 41u) << 23);
+	if(k < 92) return (psp_rnd() & 0x807FFFFFu) | ((psp_rnd() % 30u) << 23);
+	return raros[psp_rnd() % (sizeof(raros) / sizeof(raros[0]))];
+}
+
+void broadway_prueba_ps(u32 pares){   //Arreglo
+	static float a[2] __attribute__((aligned(8))), b[2] __attribute__((aligned(8))), c[2] __attribute__((aligned(8)));
+	static float p[PSP_N][2] __attribute__((aligned(8))), e[PSP_N][2] __attribute__((aligned(8)));
+	u32 malos[PSP_N], vistos = 0, n, i, k, fpscr_hi, fpscr;
+	u64 t0 = gettime();
+	double fpd;
+	memset(malos, 0, sizeof(malos));
+	__asm__ volatile("mffs %0" : "=f"(fpd));
+	{ u64 w; memcpy(&w, &fpd, 8); fpscr = (u32)w; fpscr_hi = (u32)(w >> 32); }
+	(void)fpscr_hi;
+	hle_log_quiet("[PRUEBA] paired singles contra escalares: FPSCR %08X (NI %u, RN %u), HID2 %08X (PSE %u)\n", fpscr,
+	              (fpscr >> 2) & 1, fpscr & 3, MFSPR(920), (MFSPR(920) >> 29) & 1);
+	a[0] = psp_f(0x42480000u); c[0] = psp_f(0xBC88CC38u); b[0] = psp_f(0x1B1C72A0u);
+	a[1] = a[0]; b[1] = b[0]; c[1] = c[0];
+	psp_pares(a, b, c, p);
+	psp_escalares(a, b, c, e);
+	hle_log_quiet("[PRUEBA] caso de Mario Strikers (a 42480000, c BC88CC38, b 1B1C72A0; la consola da BF55BF17): fmadds %08X, "
+	              "ps_madd %08X %08X\n", psp_bits(e[PSP_MADD][0]), psp_bits(p[PSP_MADD][0]), psp_bits(p[PSP_MADD][1]));
+	for(n = 0; n < pares; n++){
+		a[0] = psp_f(psp_valor()); a[1] = psp_f(psp_valor());
+		c[0] = psp_f(psp_valor()); c[1] = psp_f(psp_valor());
+		if(psp_rnd() % 4 == 0){
+			b[0] = psp_f(psp_bits(-(a[0] * c[0])) ^ (psp_rnd() & 0xFu));
+			b[1] = psp_f(psp_bits(-(a[1] * c[1])) ^ (psp_rnd() & 0xFu));
+		} else { b[0] = psp_f(psp_valor()); b[1] = psp_f(psp_valor()); }
+		psp_pares(a, b, c, p);
+		psp_escalares(a, b, c, e);
+		for(i = 0; i < PSP_N; i++)
+			for(k = 0; k < 2; k++)
+				if(psp_bits(p[i][k]) != psp_bits(e[i][k])){
+					malos[i]++;
+					if(vistos++ < 12)
+						hle_log_quiet("[PRUEBA] distinto: %s carril %u: a %08X %08X b %08X %08X c %08X %08X: par %08X, escalar %08X\n",
+						              psp_nombre[i], k, psp_bits(a[0]), psp_bits(a[1]), psp_bits(b[0]), psp_bits(b[1]),
+						              psp_bits(c[0]), psp_bits(c[1]), psp_bits(p[i][k]), psp_bits(e[i][k]));
+				}
+	}
+	{
+		char l[512];
+		size_t len = 0;
+		for(i = 0; i < PSP_N && len < sizeof(l); i++)
+			len += (size_t)snprintf(l + len, sizeof(l) - len, "%s%s %u", i ? ", " : "", psp_nombre[i], malos[i]);
+		hle_log_quiet("[PRUEBA] %u pares (%u operaciones por carril), %u ms: distintos por instruccion: %s\n", pares, pares * PSP_N,
+		              (unsigned)(ticks_to_millisecs(gettime() - t0)), l);
+	}
+	hle_log_sync();
 }

@@ -1,0 +1,42 @@
+=== repetidas: sin comparar la matriz de mundo
+@ src/gpu/ge_vertex.c
+<<<
+			for(i = 0; i < 5; i++) if(comp[i] != rep_hcomp[slot][i]) combo |= 1u << i;
+>>>
+			for(i = 1; i < 5; i++) if(comp[i] != rep_hcomp[slot][i]) combo |= 1u << i;
+===
+=== repetidas: comandos sin apuntar cuales cambian
+@ src/gpu/ge_vertex.c
+<<<
+				for(i = 0; i < (u32)rep_ncmds; i++) if(o[i] != rep_c16(ge.cmd[rep_cmds[i]])) rep_cmd_dif[rep_cmds[i]]++;
+>>>
+				(void)o;
+===
+=== repetidas: sin guardar los comandos de la primera pasada
+@ src/gpu/ge_vertex.c
+<<<
+			rep_hpool[slot] = rep_hn++;
+>>>
+			rep_hn++;
+===
+=== repetidas: sin guardar las matrices de la primera pasada
+@ src/gpu/ge_vertex.c
+<<<
+		memcpy(rep_hcomp[slot], comp, sizeof(comp));
+>>>
+		(void)0;
+===
+=== repetidas: vertices con huesos de la segunda pasada sin contar
+@ src/gpu/ge_vertex.c
+<<<
+			if(f->wt) ge_stats.rp_huesos_vh += count;
+>>>
+			(void)0;
+===
+=== repetidas: sin los comandos en la huella de todo
+@ src/gpu/ge_vertex.c
+<<<
+	for(i = 0; i < 5; i++) hf = rep_mezcla(hf, comp[i]);
+>>>
+	for(i = 0; i < 4; i++) hf = rep_mezcla(hf, comp[i]);
+===

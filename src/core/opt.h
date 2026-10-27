@@ -47,6 +47,7 @@ enum {
 	OPT_PROF_COMANDOS,   //Arreglo
 	OPT_PROF_HUESOS,   //Arreglo
 	OPT_PROF_REPETIDOS,   //Arreglo
+	OPT_PRUEBA_PS,   //Arreglo
 	/* Primera tanda del GE (resultado idéntico) */
 	OPT_GE_SKIN_RAPIDO,   /* skinning mezclando las matrices por peso */
 	OPT_GE_MTX_CACHE,     /* matrices combinadas solo cuando cambian */

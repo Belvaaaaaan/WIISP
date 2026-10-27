@@ -460,6 +460,8 @@ void test_listas(void){
 			if(k == 0){
 				lcmd(GE_VADDR, L_VERT & 0xFFFFFC); lcmd(GE_PRIM, (GE_PRIM_TRIANGLES << 16) | 3);   /* nueva */
 				lcmd(GE_VADDR, L_VERT & 0xFFFFFC); lcmd(GE_PRIM, (GE_PRIM_TRIANGLES << 16) | 3);   /* igual */
+				lcmd(GE_AMBIENTCOLOR, 0x123456);
+				lcmd(GE_VADDR, L_VERT & 0xFFFFFC); lcmd(GE_PRIM, (GE_PRIM_TRIANGLES << 16) | 3);   /* otro comando */
 				lcmd(GE_WORLDMATRIXNUMBER, 0);
 				for(j = 0; j < 12; j++) lcmd(GE_WORLDMATRIXDATA, m1[j] + (j == 9 ? 0x100u : 0u));
 				lcmd(GE_VADDR, L_VERT & 0xFFFFFC); lcmd(GE_PRIM, (GE_PRIM_TRIANGLES << 16) | 3);   /* otra matriz */
@@ -490,12 +492,22 @@ void test_listas(void){
 		       (unsigned)ge_stats.rp_anterior_ll);
 		CHECK_EQ(c0, 1u);
 		CHECK_EQ(ge_stats.rp_cuadros, 3u);
-		CHECK_EQ(ge_stats.rp_llamadas, 9u);
-		CHECK_EQ(ge_stats.rp_vertices, 27u);
-		CHECK_EQ(ge_stats.rp_vert_huesos, 27u);
+		CHECK_EQ(ge_stats.rp_llamadas, 10u);
+		CHECK_EQ(ge_stats.rp_vertices, 30u);
+		CHECK_EQ(ge_stats.rp_vert_huesos, 30u);
+		CHECK_EQ(ge_stats.rp_huesos_vh, 6u);
+		{
+			static char rr[1024], esperado[32];
+			ge_repetidas_report(rr, sizeof(rr));
+			printf("  %s\n", rr);
+			CHECK(strstr(rr, "comandos 1 llamadas, 3 vertices") != NULL);
+			CHECK(strstr(rr, "mundo+comandos 1 llamadas, 3 vertices") != NULL);
+			snprintf(esperado, sizeof(esperado), " %02X 2", (unsigned)GE_AMBIENTCOLOR);
+			CHECK(strstr(rr, esperado) != NULL);
+		}
 		CHECK_EQ(ge_stats.rp_igual_ll, 2u);
 		CHECK_EQ(ge_stats.rp_igual_vh, 6u);
-		CHECK_EQ(ge_stats.rp_huesos_ll, 1u);
+		CHECK_EQ(ge_stats.rp_huesos_ll, 2u);
 		CHECK_EQ(ge_stats.rp_datos_ll, 1u);
 		CHECK_EQ(ge_stats.rp_anterior_ll, 1u);
 		CHECK_EQ(ge_stats.rp_lleno, 0u);

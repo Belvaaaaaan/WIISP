@@ -46,7 +46,7 @@ def parse(path):
         if m: w.update(ch_sin=int(m.group(1)), ch_clave=int(m.group(2)), ch_tex=int(m.group(3)))
         m = re.search(r'indices CI8 calculados (\d+) \((\d+) ms(?:; esperando a la GPU (\d+) ms)?', l)
         if m: w.update(ci8_n=int(m.group(1)), ci8_ms=int(m.group(2)), **({'ci8_esp': int(m.group(3))} if m.group(3) else {}))
-        m = re.search(r'Repetidas \(prof_repetidos\): .*?iguales a otra del mismo cuadro .*?\(([\d.]+)%;.*?otras matrices o estado: \d+ llamadas, \d+ vertices \(([\d.]+)%\); solo los mismos datos: \d+ llamadas, \d+ vertices \(([\d.]+)%\); iguales a una del cuadro anterior: \d+ llamadas, \d+ vertices \(([\d.]+)%\)', l)
+        m = re.search(r'Repetidas \(prof_repetidos\): .*?iguales a otra del mismo cuadro .*?\(([\d.]+)%;.*?otras matrices o estado: \d+ llamadas, \d+ vertices \(([\d.]+)%[^)]*\); solo los mismos datos: \d+ llamadas, \d+ vertices \(([\d.]+)%\); iguales a una del cuadro anterior: \d+ llamadas, \d+ vertices \(([\d.]+)%\)', l)
         if m: w.update(rp_igual=num(m.group(1)), rp_huesos=num(m.group(2)), rp_datos=num(m.group(3)), rp_ant=num(m.group(4)))
         m = re.search(r'Verificacion de las charolas \(ge_verificar\): (\d+) llamadas.*?comparadas, (\d+) distintas', l)
         if m: w.update(chv=int(m.group(1)), chv_mal=int(m.group(2)))

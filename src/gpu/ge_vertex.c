@@ -2679,6 +2679,9 @@ static u32 rep_tab[2][REP_N], rep_huesos[REP_N], rep_datos[REP_N], rep_n[4];   /
 static int rep_cur, rep_ncmds = -1;   //Arreglo
 static u64 rep_flip;   //Arreglo
 static u8 rep_cmds[256];   //Arreglo
+static u32 rep_hcomp[REP_N][5];   //Arreglo
+static u16 *rep_hcmd, rep_hpool[REP_N], rep_hn;   //Arreglo
+static u32 rep_combo_ll[32], rep_combo_v[32], rep_combo_vh[32], rep_cmd_dif[256];   //Arreglo
 
 static inline u32 rep_mezcla(u32 h, u32 w){ h ^= w; h *= 0x01000193u; return h ^ (h >> 15); }   //Arreglo
 
@@ -2689,24 +2692,67 @@ static u32 rep_bytes(u32 h, const u8 *p, u32 n){   //Arreglo
 	return h;
 }
 
-static int rep_esta(const u32 *t, u32 k){   //Arreglo
+static int rep_busca(const u32 *t, u32 k){   //Arreglo
 	u32 i = k & (REP_N - 1);
-	while(t[i]){ if(t[i] == k) return 1; i = (i + 1) & (REP_N - 1); }
-	return 0;
+	while(t[i]){ if(t[i] == k) return (int)i; i = (i + 1) & (REP_N - 1); }
+	return -1;
 }
 
-static void rep_pon(u32 *t, int cual, u32 k){   //Arreglo
+static int rep_esta(const u32 *t, u32 k){ return rep_busca(t, k) >= 0; }   //Arreglo
+
+static int rep_pon(u32 *t, int cual, u32 k){   //Arreglo
 	u32 i = k & (REP_N - 1);
-	if(rep_n[cual] >= REP_N / 2){ ge_stats.rp_lleno++; return; }
-	while(t[i]){ if(t[i] == k) return; i = (i + 1) & (REP_N - 1); }
+	if(rep_n[cual] >= REP_N / 2){ ge_stats.rp_lleno++; return -1; }
+	while(t[i]){ if(t[i] == k) return -1; i = (i + 1) & (REP_N - 1); }
 	t[i] = k;
 	rep_n[cual]++;
+	return (int)i;
+}
+
+static u16 rep_c16(u32 v){ return (u16)((v ^ (v >> 16) ^ (v >> 7)) & 0xFFFFu); }   //Arreglo
+
+void ge_repetidas_report(char *buf, size_t size){   //Arreglo
+	static const char *const nom[5] = { "mundo", "vista", "proyeccion", "textura", "comandos" };
+	u32 usado[32], total = 0, i, k;
+	size_t len;
+	memset(usado, 0, sizeof(usado));
+	for(i = 0; i < 32; i++) total += rep_combo_v[i];
+	len = (size_t)snprintf(buf, size, "Repetidas, que cambia entre las dos pasadas (mismos datos y huesos): ");
+	for(k = 0; k < 6 && len + 80 < size; k++){
+		int mejor = -1, j;
+		for(i = 0; i < 32; i++) if(!usado[i] && rep_combo_v[i] && (mejor < 0 || rep_combo_v[i] > rep_combo_v[mejor])) mejor = (int)i;
+		if(mejor < 0) break;
+		usado[mejor] = 1;
+		len += (size_t)snprintf(buf + len, size - len, "%s", k ? "; " : "");
+		if(!mejor) len += (size_t)snprintf(buf + len, size - len, "nada");
+		for(j = 0; j < 5; j++) if(mejor & (1 << j)) len += (size_t)snprintf(buf + len, size - len, "%s%s", (mejor & ((1 << j) - 1)) ? "+" : "", nom[j]);
+		len += (size_t)snprintf(buf + len, size - len, " %u llamadas, %u vertices (%.1f%%, %u con huesos)", (unsigned)rep_combo_ll[mejor],
+		                        (unsigned)rep_combo_v[mejor], total ? 100.0 * (double)rep_combo_v[mejor] / (double)total : 0.0,
+		                        (unsigned)rep_combo_vh[mejor]);
+	}
+	len += (size_t)snprintf(buf + len, size - len, " | comandos que cambian (veces):");
+	memset(usado, 0, sizeof(usado));
+	{
+		u8 visto[256];
+		memset(visto, 0, sizeof(visto));
+		for(k = 0; k < 12 && len + 16 < size; k++){
+			int mejor = -1;
+			for(i = 0; i < 256; i++) if(!visto[i] && rep_cmd_dif[i] && (mejor < 0 || rep_cmd_dif[i] > rep_cmd_dif[mejor])) mejor = (int)i;
+			if(mejor < 0) break;
+			visto[mejor] = 1;
+			len += (size_t)snprintf(buf + len, size - len, " %02X %u", (unsigned)mejor, (unsigned)rep_cmd_dif[mejor]);
+		}
+	}
+	memset(rep_combo_ll, 0, sizeof(rep_combo_ll));
+	memset(rep_combo_v, 0, sizeof(rep_combo_v));
+	memset(rep_combo_vh, 0, sizeof(rep_combo_vh));
+	memset(rep_cmd_dif, 0, sizeof(rep_cmd_dif));
 }
 
 static void __attribute__((noinline)) censo_repetidos(const VFormat *f, u32 vaddr, u32 iaddr, u32 count){   //Arreglo
-	u32 hd, hh, hf, maxv = count, i;
+	u32 hd, hh, hf, maxv = count, i, comp[5];
 	const u8 *p;
-	int igual;
+	int igual, slot;
 	if(rep_ncmds < 0){
 		rep_ncmds = 0;
 		for(i = 0; i < 256; i++)
@@ -2719,8 +2765,10 @@ static void __attribute__((noinline)) censo_repetidos(const VFormat *f, u32 vadd
 		memset(rep_huesos, 0, sizeof(rep_huesos));
 		memset(rep_datos, 0, sizeof(rep_datos));
 		rep_n[rep_cur] = rep_n[2] = rep_n[3] = 0;
+		rep_hn = 0;
 		ge_stats.rp_cuadros++;
 	}
+	if(!rep_hcmd && rep_ncmds) rep_hcmd = malloc((size_t)(REP_N / 2) * (size_t)rep_ncmds * sizeof(u16));
 	hd = rep_mezcla(rep_mezcla(rep_mezcla(0x811C9DC5u, f->vtype), vaddr), count);
 	if(f->idx){
 		u32 isz = idx_size[f->idx];
@@ -2738,28 +2786,50 @@ static void __attribute__((noinline)) censo_repetidos(const VFormat *f, u32 vadd
 	}
 	p = maxv && maxv <= 65536 ? mem_ptr_r(vaddr, maxv * f->size) : NULL;
 	hd = p ? rep_bytes(hd, p, maxv * f->size) : rep_mezcla(hd, 0xDEADu);
-	hh = f->nweights ? rep_bytes(hd, (const u8 *)ge.bone, (u32)f->nweights * 48u) : hd;
-	hf = rep_bytes(hh, (const u8 *)ge.world, sizeof(ge.world));
-	hf = rep_bytes(hf, (const u8 *)ge.view, sizeof(ge.view));
-	hf = rep_bytes(hf, (const u8 *)ge.proj, sizeof(ge.proj));
-	hf = rep_bytes(hf, (const u8 *)ge.tgen, sizeof(ge.tgen));
-	for(i = 0; i < (u32)rep_ncmds; i++) hf = rep_mezcla(hf, ge.cmd[rep_cmds[i]]);
+	hh = f->wt ? rep_bytes(hd, (const u8 *)ge.bone, (u32)f->nweights * 48u) : hd;
+	comp[0] = rep_bytes(0x9E3779B9u, (const u8 *)ge.world, sizeof(ge.world));
+	comp[1] = rep_bytes(0x9E3779B9u, (const u8 *)ge.view, sizeof(ge.view));
+	comp[2] = rep_bytes(0x9E3779B9u, (const u8 *)ge.proj, sizeof(ge.proj));
+	comp[3] = rep_bytes(0x9E3779B9u, (const u8 *)ge.tgen, sizeof(ge.tgen));
+	comp[4] = 0x9E3779B9u;
+	for(i = 0; i < (u32)rep_ncmds; i++) comp[4] = rep_mezcla(comp[4], ge.cmd[rep_cmds[i]]);
+	hf = hh;
+	for(i = 0; i < 5; i++) hf = rep_mezcla(hf, comp[i]);
 	hd |= !hd; hh |= !hh; hf |= !hf;
 	ge_stats.rp_llamadas++;
 	ge_stats.rp_vertices += count;
-	if(f->nweights) ge_stats.rp_vert_huesos += count;
+	if(f->wt) ge_stats.rp_vert_huesos += count;
 	igual = rep_esta(rep_tab[rep_cur], hf);
 	if(igual){
 		ge_stats.rp_igual_ll++;
 		ge_stats.rp_igual_v += count;
-		if(f->nweights) ge_stats.rp_igual_vh += count;
+		if(f->wt) ge_stats.rp_igual_vh += count;
 	} else {
-		if(rep_esta(rep_huesos, hh)){ ge_stats.rp_huesos_ll++; ge_stats.rp_huesos_v += count; }
+		if((slot = rep_busca(rep_huesos, hh)) >= 0){
+			u32 combo = 0;
+			ge_stats.rp_huesos_ll++; ge_stats.rp_huesos_v += count;
+			if(f->wt) ge_stats.rp_huesos_vh += count;
+			for(i = 0; i < 5; i++) if(comp[i] != rep_hcomp[slot][i]) combo |= 1u << i;
+			rep_combo_ll[combo]++; rep_combo_v[combo] += count;
+			if(f->wt) rep_combo_vh[combo] += count;
+			if((combo & 16) && rep_hcmd && rep_hpool[slot] != 0xFFFFu){
+				const u16 *o = rep_hcmd + (size_t)rep_hpool[slot] * (size_t)rep_ncmds;
+				for(i = 0; i < (u32)rep_ncmds; i++) if(o[i] != rep_c16(ge.cmd[rep_cmds[i]])) rep_cmd_dif[rep_cmds[i]]++;
+			}
+		}
 		else if(rep_esta(rep_datos, hd)){ ge_stats.rp_datos_ll++; ge_stats.rp_datos_v += count; }
 		if(rep_esta(rep_tab[rep_cur ^ 1], hf)){ ge_stats.rp_anterior_ll++; ge_stats.rp_anterior_v += count; }
 		rep_pon(rep_tab[rep_cur], rep_cur, hf);
 	}
-	rep_pon(rep_huesos, 2, hh);
+	if((slot = rep_pon(rep_huesos, 2, hh)) >= 0){
+		memcpy(rep_hcomp[slot], comp, sizeof(comp));
+		rep_hpool[slot] = 0xFFFFu;
+		if(rep_hcmd && rep_hn < REP_N / 2){
+			u16 *o = rep_hcmd + (size_t)rep_hn * (size_t)rep_ncmds;
+			for(i = 0; i < (u32)rep_ncmds; i++) o[i] = rep_c16(ge.cmd[rep_cmds[i]]);
+			rep_hpool[slot] = rep_hn++;
+		}
+	}
 	rep_pon(rep_datos, 3, hd);
 }
 

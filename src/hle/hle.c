@@ -685,14 +685,19 @@ static void profile_ge_lines(const GeStats *g, const GeStats *b, u32 vblanks){
 #define RPP(x) (rv ? 100.0 * (double)(g->x - b->x) / (double)rv : 0.0)   //Arreglo
 		hle_log("[TIEMPOS] Repetidas (prof_repetidos): %u cuadros, %u llamadas dibujadas (%.0f por cuadro), %u vertices (%u con huesos); "
 		        "iguales a otra del mismo cuadro (datos, huesos, matrices y estado de la transformacion): %u llamadas, %u vertices "
-		        "(%.1f%%; %u con huesos); mismos datos y huesos con otras matrices o estado: %u llamadas, %u vertices (%.1f%%); "
+		        "(%.1f%%; %u con huesos); mismos datos y huesos con otras matrices o estado: %u llamadas, %u vertices (%.1f%%; %u con huesos); "
 		        "solo los mismos datos: %u llamadas, %u vertices (%.1f%%); iguales a una del cuadro anterior: %u llamadas, "
 		        "%u vertices (%.1f%%); tabla llena %u\n", (unsigned)rc, (unsigned)rl, rc ? (double)rl / (double)rc : 0.0,
 		        (unsigned)rv, RP(rp_vert_huesos), RP(rp_igual_ll), RP(rp_igual_v), RPP(rp_igual_v), RP(rp_igual_vh),
-		        RP(rp_huesos_ll), RP(rp_huesos_v), RPP(rp_huesos_v), RP(rp_datos_ll), RP(rp_datos_v), RPP(rp_datos_v),
+		        RP(rp_huesos_ll), RP(rp_huesos_v), RPP(rp_huesos_v), RP(rp_huesos_vh), RP(rp_datos_ll), RP(rp_datos_v), RPP(rp_datos_v),
 		        RP(rp_anterior_ll), RP(rp_anterior_v), RPP(rp_anterior_v), RP(rp_lleno));   //Arreglo
 #undef RP
 #undef RPP
+		{
+			static char rr[1024];
+			ge_repetidas_report(rr, sizeof(rr));
+			hle_log("[TIEMPOS] %s\n", rr);
+		}
 	}   //Arreglo
 	if(opt_on[OPT_PROF_COMANDOS]){   //Arreglo
 		char cl[512];   //Arreglo

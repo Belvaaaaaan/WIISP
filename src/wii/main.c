@@ -66,6 +66,7 @@
 #include <ogc/lwp_watchdog.h>
 #include <fat.h>
 #include "wii/wii.h"
+#include "core/opt.h"   //Arreglo
 #include "wii/gx_ge.h"
 #include "frontend/app.h"
 #include "frontend/wiimote.h"
@@ -502,6 +503,7 @@ static void autotest_run(const char *path, const char *prefix, int max_frames){
 		snprintf(out, sizeof(out), "%s.log", prefix);
 		hle_set_log_file(out);
 		if(bad) hle_log("[GUION] no se pudieron preparar %s: se usan las partidas normales\n", partidas);
+		if(opt_on[OPT_PRUEBA_PS]) broadway_prueba_ps(1u << 23);   //Arreglo
 	}
 	if(app_load(path, 8, NULL) == 0){
 		char err[160];

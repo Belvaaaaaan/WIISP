@@ -65,6 +65,7 @@ int  wii_osk(const unsigned short *desc, const unsigned short *initial, unsigned
 void broadway_report(void);
 /* Prepara los contadores de rendimiento para prof_pmc (core/prof.h) */
 void broadway_pmc_init(void);
+void broadway_prueba_ps(u32 pares);   //Arreglo
 
 /* --- Menú (menu.c) -------------------------------------------------------- */
 
