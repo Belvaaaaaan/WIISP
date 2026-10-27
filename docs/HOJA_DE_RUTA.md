@@ -352,6 +352,20 @@ versión siguiente. Candidatos vistos: los vértices de los sprites por el
 decodificador por lotes (~370 instrucciones por vértice por el genérico) y
 una charola parcial (solo la textura) si en DBZ pesa "con otra clave".
 
+Resultado de la 0.5.23.4 en el Wii: la pelea −9 a −10 % de ciclos frente a
+la 0.5.23.3 (de 44 a 49-51 % de velocidad), imágenes iguales y verificación
+a 0.
+
+Hecha (v0.5.23.5): `ge_ci8_rapido`, los índices CI8 de las texturas sobre
+framebuffer (~3,6 % de la pelea en la 0.5.23.4) por palabras y de dos en
+dos: de 13,4 a 8,0 instrucciones por texel y de 4 a 0,75 accesos a memoria,
+mismos bytes; el informe separa lo que esperan a la GPU. Censo
+`prof_repetidos`: ¿cuántos vértices de la pelea se calculan dos veces en el
+mismo cuadro (los mismos datos, huesos y matrices), o con los mismos datos y
+huesos y otra cámara? Decide si hay una caché de vértices transformados o de
+huesos que valga la pena. Sigue: según el censo, esa caché; si no, el diseño
+del IR.
+
 Primera tanda acordada (todas "más barato", verificables en el PC):
 0.1 `prof_espera`, **skinning rápido** (`ge_skin_rapido`), **matrices al
 cambiar** (`ge_mtx_cache`), **color constante** (`ge_color_const`), 2.1

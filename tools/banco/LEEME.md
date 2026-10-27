@@ -117,6 +117,17 @@ al repositorio), `gcc-powerpc-linux-gnu` y `qemu-user`. Las salidas van a
   con ella lo que cuestan algunas copias (escena 12: 2.798 sin argumentos,
   2.778 con cualquiera); para comparar, pasar siempre los mismos
   interruptores, con su valor.
+- `bench_ci8.c` (lo compila `build_banco.sh`; las funciones con devkitPPC):
+  los índices CI8 de `ge_rtt_gpu` desde la copia RGBA8 de un 565 de
+  480x272, con la conversión de siempre o con la de `ge_ci8_rapido`.
+  `qemu-ppc -cpu 750 $SALIDA/bench_ci8 REPETICIONES [palabras] [desplazamiento
+  máscara]` (`-cpu 750`: `dcbz` de 32 bytes); con `qprof.py` sobre dos
+  corridas, instrucciones por texel. 0.5.23.5, de siempre / nuevas:
+  desplazamiento 5 y máscara FF (DBZ) 13,4 / 8,0; 0 y 1 (con el rojo) 16,4 /
+  10,8; 20 y FF 13,4 / 8,9.
+- `mutar.py` con una cabecera (`@ src/wii/gx_tiles.h`): recompila los `.c`
+  de las pruebas que la incluyen con la copia mutada delante.
+  `--solo-estas a|b` si los nombres llevan comas.
 - `qprof.py`: instrucciones PowerPC por función (y por unidad) a partir de
   `qemu-ppc -d in_asm,exec,nochain -D grande.log` menos una corrida corta:
   `qprof.py grande.log corta.log UNIDADES [FUNCIONES]` (lista las 25 que

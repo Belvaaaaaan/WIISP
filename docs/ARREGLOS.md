@@ -5,6 +5,44 @@ la 0.5.17.2; antes se marcaban con `//arreglo`). Aquí va, por versión, qué
 se arregló o cambió y una descripción breve. El detalle está en
 `docs/CONTINUAR.md`.
 
+## 0.5.23.5
+
+- `wii/gx_tiles.h`, `wii/gx_ge.c`: `ge_ci8_rapido` (encendido). Los índices
+  CI8 de las texturas con paleta sobre un framebuffer 565 de la GPU
+  (`ge_rtt_gpu`, CLUT16) se sacan de la copia RGBA8 leyendo palabras de 32
+  bits (dos texels por lectura) y escribiendo los 4 índices de una fila de
+  una vez; con desplazamiento <= 13 (DBZ: 5), dos texels a la vez en las
+  dos mitades de una palabra (los bits de la mitad alta que bajan no llegan
+  a los 8 que deja la máscara en la baja). Mismos bytes que
+  `gx_ci8_from_rgba8_565`, que queda como el camino de siempre. Con
+  `ge_verificar`, se calculan también con el de siempre y se comparan.
+- `wii/gx_ge.c`: en la línea `rtt:` del informe, el tiempo de los índices
+  CI8 esperando a la GPU (la copia del EFB) aparte, y lo comparado y
+  distinto con `ge_verificar`.
+- `gpu/ge_vertex.c`, `gpu/ge.c`, `gpu/ge.h`, `hle/hle.c`: censo
+  `prof_repetidos` (apagado). Por cada llamada dibujada, una huella de sus
+  datos (tipo, dirección, número y bytes de los vértices y de los índices),
+  de los huesos que usa y de todo lo que lee la transformación (mundo,
+  vista, proyección, matriz de textura y los comandos de los grupos V, T y
+  P de `ge_sucio`). Cuenta las llamadas y vértices iguales a otra del mismo
+  cuadro (entre dos cambios del framebuffer que se muestra), con los mismos
+  datos y huesos pero otras matrices o estado, con solo los mismos datos, e
+  iguales a una del cuadro anterior. Línea `[TIEMPOS] Repetidas`.
+  `ge_grupo_de` (los grupos de un comando).
+- `core/opt.h`, `core/opt.c`: `ge_ci8_rapido` y `prof_repetidos`.
+- `tests/test_gxtiles.c`: los índices CI8 nuevos contra los de siempre en
+  los 32 desplazamientos con 7 máscaras. `tests/test_listas.c`: el censo de
+  repetidas (igual, otra matriz, otros huesos, otros datos, el mismo
+  contenido en otra dirección, otro contenido en la misma, cuadro
+  anterior).
+- `tools/banco/bench_ci8.c` (lo compila `build_banco.sh`): instrucciones por
+  texel de las dos conversiones con el código de devkitPPC.
+  `tools/banco/mutar.py`: mutaciones en cabeceras (recompila los `.c` que
+  la incluyen) y `--solo-estas` con `|` (nombres con comas).
+  `tools/banco/ventanas.py`: filas de los índices CI8 y de repetidas.
+  `mutaciones/0.5.23.5.txt`.
+- `hle/hle.h`, `dist/apps/wiisp/meta.xml`: versión 0.5.23.5.
+
 ## 0.5.23.4
 
 - `wii/gx_ge.c`: `ge_charolas` (encendido; 1.4). Los destinos (búferes en

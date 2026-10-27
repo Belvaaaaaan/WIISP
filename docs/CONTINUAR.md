@@ -3254,6 +3254,87 @@ Qué mirar (`ventanas.py sin=... con=... verif=... imagenes=...`):
   estado 1,0 %), texturas 6,0 % (los índices CI8 de `ge_rtt_gpu`, 733 ms de
   20,4 s: ~3,6 %), esperar GX 2,7 %, syscalls 2,4 %, framebuffers 1,5 %.
 
+### v0.5.23.5: índices CI8 más rápidos (`ge_ci8_rapido`) y censo de llamadas repetidas (`prof_repetidos`)
+
+Lo acordado tras los registros de la 0.5.23.4 (pelea: CPU 41,9 %, leer
+vértices 22,3 %, texturas 6,0 % con los índices CI8 en ~3,6 %).
+
+1. **Índices CI8** (`ge_rtt_gpu`, CLUT16 sobre el 565 de 480x272 de DBZ,
+   desplazamiento 5 y máscara FF: el índice sale del verde y del azul, cada
+   cuadro). `build_ci565` espera a la GPU (`wait_gpu`, la copia del EFB),
+   invalida la copia RGBA8, convierte y vacía la caché. El registro solo
+   daba el total (733 ms de 20,4 s en la 0.5.23.4, 1.053 ms con las
+   charolas apagadas: buena parte puede ser espera). Ahora la línea `rtt:`
+   dice cuánto es esperar a la GPU.
+   - `ge_ci8_rapido`: lee palabras de 32 bits (dos texels: verde, azul,
+     verde, azul) y escribe los 4 índices de una fila de una vez; con
+     desplazamiento <= 13, dos texels en las dos mitades de una palabra
+     (con el rojo, desplazamiento < 5, los bits de la mitad alta que bajan
+     quedan por encima de los 8 que deja la máscara; sin el rojo, los 5
+     bits bajos son 0 y vale hasta 13). Banco (`bench_ci8`, devkitPPC,
+     instrucciones por texel, de siempre / nuevas): DBZ 13,4 / 8,0 (−40 %);
+     con el rojo 16,4 / 10,8; desplazamiento 20, 13,4 / 8,9. Accesos a
+     memoria por texel, de 4 a 0,75 (el Broadway tiene una sola unidad de
+     carga). Probado antes con tablas por canal: 6 instrucciones pero 5
+     accesos por texel (las tablas en la pila, además, con un `add` de más
+     cada una).
+   - Mismos bytes: `test_gxtiles` (32 desplazamientos × 7 máscaras, anchos
+     y destinos al azar) y, en el Wii, `ge_verificar` (calcula también los
+     de siempre y compara).
+2. **Censo `prof_repetidos`**: ¿se calculan los mismos vértices dos veces?
+   Por cada llamada dibujada (después de las cajas), tres huellas: datos
+   (tipo, dirección, número y bytes de vértices e índices), datos + huesos
+   que usa, y todo (más mundo, vista, proyección, matriz de textura y los
+   comandos de los grupos V, T y P). Un cuadro va de un cambio del
+   framebuffer mostrado al siguiente (`hle_stat_flips`). Cuenta llamadas y
+   vértices iguales a otra del mismo cuadro (se podrían reutilizar los
+   vértices ya en pantalla), con los mismos datos y huesos pero otras
+   matrices o estado (se podría reutilizar el resultado de los huesos),
+   con solo los mismos datos, e iguales a una del cuadro anterior.
+
+Verificación:
+
+- Pruebas (x86 con ASan, PowerPC y devkitPPC bajo qemu): 167.341
+  comprobaciones, 0 fallos en las tres; huellas de test_vdec las de
+  siempre (4D4A1D8B, 0657B177, B3A2BCD3).
+- pspautotests 275/275.
+- Mutaciones (`mutaciones/0.5.23.5.txt`, `mutar.py --solo gxtiles,listas`,
+  16): 16 detectadas. Por el camino, `mutar.py` no recompilaba lo que
+  incluye una cabecera mutada (todas "sobrevivían" en 0,1 s): arreglado. Dos
+  que sobrevivieron eran código de más (el límite de los pares con el rojo
+  siempre se cumplía; el camino de texel a texel nunca lleva el rojo): se
+  quitó. Otras dos del censo pedían una prueba más fina (el mismo contenido
+  en otra dirección y otro contenido en la misma): añadida.
+- A/B con el CLI de GX en las 555 pspautotests: la 0.5.23.4 contra la
+  0.5.23.5, `ge_ci8_rapido` 0/1 y `prof_repetidos` 0/1: 0 distintos.
+- A/B en x86 de `prof_repetidos` (572): solo `malloc/malloc` a la vez; solo,
+  0 distintos (el control `prof_vertices` sale distinto en él igual).
+- `ge_verificar` con el CLI de GX en las 110 de `gpu/` (exacto y MR): 0
+  líneas `[VERIF]`.
+- Banco de listas: el censo cuesta ~2.460 instrucciones por llamada en la
+  escena 11 (19.354 → 21.812, +13 %).
+- Compilación para el Wii: `wiisp.dol` 0.5.23.5.
+
+Autotest (4 registros y un `.capturas.txt`; `prof_tirones`,
+`prof_ventana_juego`, `ventana 600`, `ge_bbox_triangulos 0`):
+- sin: `ge_ci8_rapido 0`, con `prof_pmc`;
+- con: `ge_ci8_rapido 1`, con `prof_pmc`;
+- censo: como con, con `prof_repetidos` (el censo cuesta: la velocidad de
+  esta corrida no cuenta);
+- imagenes: como con, con `ge_verificar` (compara también los índices
+  CI8) y las 12 capturas, sin `prof_pmc`.
+
+Qué mirar (`ventanas.py sin=... con=... censo=... imagenes=...`):
+- con frente a sin: "ms en los indices CI8" y "de ellos esperando a la
+  GPU" (si casi todo es espera, lo siguiente es esperar menos: una ficha de
+  GX tras la copia en vez de `GX_DrawDone`), y la velocidad de la pelea;
+- censo: "% vertices como otra llamada del cuadro", "% mismos datos y
+  huesos, otras matrices" y "% como una del cuadro anterior" en la pelea.
+  Si alguno pesa (pongamos más de un 10-15 % de los vértices con huesos),
+  la caché de vértices o de huesos va primero; si no, el diseño del IR;
+- imagenes: las 12 capturas de siempre y 0 en la verificación (también en
+  "indices CI8 ... distintos").
+
 ### Para el siguiente chat (empezar aquí)
 
 Metodología acordada (detalle en `docs/HOJA_DE_RUTA.md`): primero medir
@@ -3287,8 +3368,10 @@ Metodología acordada (detalle en `docs/HOJA_DE_RUTA.md`): primero medir
   devkitPPC, perfil por función, psq_l emulado, A/B) y para leer los
   registros del Wii (`ventanas.py`): `tools/banco/LEEME.md`. El entorno
   (devkitPPC, qemu, pspautotests, PPSSPP): `tools/setup_entorno.sh`.
-- **Siguiente:** leer los registros de la 0.5.23.4 (`ventanas.py sin=...
-  con=... verif=... imagenes=...`; qué mirar, en su sección de arriba):
+- **Siguiente:** leer los registros de la 0.5.23.5 (`ventanas.py sin=...
+  con=... censo=... imagenes=...`; qué mirar, en su sección de arriba) y
+  decidir con el censo: caché de vértices o de huesos, o el diseño del IR.
+  Lo de la 0.5.23.4 (ya leído, ver su resultado):
   velocidad y ciclos de las peleas, el % de llamadas que siguen la charola
   y por qué no siguen las demás (si "con otra clave" pesa mucho, mirar qué
   cambia entre llamadas: una charola parcial que solo vuelva a buscar la
