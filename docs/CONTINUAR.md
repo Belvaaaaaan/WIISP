@@ -3220,6 +3220,40 @@ Qué mirar (`ventanas.py sin=... con=... verif=... imagenes=...`):
 - imagenes: las 12 capturas de siempre (9E8BC705 ... E9392291) y la
   velocidad sin `prof_pmc` frente a con.
 
+### Resultado de la 0.5.23.4 en el Wii (DBZ: sin / con / verif / imagenes)
+
+- Las 12 capturas de `imagenes`, las de siempre (9E8BC705 ... E9392291);
+  las cuatro corridas ejecutan las mismas 1343,1 M instrucciones.
+- verif: 0 líneas `[VERIF]`; todas las verificaciones a 0 (en la pelea,
+  296.863 y 278.056 llamadas que habrían seguido la charola comparadas por
+  ventana, 0 distintas).
+- La pelea, contra la 0.5.23.3 (`con` de cada una; ciclos del PMC):
+  3600-4200 de 16.546 a 14.886 M (−10,0 %), 4200-4800 de 15.846 a 14.399 M
+  (−9,1 %), final de 7.145 a 6.537 M (−8,5 %). Velocidad de 44,1 a 49,0 %,
+  de 46,1 a 50,7 % y de 42,0 a 46,0 %; sin `prof_pmc` (`imagenes`), de
+  23,2 a 20,8 s y de 22,0 a 20,0 s (−10 %). Escena de 91,2 a 86,5 s.
+  - Estado por llamada de 1.097 a 385 ciclos (−65 %), ensamblar de 261 a
+    158 por triángulo (−40 %), enviar de 358 a 202 por primitiva (−44 %),
+    comandos de 2.671 a 2.545 por llamada.
+  - Siguen la charola el 85-90 % de las llamadas de la pelea (unas 30 mil
+    por ventana con otra clave, 8-17 mil sin charola abierta, 0 por la
+    textura); 11,9 triángulos por `GX_Begin` de media.
+  - Fuera de la pelea (menús, 1-600 y 600-1200) solo sigue el 4-6 %
+    (casi todo "con otra clave") y el estado por llamada sube ~10 %
+    (apuntar sin usar): poco tiempo de GE ahí, pero es la charola parcial
+    o un apunte más barato.
+- `sin` (los siete apagados) en la pelea: 16.941 M frente a 16.546 de la
+  0.5.23.3 (+2,4 %; estado por llamada 1.138 frente a 1.097, ensamblar 269
+  frente a 261): el camino de siempre se hizo algo más lento con el código
+  nuevo (comprobaciones de los interruptores, el formato por puntero sin
+  `ge_charolas_ge`, el código más grande). Con todo encendido no importa;
+  mirarlo si se apaga alguno.
+- Dónde está ahora la pelea (`con`, 3600-4200, 14.886 M ciclos): CPU 41,9 %
+  (29,1 ciclos por instrucción de la PSP), GE 41,9 % (leer vértices 22,3 %,
+  493 ciclos por vértice; ensamblar 6,4 %; comandos 6,2 %; enviar 5,7 %;
+  estado 1,0 %), texturas 6,0 % (los índices CI8 de `ge_rtt_gpu`, 733 ms de
+  20,4 s: ~3,6 %), esperar GX 2,7 %, syscalls 2,4 %, framebuffers 1,5 %.
+
 ### Para el siguiente chat (empezar aquí)
 
 Metodología acordada (detalle en `docs/HOJA_DE_RUTA.md`): primero medir
