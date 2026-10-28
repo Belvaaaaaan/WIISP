@@ -391,6 +391,11 @@ mitad de cuentas). Sin huesos (0x11A) no salía a cuenta (+3 %): sigue como
 estaba. La autoprueba prueba ya lo que haría falta para la pantalla en
 pares (merges, `ps_div`, `ps_sel`). Sigue: el diseño del IR.
 
+Resultado de la 0.5.23.7: imágenes iguales y verificación a 0; ciclos por
+vértice en la pelea −4 a −5 %, la pelea casi igual (~49-50 %, el salto fue
+el de las charolas de la 0.5.23.4). `ps_div` da lo mismo que `fdivs`; los
+merges y la carga y el guardado de pares convierten los denormales en cero.
+
 Primera tanda acordada (todas "más barato", verificables en el PC):
 0.1 `prof_espera`, **skinning rápido** (`ge_skin_rapido`), **matrices al
 cambiar** (`ge_mtx_cache`), **color constante** (`ge_color_const`), 2.1

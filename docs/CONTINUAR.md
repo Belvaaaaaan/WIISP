@@ -3559,6 +3559,33 @@ singles; la pelea, `con` y `con2` contra `sin` (leer vértices, ciclos del
 GE); `imagenes`, las 12 capturas y la verificación a 0 (cada vértice del
 camino por pares comparado bit a bit con el de siempre).
 
+### Resultado de la 0.5.23.7 en el Wii (DBZ: con / sin / con2 / imagenes)
+
+- Capturas las de siempre (9E8BC705 ... E9392291); `ge_verificar`:
+  3.559.483 vértices comparados, 0 distintos (33 % por paired singles en
+  esa corrida).
+- Velocidad: `ge_vdec_ps` baja poco. Pelea (3600-4800): ciclos por vértice
+  495 → 476 y 523 → 499 (−4 a −5 %; se esperaba más: en el banco eran −16 %
+  de instrucciones), leer vértices de 23,1 a 22,1 %, velocidad 49,6 / 49,2
+  / 50,0 % (sin / con / con2: dentro del ruido). El 77 % de los vértices de
+  la corrida van por pares. Por versiones, la pelea: 0.5.23.2 43 %, 0.5.23.3
+  44 %, 0.5.23.4 49 % (las charolas), 0.5.23.6 49 %, 0.5.23.7 49-50 %.
+- Autoprueba ampliada (2^23 pares): `ps_div` 0 distintos (la división por
+  w se puede hacer en pares). `psq_l`+`psq_st` de float, `ps_merge00/01/10/11`,
+  `ps_mr`, `ps_neg`, `ps_abs`, `ps_nabs` y (por el número, ~424 mil)
+  `ps_sel`: distintos solo al copiar un denormal, que sale como cero con su
+  signo (con NI = 1, como `ps_sum`). Los de antes, otra vez a 0. Para
+  `ge_vdec_ps` no cambia nada: comprueba que no haya denormales en lo que
+  carga en pares y los merges solo mueven pesos y bytes de la posición.
+- VFPU (pregunta del usuario): en DBZ es el 2,5 % de las instrucciones de
+  la PSP, ~81 % ya con tarjeta (lv.q, sv.q, vmul, vf2i, vi2f, vmin/vmax,
+  vsub, vadd, mfv, mtv); el resto (conversiones 15 %, vmidt, vtfm, vsin,
+  vcst, vmmul...) por `vfpu_exec`: ~1 % de la pelea. Ninguna instrucción
+  desconocida. Pspautotests de la VFPU: 20 de 26; fallan overlap_vcrsp,
+  prefix_consume, prefix_unpack, vbranch_hazard, vector (23 de 5329
+  líneas: vavg/vfad en el último bit, vcrsp con infinitos) y vregs; casos
+  raros (prefijos, solapes) que DBZ no usa (0 % con prefijos).
+
 ### Para el siguiente chat (empezar aquí)
 
 Metodología acordada (detalle en `docs/HOJA_DE_RUTA.md`): primero medir
