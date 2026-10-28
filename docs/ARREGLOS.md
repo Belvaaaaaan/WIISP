@@ -5,6 +5,82 @@ la 0.5.17.2; antes se marcaban con `//arreglo`). Aquí va, por versión, qué
 se arregló o cambió y una descripción breve. El detalle está en
 `docs/CONTINUAR.md`.
 
+## 0.6.0
+
+El paso 0 del IR/JIT: medir antes de diseñar (detalle en CONTINUAR).
+
+- `cpu/ppc_emit.h` (nuevo): emisor de instrucciones PowerPC (formas D, X
+  y M, rotaciones, saltos con huecos que se parchean después, cargar una
+  constante de 32 bits). Comprobado contra el ensamblador de devkitPPC
+  (65 codificaciones en `test_jit`). Los huecos con el búfer lleno
+  devuelven NULL y el parche no escribe (antes se escribía fuera de la
+  arena).
+- `cpu/jit.c`, `cpu/jit.h` (nuevos): `jit_proto`, un prototipo que pasa a
+  código PowerPC el prefijo de cada bloque del predecodificado hecho de
+  instrucciones enteras que sabe traducir (ALU, desplazamientos, hi/lo,
+  mult/madd, ext/ins, seb/seh, cargas y escrituras de 1, 2 y 4 bytes,
+  saltos condicionales, j/jal/jr/jalr), con cinco registros de la PSP en
+  registros del Broadway, la RAM en little endian con `lwbrx`/`stwbrx` y
+  la comprobación de cada dirección (rango y alineación en un
+  `rlwinm.`; las escrituras también miran el mapa del código). Lo que no
+  cabe o falla sale a la tarjeta k con el estado de la PSP al día.
+  `jit_verificar`: cada bloque nativo se deshace y se repite con el
+  intérprete, comparando registros, hi/lo, pc y lo escrito. Arena de 4 MB;
+  en el Wii la da el anfitrión (`jit_pedir_arena`) y sin ella no se
+  compila nada. `jit_tam_estimado` (palabras de un bloque sin publicarlo,
+  para el censo) y `jit_uso_regs` (qué registros lee y escribe cada
+  instrucción).
+- `cpu/predec.c`, `cpu/predec_bucle.h`, `cpu/predec.h`: una quinta copia
+  del bucle (`run_unido_jit`) con la entrada a lo nativo (a la segunda vez
+  que se entra en un bloque se compila; `alive` 2 = nativo, 3 = no se
+  puede); con el JIT apagado las copias de siempre no cambian. El censo
+  `prof_jit` en la copia de medir: veces que se entra en cada bloque,
+  `jr` que no son `jr ra` (¿al mismo destino que la vez anterior?), la
+  pila de retornos, escrituras de la CPU en zonas con código (¿sobre
+  instrucciones de bloques vivos? las que más escriben), memoria lenta
+  por región; el informe (`cpu_predec_censo`) saca la curva del código
+  caliente (cuántas instrucciones y bloques hacen el 50/75/90/95/99 %,
+  con los KB nativos que costarían), la mezcla de instrucciones, lo que
+  cubriría `jit_proto` y dónde corta, el uso de cada registro, las bases
+  y tamaños de los accesos a memoria y los 10 bloques más calientes con
+  sus instrucciones. `PredecStats`: `jit_bloques`, `jit_instr`,
+  `jit_salidas`.
+- `hle/hle.c`: línea `[TIEMPOS] JIT (jit_proto)` (y `jit_verificar`),
+  el censo cada ventana y el coste de cada llamada del HLE (`Censo JIT,
+  HLE`; sus tablas y el búfer de `jit_tam_estimado` se piden al usarlos,
+  para no quitar MEM1 sin `prof_jit`). `core/prof.h`: fase `CPF_NATIVO` ("codigo nativo" en el
+  muestreo).
+- `wii/jit_banco.c` (nuevo): `prueba_jit`, microprobas del Broadway con el
+  emisor al empezar el autotest (líneas `[PRUEBA_JIT]`): publicar código
+  (con y sin `dcbst`/`icbi`, libogc), su coste por línea, ciclos por
+  salto de cada forma de despachar (b, `mtctr`+`bctr` como las tarjetas,
+  `mtctr` pronto o tarde, `mtlr`+`blr`, `bl`/`blr`, `li`+`bl`, llamar a C
+  con `bctrl` o `bl`), `lwz` contra `lwbrx` y `lhbrx`+`extsh`, un salto
+  mal predicho, la latencia de MEM1 y MEM2 de 16 KB a 8 MB, código en
+  línea recta desde MEM1 y MEM2, la CPU de la PSP con tarjetas y con
+  `jit_proto` (cuatro programas pequeños, con los registros comparados),
+  una DSI de ida y vuelta con `PPCExcptCurPanicFn`, la RAM de la PSP en
+  0x08000000 con DBAT6 y código por un alias IBAT en 0x7FFC0000 con un
+  `bl` directo a C.
+- `wii/main.c`: la arena del JIT sale de la punta de MEM2 la primera vez
+  que se pide (solo con `jit_proto` o `prueba_jit`), si un IBAT la cubre
+  y un trozo de prueba corre ahí. `wii/broadway.c`:
+  `broadway_ibat_cubre`.
+- `core/opt.h`, `core/opt.c`: `jit_proto`, `jit_verificar`, `prof_jit`,
+  `prueba_jit` (todos apagados).
+- `tests/test_jit.c` (nuevo): el emisor contra el ensamblador y 100.000
+  bloques al azar compilados y comparados con el intérprete (en PowerPC),
+  y que ningún acceso hecho en nativo estuviera desalineado, fuera de la
+  RAM o escribiera en una zona con código (lo que el intérprete no ve: un
+  `lwbrx` desalineado da lo mismo en qemu, pero en el Wii puede dar una
+  excepción de alineación).
+  `tests/test_interp.c`: el JIT en la matriz de configuraciones (con
+  arenas diminutas que se llenan), un control positivo (un error a
+  propósito que `jit_verificar` tiene que ver), `prof_jit` en la matriz y
+  una prueba del censo con tres programas de resultado conocido.
+  `mutaciones/0.6.0.txt`.
+- `hle/hle.h`, `dist/apps/wiisp/meta.xml`: versión 0.6.0.
+
 ## 0.5.23.7
 
 - `gpu/ge_vertex.c`: `ge_vdec_ps` (encendido). Los vértices con huesos de

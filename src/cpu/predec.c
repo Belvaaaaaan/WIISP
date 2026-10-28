@@ -22,6 +22,7 @@
 #include "cpu/cpu.h"
 #include "cpu/predec.h"
 #include "cpu/vfpu.h"
+#include "cpu/jit.h"   //Arreglo
 #include "core/memory.h"
 #include "core/opt.h"
 #include "core/prof.h"   //arreglo
@@ -68,6 +69,9 @@ typedef struct Block {
 typedef struct {
 	Block *hnext, *znext[2];
 	u32 z0, z1;    /* zonas de 1 KB que ocupa */
+	JitFn nat;   //Arreglo
+	u32 veces;   //Arreglo
+	u32 jr_ult;   //Arreglo
 	u32 raw[];
 } Frio;
 
@@ -110,13 +114,15 @@ static PredecStats st;
 //arreglo
 static u8 *arena_propia, *frio_arena, *frio_base;   /* frio_base: donde cuenta c[n].a.w */
 static u32 frio_used, arena_tam = ARENA_BYTES, frio_tam = FRIO_BYTES, frio_hecha;
-static u8 compacto, conf = 0xFF;
+static u8 compacto;
+static u16 conf = 0xFFFF;   //Arreglo
 static u8 *reserva;              /* la de MEM1 (predec_mem1), si el anfitrión la dio */
 static u32 reserva_tam;
 static int copia = -1;           /* qué copia del bucle llenó h_tab */
 static u8 medir;   //Arreglo
 static u8 vt_on, vt_verif, vt_arit;   //Arreglo
 static u8 en_on, sc_on;   //Arreglo
+static u8 jit_on, jit_verif;   //Arreglo
 
 #define FRIO(b) ((Frio *)(frio_base + (b)->c[(b)->n].a.w))   //arreglo
 
@@ -167,6 +173,7 @@ void cpu_predec_flush(void){
 	memset(cpu_code_map, 0, sizeof(cpu_code_map));
 	arena_used = 0;
 	frio_used = 0;   //arreglo
+	jit_vaciar();   //Arreglo
 }
 
 void cpu_predec_stats(PredecStats *out){
@@ -187,14 +194,14 @@ void cpu_predec_stats(PredecStats *out){
 void cpu_predec_reserva(void *p, u32 bytes){
 	reserva = (u8 *)p;
 	reserva_tam = bytes;
-	conf = 0xFF;
+	conf = 0xFFFF;   //Arreglo
 }
 
 //arreglo
 void cpu_predec_tam_pruebas(u32 bloques, u32 frio){
 	arena_tam = bloques ? bloques : ARENA_BYTES;
 	frio_tam = frio ? frio : FRIO_BYTES;
-	conf = 0xFF;
+	conf = 0xFFFF;   //Arreglo
 }
 
 //arreglo
@@ -202,7 +209,8 @@ void cpu_predec_tam_pruebas(u32 bloques, u32 frio){
 int cpu_predec_tarjetas_ok(void){
 	u32 i, k, j;
 	Block *b;
-	if(copia != (opt_on[OPT_PREDEC_SIN_UNIR] | (opt_on[OPT_PROF_CPU] | opt_on[OPT_PROF_BLOQUES]) << 1)) return 0;   //Arreglo
+	if(copia != (jit_on && JIT_PPC && !(opt_on[OPT_PROF_CPU] | opt_on[OPT_PROF_BLOQUES] | opt_on[OPT_PROF_JIT]) ? 4 :
+	             opt_on[OPT_PREDEC_SIN_UNIR] | (opt_on[OPT_PROF_CPU] | opt_on[OPT_PROF_BLOQUES] | opt_on[OPT_PROF_JIT]) << 1)) return 0;   //Arreglo
 	for(i = 0; i < (1u << TABLA_BITS); i++)
 		for(b = tabla[i]; b; b = FRIO(b)->hnext)
 			for(k = 0; k <= b->n; k++){
@@ -232,10 +240,11 @@ int cpu_predec_enlaces_ok(void){
 //arreglo
 /* Las arenas según predec_compacto y predec_mem1; si cambian, todo fuera */
 static int predec_config(void){
-	u8 want = (u8)(opt_on[OPT_PREDEC_COMPACTO] | (opt_on[OPT_PREDEC_MEM1] && reserva ? 2 : 0) |
+	u16 want = (u16)(opt_on[OPT_PREDEC_COMPACTO] | (opt_on[OPT_PREDEC_MEM1] && reserva ? 2 : 0) |
 	               (opt_on[OPT_CPU_VFPU_TARJETAS] ? 4 : 0) | (opt_on[OPT_CPU_VFPU_VERIFICAR] ? 8 : 0) |
 	               (opt_on[OPT_CPU_VFPU_ARIT] ? 16 : 0) | (opt_on[OPT_CPU_ENLACE] ? 32 : 0) |
-	               (opt_on[OPT_CPU_SYSCALL_SLOT] ? 64 : 0));   //Arreglo
+	               (opt_on[OPT_CPU_SYSCALL_SLOT] ? 64 : 0) | (opt_on[OPT_JIT_PROTO] ? 128 : 0) |
+	               (opt_on[OPT_JIT_VERIFICAR] ? 256 : 0));   //Arreglo
 	if(likely(want == conf)) return arena != NULL;
 	conf = want;
 	vt_on = (want >> 2) & 1;   //Arreglo
@@ -243,6 +252,8 @@ static int predec_config(void){
 	vt_arit = (want >> 4) & 1;   //Arreglo
 	en_on = (want >> 5) & 1;   //Arreglo
 	sc_on = (want >> 6) & 1;   //Arreglo
+	jit_on = (want >> 7) & 1;   //Arreglo
+	jit_verif = (want >> 8) & 1;   //Arreglo
 	if(!zona_head){
 		zonas = psp_mem.ram_size >> PREDEC_ZONA_BITS;
 		if(zonas > sizeof(cpu_code_map)) return 0;
@@ -263,7 +274,7 @@ static int predec_config(void){
 	}
 	frio_base = compacto ? frio_arena : arena;
 	cpu_predec_flush();
-	if(!arena || !zona_head || (compacto && !frio_arena)){ arena = NULL; conf = 0xFF; return 0; }
+	if(!arena || !zona_head || (compacto && !frio_arena)){ arena = NULL; conf = 0xFFFF; return 0; }   //Arreglo
 	return 1;
 }
 
@@ -277,17 +288,22 @@ enum { K_NORMAL, K_SALTO, K_SYSCALL, K_PARA };
 #define SA_(w)  (((w) >> 6) & 31)
 #define FN_(w)  ((w) & 63)
 
+static int ult_op;   //Arreglo
+
 static void card_r(Card *cd, int op, u32 d, u32 s, u32 t, u32 sa){
+	ult_op = op;   //Arreglo
 	cd->h = h_tab[op];
 	cd->a.r.d = (u8)(d * 4); cd->a.r.s = (u8)(s * 4); cd->a.r.t = (u8)(t * 4); cd->a.r.sa = (u8)sa;
 }
 static void card_i(Card *cd, int op, u32 s, u32 t, u32 imm){
+	ult_op = op;   //Arreglo
 	cd->h = h_tab[op];
 	cd->a.i.s = (u8)(s * 4); cd->a.i.t = (u8)(t * 4); cd->a.i.imm = (s16)(u16)imm;
 }
-static void card_w(Card *cd, int op, u32 w){ cd->h = h_tab[op]; cd->a.w = w; }
+static void card_w(Card *cd, int op, u32 w){ ult_op = op; cd->h = h_tab[op]; cd->a.w = w; }   //Arreglo
 /* Los cuatro bytes tal cual (posiciones, tamaños, bits) */
 static void card_b(Card *cd, int op, u32 d, u32 s, u32 t, u32 sa){
+	ult_op = op;   //Arreglo
 	cd->h = h_tab[op];
 	cd->a.r.d = (u8)d; cd->a.r.s = (u8)(s * 4); cd->a.r.t = (u8)(t * 4); cd->a.r.sa = (u8)sa;
 }
@@ -629,9 +645,46 @@ static int verif_ok(const Block *b){
 
 //arreglo
 /* La memoria lenta, contada y marcada para el muestreo */
+//Arreglo
+static struct {
+	u64 entradas, instr_ent, jr_otros, jr_igual, esc_cpu, esc_instr, lentas[3];
+	u32 esc_pc[8], esc_pc_n[8];
+	u64 ras_jr0, ras_ok0, tirados0, esc0;
+} cz;
+
+//Arreglo
+static void censo_lenta(u32 addr){
+	const u32 a = addr & PSP_ADDR_MASK;
+	cz.lentas[a >= 0x00010000u && a < 0x00014000u ? 0 : a >= 0x04000000u && a < 0x04800000u ? 1 : 2]++;
+}
+
+//Arreglo
+static void censo_escritura(u32 o, u32 size, u32 ipc){
+	Block *b;
+	u32 i, k = 0;
+	int sobre = 0;
+	cz.esc_cpu++;
+	if(!zona_head || (o >> PREDEC_ZONA_BITS) >= zonas) return;
+	for(b = zona_head[o >> PREDEC_ZONA_BITS]; b && !sobre; ){
+		Frio *f = FRIO(b);
+		const u32 bo = (b->pc & PSP_ADDR_MASK) - PSP_RAM_BASE, be = bo + 4u * b->n;
+		if(b->alive && o < be && o + size > bo) sobre = 1;
+		b = f->znext[f->z0 == (o >> PREDEC_ZONA_BITS) ? 0 : 1];
+	}
+	if(!sobre) return;
+	cz.esc_instr++;
+	for(i = 0; i < 8; i++){
+		if(cz.esc_pc_n[i] && cz.esc_pc[i] == ipc){ cz.esc_pc_n[i]++; return; }
+		if(cz.esc_pc_n[i] < cz.esc_pc_n[k]) k = i;
+	}
+	cz.esc_pc[k] = ipc;
+	cz.esc_pc_n[k] = 1;
+}
+
 static u32 lenta_load(u32 addr, u32 size, u32 instr){
 	u32 v;
 	if(!medir) return cpu_slow_load(addr, size, instr);   //Arreglo
+	if(opt_on[OPT_PROF_JIT]) censo_lenta(addr);   //Arreglo
 	st.lentas++;
 	prof_cpu_phase = CPF_LENTA;
 	v = cpu_slow_load(addr, size, instr);
@@ -640,6 +693,7 @@ static u32 lenta_load(u32 addr, u32 size, u32 instr){
 }
 static void lenta_store(u32 addr, u32 size, u32 v, u32 instr){
 	if(!medir){ cpu_slow_store(addr, size, v, instr); return; }   //Arreglo
+	if(opt_on[OPT_PROF_JIT]) censo_lenta(addr);   //Arreglo
 	st.lentas++;
 	prof_cpu_phase = CPF_LENTA;
 	cpu_slow_store(addr, size, v, instr);
@@ -850,6 +904,248 @@ void cpu_predec_caida_nombre(u32 k, char *buf, u32 size){
 	else snprintf(buf, size, "regimm.%02X", (unsigned)(k - 224));
 }
 
+//Arreglo
+static int censo_cat(int op){
+	if(op == OP_NOP) return CENSO_NOP;
+	if(op == OP_LUI) return CENSO_LUI;
+	if(op == OP_DIV || op == OP_DIVU) return CENSO_DIV;
+	if((op >= OP_MFHI && op <= OP_MTLO) || (op >= OP_MULT && op <= OP_MSUBU)) return CENSO_HILO;
+	if(op >= OP_SLL && op <= OP_MIN) return CENSO_ALU;
+	if(op >= OP_ADDIU && op <= OP_XORI) return CENSO_ALUI;
+	if(op >= OP_EXT && op <= OP_BITREV) return CENSO_ALU;
+	if(op == OP_LWL || op == OP_LWR || op == OP_SWL || op == OP_SWR) return CENSO_NOALIN;
+	if(op >= OP_LB && op <= OP_LL) return CENSO_CARGA;
+	if(op >= OP_SB && op <= OP_SC) return CENSO_GUARDA;
+	if(op == OP_LWC1 || op == OP_SWC1 || (op >= OP_MFC1 && op <= OP_CVTSW) || op == OP_BC1) return CENSO_FPU;
+	if(op == OP_VFPU || op == OP_BV || (op >= OP_LVS && op <= OP_VPFX)) return CENSO_VFPU;
+	if(op == OP_SYSCALL) return CENSO_SYSCALL;
+	if(op >= OP_BEQ && op <= OP_BGEZALL) return CENSO_SALTO;
+	if(op == OP_J || op == OP_JAL) return CENSO_J;
+	if(op == OP_JR || op == OP_JALR) return CENSO_JR;
+	return CENSO_OTRA;
+}
+
+//Arreglo
+static int censo_tam(u32 w){
+	switch(w >> 26){
+	case 0x20: case 0x24: case 0x28: return 0;
+	case 0x21: case 0x25: case 0x29: return 1;
+	case 0x23: case 0x2B: case 0x30: case 0x38: case 0x31: case 0x39: case 0x32: case 0x3A: return 2;
+	case 0x36: case 0x3E: return 3;
+	case 0x22: case 0x26: case 0x2A: case 0x2E: case 0x35: case 0x3D: return 4;
+	}
+	return -1;
+}
+
+//Arreglo
+static u32 censo_cubo(u32 v){
+	const u32 e = 31u - (u32)__builtin_clz(v);
+	return e * 8 + ((e >= 3 ? v >> (e - 3) : v << (3 - e)) & 7);
+}
+
+//Arreglo
+void cpu_predec_censo(CensoJit *out){
+	static const char *const cn[CENSO_N] = { "alu", "alu-imm", "lui", "mult/hilo", "div", "carga", "guarda", "lwl/lwr/swl/swr",
+	                                      "salto cond", "j/jal", "jr/jalr", "FPU", "VFPU", "syscall", "nop", "otras" };
+	static const char *const rn[34] = { "zero", "at", "v0", "v1", "a0", "a1", "a2", "a3", "t0", "t1", "t2", "t3", "t4", "t5",
+	                                    "t6", "t7", "s0", "s1", "s2", "s3", "s4", "s5", "s6", "s7", "t8", "t9", "k0", "k1",
+	                                    "gp", "sp", "fp", "ra", "hi", "lo" };
+	static const char *const tn[5] = { "1", "2", "4", "16", "no alineadas" };
+	static const char *const bn[5] = { "sp", "gp", "zero", "constante (lui)", "otra" };
+	static struct { u64 instr, bloques, ejec; } cubo[256];
+	static u64 corte[PREDEC_CAIDA_OPS];
+	CensoJit c;
+	u64 cat[CENSO_N], reg[34], tam[5], base[5], repe = 0, mem = 0, tot_pal = 0, tot_cubre = 0, acc;
+	u32 i, k, j, r, orden[34], no;
+	const Block *top[10];
+	u64 topp[10];
+	u32 ntop = 0;
+	char l[1600], nm[24];
+	size_t len;
+	Block *b;
+	memset(&c, 0, sizeof(c));
+	memset(cubo, 0, sizeof(cubo));
+	memset(corte, 0, sizeof(corte));
+	memset(cat, 0, sizeof(cat));
+	memset(reg, 0, sizeof(reg));
+	memset(tam, 0, sizeof(tam));
+	memset(base, 0, sizeof(base));
+	c.entradas = cz.entradas;
+	c.instr_entradas = cz.instr_ent;
+	for(i = 0; i < (1u << TABLA_BITS); i++)
+		for(b = tabla[i]; b; b = FRIO(b)->hnext){
+			Frio *f = FRIO(b);
+			const u64 v = f->veces;
+			u32 cte = 0, vista = 0, cubre, pal;
+			if(!v || !b->n) continue;
+			pal = jit_tam_estimado(b->pc, f->raw, b->n, b->branch, &cubre);
+			{
+				const u32 q = censo_cubo(f->veces);
+				cubo[q].instr += b->n;
+				cubo[q].bloques++;
+				cubo[q].ejec += v * b->n;
+			}
+			tot_pal += pal;
+			tot_cubre += cubre;
+			c.ejec += v * b->n;
+			c.distintas += b->n;
+			c.bloques++;
+			c.prefijo += v * cubre;
+			if(cubre < b->n) corte[caida_clave(f->raw[cubre])] += v;
+			if(ntop < 10 || topp[ntop - 1] < v * b->n){
+				if(ntop < 10) ntop++;
+				for(j = ntop - 1; j > 0 && topp[j - 1] < v * b->n; j--){ top[j] = top[j - 1]; topp[j] = topp[j - 1]; }
+				top[j] = b;
+				topp[j] = v * b->n;
+			}
+			for(k = 0; k < b->n; k++){
+				const u32 w = f->raw[k], rs = RS_(w), rt = RT_(w);
+				const int t = censo_tam(w);
+				u64 le, es, m;
+				Card cd;
+				u32 tg;
+				decode(w, b->pc + 4 * k, &cd, &tg);
+				cat[censo_cat(ult_op)] += v;
+				jit_uso_regs(w, &le, &es);
+				for(m = le | es; m; m &= m - 1){
+					r = (u32)__builtin_ctzll(m);
+					reg[r] += v * (u64)(((le >> r) & 1) + ((es >> r) & 1));
+				}
+				if(t >= 0){
+					tam[t] += v;
+					base[rs == 29 ? 0 : rs == 28 ? 1 : rs == 0 ? 2 : (cte >> rs) & 1 ? 3 : 4] += v;
+					if((vista >> rs) & 1) repe += v;
+					vista |= 1u << rs;
+					mem += v;
+				}
+				if((w >> 26) == 0x0F) cte |= 1u << rt;
+				else if(((w >> 26) == 0x09 || (w >> 26) == 0x0D) && ((cte >> rs) & 1) && rt) cte |= 1u << rt;
+				else cte &= ~(u32)es;
+				vista &= ~(u32)es;
+			}
+		}
+	memcpy(c.reg, reg, sizeof(reg));
+	memcpy(c.cat, cat, sizeof(cat));
+	c.mem = mem;
+	c.base_cte = base[3];
+	c.repe = repe;
+	c.top_pc = ntop ? top[0]->pc : 0;
+	c.top_veces = ntop ? FRIO(top[0])->veces : 0;
+	c.jr_otros = cz.jr_otros;
+	c.jr_igual = cz.jr_igual;
+	c.esc_cpu = cz.esc_cpu;
+	c.esc_instr = cz.esc_instr;
+	len = (size_t)snprintf(l, sizeof(l), "[TIEMPOS] Censo JIT (prof_jit): %llu entradas a bloques (%llu instrucciones), %llu bloques "
+	                       "vivos con %llu instrucciones distintas y %llu ejecutadas (%.1f%% de lo que entro; lo demas se tiro o "
+	                       "vacio); codigo caliente:",
+	                       (unsigned long long)c.entradas, (unsigned long long)c.instr_entradas, (unsigned long long)c.bloques,
+	                       (unsigned long long)c.distintas, (unsigned long long)c.ejec,
+	                       c.instr_entradas ? 100.0 * (double)c.ejec / (double)c.instr_entradas : 0.0);
+	{
+		static const double pc[5] = { 0.50, 0.75, 0.90, 0.95, 0.99 };
+		u64 ci = 0, cb = 0, ce = 0;
+		int q = 255, p = 0;
+		const double ppi = tot_cubre ? (double)tot_pal / (double)tot_cubre : 0.0;
+		for(; q >= 0 && p < 5; q--){
+			while(p < 5 && c.ejec && (double)(ce + cubo[q].ejec) >= pc[p] * (double)c.ejec){
+				const double f = cubo[q].ejec ? (pc[p] * (double)c.ejec - (double)ce) / (double)cubo[q].ejec : 0.0;
+				const double ins = (double)ci + f * (double)cubo[q].instr;
+				len += (size_t)snprintf(l + len, sizeof(l) - len, " %.0f%% en %.0f instrucciones (%.0f bloques, ~%.0f KB nativos)",
+				                        100.0 * pc[p], ins, (double)cb + f * (double)cubo[q].bloques, ins * ppi * 4.0 / 1024.0);
+				p++;
+			}
+			ci += cubo[q].instr;
+			cb += cubo[q].bloques;
+			ce += cubo[q].ejec;
+		}
+		snprintf(l + len, sizeof(l) - len, "; el prototipo hace %.1f palabras de PowerPC por instruccion que cubre", ppi);
+	}
+	hle_log("%s\n", l);
+	len = (size_t)snprintf(l, sizeof(l), "[TIEMPOS] Censo JIT, mezcla (por instrucciones ejecutadas):");
+	for(i = 0; i < CENSO_N; i++)
+		if(cat[i]) len += (size_t)snprintf(l + len, sizeof(l) - len, " %s %.1f%%", cn[i], c.ejec ? 100.0 * (double)cat[i] / (double)c.ejec : 0.0);
+	len += (size_t)snprintf(l + len, sizeof(l) - len, "; jit_proto cubriria %.1f%% (prefijos); corta en:",
+	                        c.ejec ? 100.0 * (double)c.prefijo / (double)c.ejec : 0.0);
+	for(no = 0; no < 10; no++){
+		u32 m = PREDEC_CAIDA_OPS;
+		for(i = 0; i < PREDEC_CAIDA_OPS; i++) if(corte[i] && (m == PREDEC_CAIDA_OPS || corte[i] > corte[m])) m = i;
+		if(m == PREDEC_CAIDA_OPS) break;
+		cpu_predec_caida_nombre(m, nm, sizeof(nm));
+		len += (size_t)snprintf(l + len, sizeof(l) - len, " %s %.1f%%", nm, c.ejec ? 100.0 * (double)corte[m] / (double)c.ejec : 0.0);
+		corte[m] = 0;
+	}
+	hle_log("%s\n", l);
+	for(i = 0; i < 34; i++) orden[i] = i;
+	for(i = 1; i < 34; i++) for(j = i; j > 0 && reg[orden[j]] > reg[orden[j - 1]]; j--){ r = orden[j]; orden[j] = orden[j - 1]; orden[j - 1] = r; }
+	{
+		u64 t = 0, a8 = 0, a16 = 0, a24 = 0;
+		for(i = 0; i < 34; i++){ t += reg[orden[i]]; if(i < 8) a8 = t; if(i < 16) a16 = t; if(i < 24) a24 = t; }
+		len = (size_t)snprintf(l, sizeof(l), "[TIEMPOS] Censo JIT, registros (lecturas y escrituras): los 8 mas usados %.1f%%, "
+		                       "16 %.1f%%, 24 %.1f%%; por registro:", t ? 100.0 * (double)a8 / (double)t : 0.0,
+		                       t ? 100.0 * (double)a16 / (double)t : 0.0, t ? 100.0 * (double)a24 / (double)t : 0.0);
+		for(i = 0; i < 34 && reg[orden[i]]; i++)
+			len += (size_t)snprintf(l + len, sizeof(l) - len, " %s %.1f%%", rn[orden[i]], 100.0 * (double)reg[orden[i]] / (double)t);
+	}
+	hle_log("%s\n", l);
+	len = (size_t)snprintf(l, sizeof(l), "[TIEMPOS] Censo JIT, memoria: %llu accesos (%.1f%% de las instrucciones); base:",
+	                       (unsigned long long)mem, c.ejec ? 100.0 * (double)mem / (double)c.ejec : 0.0);
+	for(i = 0; i < 5; i++) len += (size_t)snprintf(l + len, sizeof(l) - len, " %s %.1f%%", bn[i], mem ? 100.0 * (double)base[i] / (double)mem : 0.0);
+	len += (size_t)snprintf(l + len, sizeof(l) - len, "; misma base que otro acceso antes en el bloque %.1f%%; tamano:",
+	                        mem ? 100.0 * (double)repe / (double)mem : 0.0);
+	for(i = 0; i < 5; i++) len += (size_t)snprintf(l + len, sizeof(l) - len, " %s %.1f%%", tn[i], mem ? 100.0 * (double)tam[i] / (double)mem : 0.0);
+	acc = cz.lentas[0] + cz.lentas[1] + cz.lentas[2];
+	snprintf(l + len, sizeof(l) - len, "; memoria lenta %llu (scratchpad %llu, VRAM %llu, otra %llu)", (unsigned long long)acc,
+	         (unsigned long long)cz.lentas[0], (unsigned long long)cz.lentas[1], (unsigned long long)cz.lentas[2]);
+	hle_log("%s\n", l);
+	len = (size_t)snprintf(l, sizeof(l), "[TIEMPOS] Censo JIT, saltos: jr/jalr que no son jr ra %llu, al mismo destino que la vez anterior "
+	                       "%.1f%%; jr ra %llu, la pila de retornos (32) acierta %.1f%%; escrituras de la CPU en zonas con codigo %llu "
+	                       "(%llu sobre instrucciones de bloques), avisos de escritura en codigo en total %llu, bloques tirados %llu; "
+	                       "las que mas escriben sobre codigo:",
+	                       (unsigned long long)cz.jr_otros, cz.jr_otros ? 100.0 * (double)cz.jr_igual / (double)cz.jr_otros : 0.0,
+	                       (unsigned long long)(st.ras_jr - cz.ras_jr0),
+	                       st.ras_jr > cz.ras_jr0 ? 100.0 * (double)(st.ras_ok - cz.ras_ok0) / (double)(st.ras_jr - cz.ras_jr0) : 0.0,
+	                       (unsigned long long)cz.esc_cpu, (unsigned long long)cz.esc_instr,
+	                       (unsigned long long)(st.escrituras_en_codigo - cz.esc0), (unsigned long long)(st.bloques_tirados - cz.tirados0));
+	for(i = 0; i < 8; i++)
+		if(cz.esc_pc_n[i]) len += (size_t)snprintf(l + len, sizeof(l) - len, " %08X x%u", (unsigned)cz.esc_pc[i], (unsigned)cz.esc_pc_n[i]);
+	hle_log("%s\n", l);
+	for(i = 0; i < ntop; i++){
+		const Frio *f = FRIO(top[i]);
+		u32 cubre;
+		jit_tam_estimado(top[i]->pc, f->raw, top[i]->n, top[i]->branch, &cubre);
+		len = (size_t)snprintf(l, sizeof(l), "[TIEMPOS] Censo JIT, bloque caliente %u: %08X, %u instrucciones, %u veces (%.1f%%), "
+		                       "prototipo %u:", (unsigned)(i + 1), (unsigned)top[i]->pc, (unsigned)top[i]->n, (unsigned)f->veces,
+		                       c.ejec ? 100.0 * (double)topp[i] / (double)c.ejec : 0.0, (unsigned)cubre);
+		for(k = 0; k < top[i]->n && len + 12 < sizeof(l); k++) len += (size_t)snprintf(l + len, sizeof(l) - len, " %08X", (unsigned)f->raw[k]);
+		hle_log("%s\n", l);
+	}
+	cpu_predec_censo_reiniciar();
+	if(out) *out = c;
+}
+
+//Arreglo
+void cpu_predec_censo_reiniciar(void){
+	u32 i;
+	Block *b;
+	for(i = 0; i < (1u << TABLA_BITS); i++)
+		for(b = tabla[i]; b; b = FRIO(b)->hnext) FRIO(b)->veces = 0;
+	memset(&cz, 0, sizeof(cz));
+	cz.ras_jr0 = st.ras_jr;
+	cz.ras_ok0 = st.ras_ok;
+	cz.esc0 = st.escrituras_en_codigo;
+	cz.tirados0 = st.bloques_tirados;
+}
+
+#if JIT_PPC   //Arreglo
+//Arreglo
+static void jit_intentar(Block *b){
+	Frio *f = FRIO(b);
+	u32 cubre;
+	f->nat = jit_compilar(b->pc, f->raw, b->n, b->branch, jit_verif, &cubre);
+	b->alive = f->nat ? 2 : 3;
+}
+#endif   //Arreglo
+
 //arreglo
 /* El bucle dos veces: el de siempre y uno sin unir los finales de las
    tarjetas (-fno-crossjumping): así cada tarjeta acaba en su propio mtctr
@@ -859,6 +1155,7 @@ void cpu_predec_caida_nombre(u32 k, char *buf, u32 size){
 #define PREDEC_BUCLE run_unido
 #define PREDEC_COPIA 0
 #define PREDEC_MEDIR 0   //Arreglo
+#define PREDEC_JIT 0   //Arreglo
 #define PREDEC_ATRIB __attribute__((optimize("no-branch-count-reg")))   //Arreglo
 #include "cpu/predec_bucle.h"
 #undef PREDEC_BUCLE
@@ -868,6 +1165,7 @@ void cpu_predec_caida_nombre(u32 k, char *buf, u32 size){
 #define PREDEC_BUCLE run_sin_unir
 #define PREDEC_COPIA 1
 #define PREDEC_MEDIR 0   //Arreglo
+#define PREDEC_JIT 0   //Arreglo
 #define PREDEC_ATRIB __attribute__((optimize("no-crossjumping", "no-branch-count-reg")))   //Arreglo
 #include "cpu/predec_bucle.h"
 #undef PREDEC_BUCLE
@@ -878,6 +1176,7 @@ void cpu_predec_caida_nombre(u32 k, char *buf, u32 size){
 #define PREDEC_BUCLE run_unido_medir
 #define PREDEC_COPIA 2
 #define PREDEC_MEDIR 1
+#define PREDEC_JIT 0   //Arreglo
 #define PREDEC_ATRIB __attribute__((optimize("no-branch-count-reg")))   //Arreglo
 #include "cpu/predec_bucle.h"
 #undef PREDEC_BUCLE
@@ -887,18 +1186,37 @@ void cpu_predec_caida_nombre(u32 k, char *buf, u32 size){
 #define PREDEC_BUCLE run_sin_unir_medir
 #define PREDEC_COPIA 3
 #define PREDEC_MEDIR 1
+#define PREDEC_JIT 0   //Arreglo
 #define PREDEC_ATRIB __attribute__((optimize("no-crossjumping", "no-branch-count-reg")))   //Arreglo
 #include "cpu/predec_bucle.h"
 #undef PREDEC_BUCLE
 #undef PREDEC_COPIA
 #undef PREDEC_MEDIR
 #undef PREDEC_ATRIB
+#undef PREDEC_JIT   //Arreglo
+//Arreglo
+#if JIT_PPC
+#define PREDEC_BUCLE run_unido_jit
+#define PREDEC_COPIA 4
+#define PREDEC_MEDIR 0
+#define PREDEC_JIT 1
+#define PREDEC_ATRIB __attribute__((optimize("no-branch-count-reg")))
+#include "cpu/predec_bucle.h"
+#undef PREDEC_BUCLE
+#undef PREDEC_COPIA
+#undef PREDEC_MEDIR
+#undef PREDEC_ATRIB
+#undef PREDEC_JIT
+#endif
 
 //arreglo
 u32 cpu_run_predec(u32 max_cycles){
 	if(cpu_stop_requested || !max_cycles) return 0;
 	if(unlikely(!predec_config())) return cpu_run_interp(max_cycles);
-	medir = opt_on[OPT_PROF_CPU] | opt_on[OPT_PROF_BLOQUES];   //Arreglo
+	medir = opt_on[OPT_PROF_CPU] | opt_on[OPT_PROF_BLOQUES] | opt_on[OPT_PROF_JIT];   //Arreglo
 	if(medir) return opt_on[OPT_PREDEC_SIN_UNIR] ? run_sin_unir_medir(max_cycles) : run_unido_medir(max_cycles);   //Arreglo
+#if JIT_PPC   //Arreglo
+	if(jit_on) return run_unido_jit(max_cycles);   //Arreglo
+#endif   //Arreglo
 	return opt_on[OPT_PREDEC_SIN_UNIR] ? run_sin_unir(max_cycles) : run_unido(max_cycles);
 }

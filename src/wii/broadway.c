@@ -118,6 +118,22 @@ static void pmc_modo(int modo){
 	MTSPR(952, (1u << 6) | 2u);
 }
 
+//Arreglo
+int broadway_ibat_cubre(u32 ea, u32 bytes){
+	u32 u[8], l[8], n = (MFSPR(1011) & HID4_SBE) ? 8 : 4, i;
+	u[0] = MFSPR(528); l[0] = MFSPR(529); u[1] = MFSPR(530); l[1] = MFSPR(531);
+	u[2] = MFSPR(532); l[2] = MFSPR(533); u[3] = MFSPR(534); l[3] = MFSPR(535);
+	if(n == 8){
+		u[4] = MFSPR(560); l[4] = MFSPR(561); u[5] = MFSPR(562); l[5] = MFSPR(563);
+		u[6] = MFSPR(564); l[6] = MFSPR(565); u[7] = MFSPR(566); l[7] = MFSPR(567);
+	}
+	for(i = 0; i < n; i++){
+		const u32 ini = u[i] & 0xFFFE0000u, tam = (((u[i] >> 2) & 0x7FFu) + 1) << 17;
+		if((u[i] & 2) && (l[i] & 3) && !(l[i] & 0x28) && ea >= ini && bytes <= tam && ea - ini <= tam - bytes) return 1;
+	}
+	return 0;
+}
+
 void broadway_pmc_init(void){
 	pmc_modo(0);   //arreglo
 	prof_pmc_read = pmc_read;

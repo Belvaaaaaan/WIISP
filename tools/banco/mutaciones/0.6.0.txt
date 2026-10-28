@@ -1,0 +1,180 @@
+=== jit: addu como subf
+@ src/cpu/jit.c
+<<<
+else e_add(&c->e, o, a, b); }
+>>>
+else e_subf(&c->e, o, b, a); }
+===
+=== jit: slt sin signo
+@ src/cpu/jit.c
+<<<
+		slt(c, o, a, b, x->op == J_SLT);
+>>>
+		slt(c, o, a, b, x->op == J_SLTU);
+===
+=== jit: lw sin mirar la alineacion
+@ src/cpu/jit.c
+<<<
+	if(t == 4) e_rlwinm_(&c->e, P_T0, P_T2, 30, 0, c->hb + 1);
+>>>
+	if(t == 4) e_rlwinm_(&c->e, P_T0, P_T2, 31, 0, c->hb);
+===
+=== jit: escribir sin mirar el mapa del codigo
+@ src/cpu/jit.c
+<<<
+	e_lbzx(&c->e, P_T0, P_MAPA, P_T0);
+	e_cmpwi(&c->e, 0, P_T0, 0);
+	salida(c, BO_FALSO, CR_EQ, k);
+>>>
+	e_lbzx(&c->e, P_T0, P_MAPA, P_T0);
+===
+=== jit: bne como beq
+@ src/cpu/jit.c
+<<<
+		salto_condicional(c, x->op == J_BEQ ? BO_FALSO : BO_CIERTO, CR_EQ, fin_bloque, x->destino);
+>>>
+		salto_condicional(c, x->op == J_BEQ ? BO_CIERTO : BO_FALSO, CR_EQ, fin_bloque, x->destino);
+===
+=== jit: al salir no se guarda el quinto registro de la cache
+@ src/cpu/jit.c
+<<<
+		if(c->en[r] >= 0 && ((sucio >> c->en[r]) & 1)) e_stw(&c->e, cache_ppc[(int)c->en[r]], off_reg(r), P_CTX);
+>>>
+		if(c->en[r] >= 0 && c->en[r] < 4 && ((sucio >> c->en[r]) & 1)) e_stw(&c->e, cache_ppc[(int)c->en[r]], off_reg(r), P_CTX);
+===
+=== jit: el prologo no carga hi ni lo
+@ src/cpu/jit.c
+<<<
+	for(r = 1; r < 34; r++){
+		u64 visto = 0;
+>>>
+	for(r = 1; r < 32; r++){
+		u64 visto = 0;
+===
+=== jit: lh sin signo y lhu con signo
+@ src/cpu/jit.c
+<<<
+if(x->op == J_LH) e_extsh(&c->e, o, o); }
+>>>
+if(x->op == J_LHU) e_extsh(&c->e, o, o); }
+===
+=== jit: jal deja ra una instruccion antes
+@ src/cpu/jit.c
+<<<
+		if(x->op == J_JAL){ e_carga32(&c->e, P_T0, fin_bloque); fin(c, 31, P_T0); }
+>>>
+		if(x->op == J_JAL){ e_carga32(&c->e, P_T0, fin_bloque - 4); fin(c, 31, P_T0); }
+===
+=== jit: srl como rotr
+@ src/cpu/jit.c
+<<<
+		else if(x->op == J_SRL) e_rlwinm(&c->e, o, b, 32 - x->sa, x->sa, 31);
+>>>
+		else if(x->op == J_SRL) e_rlwinm(&c->e, o, b, 32 - x->sa, 0, 31);
+===
+=== jit: el bloque entero sin salto deja mal el pc
+@ src/cpu/jit.c
+<<<
+			e_carga32(&c->e, P_T0, fin_bloque);
+			e_stw(&c->e, P_T0, OFF_PC, P_CTX);
+		}
+		salir(c, c->sucio, JIT_HECHO);
+>>>
+			e_carga32(&c->e, P_T0, fin_bloque + 4);
+			e_stw(&c->e, P_T0, OFF_PC, P_CTX);
+		}
+		salir(c, c->sucio, JIT_HECHO);
+===
+=== jit: la salida a mitad apunta a la siguiente tarjeta
+@ src/cpu/jit.c
+<<<
+	c->sal[c->nsal].k = (u8)k;
+>>>
+	c->sal[c->nsal].k = (u8)(k + 1);
+===
+=== jit: verificar no deshace las escrituras
+@ src/cpu/jit.c
+<<<
+	for(i = nlog; i-- > 0;) escribir_mem(jit_log[3 * i], jit_log[3 * i + 2], jit_log[3 * i + 1]);
+>>>
+	for(i = nlog; i-- > nlog;) escribir_mem(jit_log[3 * i], jit_log[3 * i + 2], jit_log[3 * i + 1]);
+===
+=== jit: salir en el delay slot sin el destino del salto
+@ src/cpu/predec_bucle.h
+<<<
+		if(cblk->branch && k_ == BN - 1){ bt = cpu.pc; nbx = cblk->succ[bt != cblk->end]; }   //Arreglo
+>>>
+		if(cblk->branch && k_ == BN - 2){ bt = cpu.pc; nbx = cblk->succ[bt != cblk->end]; }   //Arreglo
+===
+=== jit: madd suma sin acarreo
+@ src/cpu/jit.c
+<<<
+		if(x->op == J_MADD || x->op == J_MADDU) e_adde(&c->e, P_T1, h, P_T1);
+>>>
+		if(x->op == J_MADD || x->op == J_MADDU) e_add(&c->e, P_T1, h, P_T1);
+===
+=== jit: ins con la posicion de ext
+@ src/cpu/jit.c
+<<<
+		e_rlwimi(&c->e, v, a, (int)pos, (int)(31 - top), (int)(31 - pos));
+>>>
+		e_rlwimi(&c->e, v, a, (int)pos, (int)(31 - top), (int)(30 - pos));
+===
+=== censo: addiu cuenta como alu
+@ src/cpu/predec.c
+<<<
+	if(op >= OP_ADDIU && op <= OP_XORI) return CENSO_ALUI;
+>>>
+	if(op >= OP_ADDIU && op <= OP_XORI) return CENSO_ALU;
+===
+=== censo: jr al mismo destino al reves
+@ src/cpu/predec_bucle.h
+<<<
+			cz.jr_igual += (u64)(f_->jr_ult == pc);   //Arreglo
+>>>
+			cz.jr_igual += (u64)(f_->jr_ult != pc);   //Arreglo
+===
+=== censo: lui marca la base y no el destino
+@ src/cpu/predec.c
+<<<
+				if((w >> 26) == 0x0F) cte |= 1u << rt;
+>>>
+				if((w >> 26) == 0x0F) cte |= 1u << rs;
+===
+=== censo: las entradas no cuentan veces
+@ src/cpu/predec_bucle.h
+<<<
+	if(pj){ FRIO(nb)->veces++; cz.entradas++; cz.instr_ent += nb->n; }   //Arreglo
+>>>
+	if(pj){ cz.entradas++; cz.instr_ent += nb->n; }   //Arreglo
+===
+=== censo: escritura sobre instrucciones al reves
+@ src/cpu/predec.c
+<<<
+		if(b->alive && o < be && o + size > bo) sobre = 1;
+>>>
+		if(b->alive && o > be && o + size > bo) sobre = 1;
+===
+=== censo: reiniciar deja una vez
+@ src/cpu/predec.c
+<<<
+		for(b = tabla[i]; b; b = FRIO(b)->hnext) FRIO(b)->veces = 0;
+	memset(&cz, 0, sizeof(cz));
+>>>
+		for(b = tabla[i]; b; b = FRIO(b)->hnext) FRIO(b)->veces = 1;
+	memset(&cz, 0, sizeof(cz));
+===
+=== censo: misma base mira el destino
+@ src/cpu/predec.c
+<<<
+					vista |= 1u << rs;
+>>>
+					vista |= 1u << rt;
+===
+=== censo: las escrituras de la CPU en zonas con codigo no cuentan
+@ src/cpu/predec.c
+<<<
+	cz.esc_cpu++;
+>>>
+	(void)0;
+===

@@ -138,6 +138,7 @@ enum {
 	CPF_LENTA,      /* cpu_slow_load y cpu_slow_store */
 	CPF_BUSCAR,     /* buscar, traducir y comprobar bloques */
 	CPF_PASO,       /* una instrucción con el intérprete de siempre */
+	CPF_NATIVO,   //Arreglo
 	CPF_N
 };
 extern volatile int prof_cpu_phase;

@@ -48,6 +48,8 @@ enum {
 	OPT_PROF_HUESOS,   //Arreglo
 	OPT_PROF_REPETIDOS,   //Arreglo
 	OPT_PRUEBA_PS,   //Arreglo
+	OPT_PROF_JIT,   //Arreglo
+	OPT_PRUEBA_JIT,   //Arreglo
 	/* Primera tanda del GE (resultado idéntico) */
 	OPT_GE_SKIN_RAPIDO,   /* skinning mezclando las matrices por peso */
 	OPT_GE_MTX_CACHE,     /* matrices combinadas solo cuando cambian */
@@ -115,6 +117,8 @@ enum {
 	OPT_CPU_VFPU_ARIT,   //Arreglo
 	OPT_CPU_ENLACE,   //Arreglo
 	OPT_CPU_SYSCALL_SLOT,   //Arreglo
+	OPT_JIT_PROTO,   //Arreglo
+	OPT_JIT_VERIFICAR,   //Arreglo
 	OPT_CPU_FUSION,       /* 2.3 especializar y fusionar */
 	OPT_HLE_RAPIDO,       /* 2.4a camino mínimo de CpuSuspendIntr y Memcpy */
 	OPT_HLE_REEMPLAZO,    /* 2.4b reemplazo de funciones por hash */

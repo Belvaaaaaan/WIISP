@@ -24,8 +24,10 @@
 #include "cpu/cpu.h"
 #include "cpu/predec.h"
 #include "cpu/vfpu.h"
+#include "cpu/jit.h"   //Arreglo
 #include "core/memory.h"
 #include "core/opt.h"
+#include "hle/hle.h"   //Arreglo
 #include "test.h"
 
 #define CODE      0x08A00340u   /* cruza una zona de 1 KB del predecodificado */
@@ -398,7 +400,8 @@ static void one_program(int prog, int faults, Snap *init, Snap *ra, Snap *rb, Sn
 	if(prog % 4 == 0) cpu_predec_tam_pruebas(4096, 2048);
 	else if(prog % 4 == 1) cpu_predec_tam_pruebas(16384, 1024);   /* se llena antes lo frío */
 	else cpu_predec_tam_pruebas(0, 0);
-	for(k = 0; k < 12; k++){   //Arreglo
+	jit_tam_pruebas(prog % 3 == 0 ? 384 : prog % 3 == 1 ? 4096 : 0);   //Arreglo
+	for(k = 0; k < 16; k++){   //Arreglo
 		opt_on[OPT_PREDEC_COMPACTO] = (u8)(k & 1);
 		opt_on[OPT_PREDEC_SIN_UNIR] = (u8)((k >> 1) & 1);   //Arreglo
 		opt_on[OPT_PROF_CPU] = (u8)((k ^ prog) & 1 & (k >> 2 | prog >> 2));   //Arreglo
@@ -408,11 +411,17 @@ static void one_program(int prog, int faults, Snap *init, Snap *ra, Snap *rb, Sn
 		opt_on[OPT_CPU_ENLACE] = (u8)((k + prog) % 3 != 0);   //Arreglo
 		opt_on[OPT_CPU_SYSCALL_SLOT] = (u8)((k + prog / 3) % 2);   //Arreglo
 		opt_on[OPT_CPU_VFPU_VERIFICAR] = (u8)(k >> 2 == 2);   //Arreglo
+		opt_on[OPT_JIT_PROTO] = (u8)(k >= 12);   //Arreglo
+		opt_on[OPT_JIT_VERIFICAR] = (u8)(k >= 14);   //Arreglo
+		opt_on[OPT_PROF_JIT] = (u8)((k + prog) % 5 == 1);   //Arreglo
+		if(k >= 12){ opt_on[OPT_PROF_CPU] = 0; opt_on[OPT_PROF_BLOQUES] = 0; opt_on[OPT_PROF_JIT] = 0; }   //Arreglo
 		put(init);
 		run_chunks(rc, chunks, 2);
 		CHECK(same(ra, rc, prog));
 		CHECK(cpu_predec_enlaces_ok());   //Arreglo
+		if(opt_on[OPT_PROF_JIT] && prog % 23 == 4){ hle_set_log_screen(0); cpu_predec_censo(NULL); hle_set_log_screen(1); }   //Arreglo
 	}
+	opt_on[OPT_PROF_JIT] = 0;   //Arreglo
 }
 
 void test_interp(void){
@@ -423,6 +432,7 @@ void test_interp(void){
 	const u8 saved_vt = opt_on[OPT_CPU_VFPU_TARJETAS], saved_vv = opt_on[OPT_CPU_VFPU_VERIFICAR];   //Arreglo
 	const u8 saved_va = opt_on[OPT_CPU_VFPU_ARIT];   //Arreglo
 	const u8 saved_en = opt_on[OPT_CPU_ENLACE], saved_sc = opt_on[OPT_CPU_SYSCALL_SLOT];   //Arreglo
+	const u8 saved_jp = opt_on[OPT_JIT_PROTO], saved_jv = opt_on[OPT_JIT_VERIFICAR];   //Arreglo
 	const int saved_intr = hle_get_intr_enabled(), saved_live = vfpu_live;
 	u64 total = 0;
 	int p, err_fd, k;   //arreglo
@@ -466,6 +476,156 @@ void test_interp(void){
 		printf("  %llu vaciados (arenas diminutas)\n", (unsigned long long)ps.vaciados);   //arreglo
 	}
 	cpu_predec_tam_pruebas(0, 0);   //arreglo
+	jit_tam_pruebas(0);   //Arreglo
+	//Arreglo
+	if(JIT_PPC){
+		JitStats js;
+		PredecStats ps;
+		jit_stats(&js);
+		cpu_predec_stats(&ps);
+		printf("  jit_proto: %llu bloques compilados (%llu instrucciones, %llu palabras), %llu sin nada que compilar, %llu vaciados, "
+		       "%llu llenos; %llu bloques nativos ejecutados (%llu instrucciones, %llu salidas a tarjetas); verificados %llu, "
+		       "%llu parciales, %llu distintos\n", (unsigned long long)js.compilados, (unsigned long long)js.instr_compiladas,
+		       (unsigned long long)js.palabras, (unsigned long long)js.sin_nada, (unsigned long long)js.vaciados,
+		       (unsigned long long)js.llenos, (unsigned long long)ps.jit_bloques, (unsigned long long)ps.jit_instr,
+		       (unsigned long long)ps.jit_salidas, (unsigned long long)js.verif_bloques, (unsigned long long)js.verif_parciales,
+		       (unsigned long long)js.verif_mal);
+		CHECK(js.compilados > 20000);
+		CHECK(ps.jit_bloques > 50000);
+		CHECK(ps.jit_salidas > 1000);
+		CHECK(js.llenos > 100);
+		CHECK(js.verif_bloques > 5000);
+		CHECK_EQ(js.verif_mal, 0u);
+	}
+	//Arreglo
+	if(JIT_PPC){
+		const u32 P = 0x08A01300u;
+		JitStats a, b;
+		u32 m;
+		for(m = 0; m < 3; m++){
+			opt_on[OPT_CPU_SIN_EXTRA] = 1;
+			opt_on[OPT_CPU_PREDEC] = 1;
+			opt_on[OPT_PROF_CPU] = opt_on[OPT_PROF_BLOQUES] = opt_on[OPT_PROF_JIT] = 0;
+			opt_on[OPT_JIT_PROTO] = 1;
+			opt_on[OPT_JIT_VERIFICAR] = (u8)(m != 1);
+			jit_prueba_error = m != 0;
+			cpu_predec_flush();
+			mem_write32(P, rtype(0, 2, 3, 2, 0, 0x21));
+			mem_write32(P + 4, itype(0x09, 4, 4, 1));
+			mem_write32(P + 8, itype(0x05, 4, 5, 0xFFFD));
+			mem_write32(P + 12, 0);
+			mem_write32(P + 16, 0x1000FFFFu);
+			mem_write32(P + 20, 0);
+			memset(&cpu, 0, sizeof(cpu));
+			cpu.r[3] = 5;
+			cpu.r[5] = 10;
+			cpu.pc = P;
+			cpu.npc = P + 4;
+			cpu_stop_requested = 0;
+			jit_stats(&a);
+			cpu_run(42);
+			jit_stats(&b);
+			jit_prueba_error = 0;
+			CHECK(b.compilados > a.compilados);
+			if(m == 1) CHECK(cpu.r[2] != 50u);
+			else CHECK_EQ(cpu.r[2], 50u);
+			CHECK_EQ(cpu.r[4], 10u);
+			CHECK_EQ(b.verif_mal - a.verif_mal, m == 2 ? 9u : 0u);
+		}
+	}
+	opt_on[OPT_JIT_PROTO] = 0;   //Arreglo
+	opt_on[OPT_JIT_VERIFICAR] = 0;   //Arreglo
+	//Arreglo
+	{
+		const u32 P = 0x08A01300u, P2 = 0x08A01400u, P3 = 0x08A01800u;
+		CensoJit c;
+		opt_on[OPT_CPU_SIN_EXTRA] = 1;
+		opt_on[OPT_CPU_PREDEC] = 1;
+		opt_on[OPT_CPU_ENLACE] = 1;
+		opt_on[OPT_PROF_CPU] = opt_on[OPT_PROF_BLOQUES] = 0;
+		opt_on[OPT_PROF_JIT] = 1;
+		hle_set_log_screen(0);
+		cpu_predec_flush();
+		cpu_predec_censo(NULL);
+		mem_write32(P, rtype(0, 2, 3, 2, 0, 0x21));
+		mem_write32(P + 4, itype(0x09, 4, 4, 1));
+		mem_write32(P + 8, itype(0x05, 4, 5, 0xFFFD));
+		mem_write32(P + 12, 0);
+		mem_write32(P + 16, 0x1000FFFFu);
+		mem_write32(P + 20, 0);
+		memset(&cpu, 0, sizeof(cpu));
+		cpu.r[3] = 5;
+		cpu.r[5] = 10;
+		cpu.pc = P;
+		cpu.npc = P + 4;
+		cpu_stop_requested = 0;
+		cpu_run(42);
+		cpu_predec_censo(&c);
+		CHECK_EQ(cpu.r[2], 50u);
+		CHECK_EQ(c.entradas, 11u);
+		CHECK_EQ(c.instr_entradas, 42u);
+		CHECK_EQ(c.ejec, 42u);
+		CHECK_EQ(c.bloques, 2u);
+		CHECK_EQ(c.distintas, 6u);
+		CHECK_EQ(c.prefijo, 42u);
+		CHECK_EQ(c.top_pc, P);
+		CHECK_EQ(c.top_veces, 10u);
+		CHECK_EQ(c.cat[CENSO_ALU], 10u);
+		CHECK_EQ(c.cat[CENSO_ALUI], 10u);
+		CHECK_EQ(c.cat[CENSO_SALTO], 11u);
+		CHECK_EQ(c.cat[CENSO_NOP], 11u);
+		CHECK_EQ(c.reg[2], 20u);
+		CHECK_EQ(c.reg[3], 10u);
+		CHECK_EQ(c.reg[4], 30u);
+		CHECK_EQ(c.reg[5], 10u);
+		CHECK_EQ(c.reg[0], 0u);
+		CHECK_EQ(c.mem, 0u);
+		mem_write32(P2, itype(0x0F, 0, 8, 0x08A1));
+		mem_write32(P2 + 4, itype(0x23, 8, 9, 0x100));
+		mem_write32(P2 + 8, itype(0x2B, 29, 9, 0));
+		mem_write32(P2 + 12, itype(0x23, 8, 11, 4));
+		mem_write32(P2 + 16, rtype(0, 10, 0, 0, 0, 0x08));
+		mem_write32(P2 + 20, 0);
+		mem_write32(P2 + 32, (2u << 26) | ((P2 >> 2) & 0x03FFFFFFu));
+		mem_write32(P2 + 36, 0);
+		memset(&cpu, 0, sizeof(cpu));
+		cpu.r[10] = P2 + 32;
+		cpu.r[29] = 0x08A20000u;
+		cpu.pc = P2;
+		cpu.npc = P2 + 4;
+		cpu_run(80);
+		cpu_predec_censo(&c);
+		CHECK_EQ(cpu.pc, P2);
+		CHECK_EQ(c.entradas, 20u);
+		CHECK_EQ(c.ejec, 80u);
+		CHECK_EQ(c.mem, 30u);
+		CHECK_EQ(c.base_cte, 20u);
+		CHECK_EQ(c.repe, 10u);
+		CHECK_EQ(c.jr_otros, 10u);
+		CHECK_EQ(c.jr_igual, 9u);
+		CHECK_EQ(c.cat[CENSO_LUI], 10u);
+		CHECK_EQ(c.cat[CENSO_CARGA], 20u);
+		CHECK_EQ(c.cat[CENSO_GUARDA], 10u);
+		CHECK_EQ(c.cat[CENSO_JR], 10u);
+		CHECK_EQ(c.cat[CENSO_J], 10u);
+		CHECK_EQ(c.cat[CENSO_NOP], 20u);
+		CHECK_EQ(c.esc_cpu, 0u);
+		mem_write32(P3, itype(0x2B, 8, 0, 4));
+		mem_write32(P3 + 4, 0);
+		mem_write32(P3 + 8, 0x1000FFFFu);
+		mem_write32(P3 + 12, 0);
+		memset(&cpu, 0, sizeof(cpu));
+		cpu.r[8] = P3;
+		cpu.pc = P3;
+		cpu.npc = P3 + 4;
+		cpu_run(4);
+		cpu_predec_censo(&c);
+		CHECK_EQ(cpu.pc, P3 + 8);
+		CHECK_EQ(c.esc_cpu, 1u);
+		CHECK_EQ(c.esc_instr, 1u);
+		hle_set_log_screen(1);
+		opt_on[OPT_PROF_JIT] = 0;
+	}
 
 	/* cpu_verificar: código cambiado sin avisar (lo que pasaría si faltara
 	   un aviso de escritura): el bloque viejo se ve al entrar y se rehace */
@@ -823,6 +983,8 @@ void test_interp(void){
 	opt_on[OPT_CPU_VFPU_ARIT] = saved_va;   //Arreglo
 	opt_on[OPT_CPU_ENLACE] = saved_en;   //Arreglo
 	opt_on[OPT_CPU_SYSCALL_SLOT] = saved_sc;   //Arreglo
+	opt_on[OPT_JIT_PROTO] = saved_jp;   //Arreglo
+	opt_on[OPT_JIT_VERIFICAR] = saved_jv;   //Arreglo
 	hle_set_intr_enabled(saved_intr);
 	vfpu_live = saved_live;
 	cpu_stop_requested = 0;

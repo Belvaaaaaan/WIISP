@@ -46,6 +46,7 @@ void test_texcache(void);
 /* tests/test_interp.c: el intérprete contra el de referencia */
 void test_interp(void);
 void test_enlace(void);   //Arreglo
+void test_jit(void);   //Arreglo
 /* tests/test_gxemit.c: envío de triángulos a GX, rápido contra referencia */
 void test_gxemit(void);
 /* tests/test_vdec.c: el camino de los vértices del GE con y sin interruptor */

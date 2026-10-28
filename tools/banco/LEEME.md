@@ -203,6 +203,15 @@ al repositorio), `gcc-powerpc-linux-gnu` y `qemu-user`. Las salidas van a
   `--opt cpu_vfpu_tarjetas=0`, 164). `BANCO=vfpu_arit_banco.c`: vmul,
   vsub, vmin, vmax, vmov, vf2i, vi2f, vscl, vadd, vpfx y vabs; 0.5.18.1
   150 por instrucción VFPU (con `--opt cpu_vfpu_arit=0`, 263).
+- `jit_banco.sh` (+ `jit_banco_pc.c`): las microprobas del JIT
+  (`src/wii/jit_banco.c`, `prueba_jit` en el Wii) en PowerPC bajo qemu,
+  sin lo que solo existe en el Wii (PMC, DSI, BAT): los ciclos no valen,
+  pero dice si el código que generan corre y da lo que tiene que dar
+  ("fin: todo bien"). Probarlo antes de llevar al Wii una microprueba
+  nueva: en la 0.6.0 encontró una cadena de `lwz` que empezaba en una
+  palabra a 0 (en el Wii, una DSI).
+- Mutaciones del JIT: `mutar.py mutaciones/0.6.0.txt --dkp --solo
+  interp,jit` (en `qemu-ppc -cpu 750` el código nativo corre de verdad).
 - `cpu_grande.py` + `medir_cache.sh`: fallos de caché por instrucción de la
   PSP con cachegrind (valgrind) sobre el CLI del PC, en programas de N
   funciones con bucles, cargas, escrituras, ramas y llamadas en orden

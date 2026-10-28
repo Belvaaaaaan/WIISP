@@ -64,6 +64,7 @@
 #include <unistd.h>
 #include <sys/stat.h>
 #include <ogc/lwp_watchdog.h>
+#include <ogc/machine/processor.h>   //Arreglo
 #include <fat.h>
 #include "wii/wii.h"
 #include "core/opt.h"   //Arreglo
@@ -73,6 +74,7 @@
 #include "hle/hle.h"
 #include "core/prof.h"
 #include "cpu/predec.h"   //arreglo
+#include "cpu/jit.h"   //Arreglo
 #ifdef WIISP_PROF
 extern unsigned long long ge_prof[8];
 #endif
@@ -106,6 +108,30 @@ static void reserva_mem1(void){
 	if(lo + size > hi) return;
 	SYS_SetArena1Lo(lo + size);
 	cpu_predec_reserva(lo, size);
+}
+
+//Arreglo
+static void *arena_jit(u32 bytes){
+	u32 nivel, hi, lo, r;
+	u32 *p = NULL;
+	_CPU_ISR_Disable(nivel);
+	hi = (u32)SYS_GetArena2Hi() & ~31u;
+	lo = (u32)SYS_GetArena2Lo();
+	if(hi > lo && hi - lo >= bytes + (1u << 20) && broadway_ibat_cubre(hi - bytes, bytes)){
+		p = (u32 *)(hi - bytes);
+		SYS_SetArena2Hi(p);
+	}
+	_CPU_ISR_Restore(nivel);
+	if(!p){
+		hle_log_quiet("[JIT] sin arena: MEM2 libre %08X-%08X, ningun IBAT la cubre o no cabe\n", lo, hi);
+		return NULL;
+	}
+	p[0] = 0x386005A5u;
+	p[1] = 0x4E800020u;
+	jit_publicar(p, 8);
+	r = ((u32 (*)(void))p)();
+	hle_log_quiet("[JIT] arena de %u KB en %08X (punta de MEM2): la prueba da %X (bien: 5A5)\n", bytes / 1024, (u32)p, r);
+	return r == 0x5A5 ? p : NULL;
 }
 
 /* Rutas normales de las partidas y del registro (las pruebas las cambian) */
@@ -504,6 +530,7 @@ static void autotest_run(const char *path, const char *prefix, int max_frames){
 		hle_set_log_file(out);
 		if(bad) hle_log("[GUION] no se pudieron preparar %s: se usan las partidas normales\n", partidas);
 		if(opt_on[OPT_PRUEBA_PS]) broadway_prueba_ps(1u << 23);   //Arreglo
+		if(opt_on[OPT_PRUEBA_JIT]) jit_banco();   //Arreglo
 	}
 	if(app_load(path, 8, NULL) == 0){
 		char err[160];
@@ -697,6 +724,7 @@ int main(int argc, char **argv){
 	hle_set_log_file(log_normal);
 	broadway_report();
 	broadway_pmc_init();
+	jit_pedir_arena = arena_jit;   //Arreglo
 	/* Las capturas de los guiones necesitan la imagen en la VRAM emulada */
 	app_set_before_capture(gx_ge_sync_vram);
 	app_set_mode_text(mode_text);

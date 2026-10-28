@@ -66,6 +66,8 @@ void broadway_report(void);
 /* Prepara los contadores de rendimiento para prof_pmc (core/prof.h) */
 void broadway_pmc_init(void);
 void broadway_prueba_ps(u32 pares);   //Arreglo
+int broadway_ibat_cubre(u32 ea, u32 bytes);   //Arreglo
+void jit_banco(void);   //Arreglo
 
 /* --- Menú (menu.c) -------------------------------------------------------- */
 

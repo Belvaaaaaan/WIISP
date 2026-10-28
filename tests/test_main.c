@@ -591,6 +591,7 @@ int main(int argc, char **argv){
 	SUITE(test_wiimote);   //Arreglo
 	SUITE(test_interp);   //Arreglo
 	SUITE(test_enlace);   //Arreglo
+	SUITE(test_jit);   //Arreglo
 	SUITE(test_texcache);   /* la última: vacía la memoria */   //Arreglo
 
 	printf("\n%d comprobaciones, %d fallos\n", checks, failures);

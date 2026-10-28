@@ -396,6 +396,15 @@ vértice en la pelea −4 a −5 %, la pelea casi igual (~49-50 %, el salto fue
 el de las charolas de la 0.5.23.4). `ps_div` da lo mismo que `fdivs`; los
 merges y la carga y el guardado de pares convierten los denormales en cero.
 
+Hecha (v0.6.0): el paso 0 del IR/JIT, solo medidas y un prototipo
+apagado: el emisor de PowerPC (comprobado contra el ensamblador), el
+prototipo `jit_proto` (el prefijo entero de cada bloque en código nativo,
+con `jit_verificar`), el censo `prof_jit` (código caliente, mezcla,
+registros, bases de memoria, `jr`, escrituras sobre código, HLE) y las
+microprobas `prueba_jit` del Broadway (despacho, publicar código, `lwbrx`,
+latencias, DSI, DBAT6, alias IBAT). Sigue: el diseño del IR con esos
+números (paso 11).
+
 Primera tanda acordada (todas "más barato", verificables en el PC):
 0.1 `prof_espera`, **skinning rápido** (`ge_skin_rapido`), **matrices al
 cambiar** (`ge_mtx_cache`), **color constante** (`ge_color_const`), 2.1

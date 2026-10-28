@@ -3586,6 +3586,158 @@ camino por pares comparado bit a bit con el de siempre).
   líneas: vavg/vfad en el último bit, vcrsp con infinitos) y vregs; casos
   raros (prefijos, solapes) que DBZ no usa (0 % con prefijos).
 
+### v0.6.0: el paso 0 del IR/JIT (medir antes de diseñar)
+
+El usuario pidió el IR "diseñado perfectamente" y trajo una investigación
+de otro chat (resumen: primero call threading y un mapa fijo de
+registros, con el mismo presupuesto por bloque que el intérprete; pila de
+retornos; la RAM en little endian con `lwbrx`; la RAM de la PSP en
+0x08000000 con DBAT6/7; atrapar los accesos malos con DSI por
+`PPCExcptCurPanicFn` de libogc 3.2.1; un alias IBAT para el código en
+MEM2; libogc guarda los dos carriles de los paired singles). Antes de
+diseñar, la 0.6.0 mide en el Wii lo que decide el diseño, con tres piezas
+y un prototipo. Nada de esto cambia el juego con los interruptores
+apagados (los cuatro lo están).
+
+Emisor (`cpu/ppc_emit.h`): funciones `e_*` por instrucción sobre un
+`Emit` (puntero, inicio, fin, `lleno`). Los saltos hacia delante dejan un
+hueco (`e_bc_hueco`, `e_b_hueco`) que se parchea al saber el destino; con
+el búfer lleno el hueco es NULL y el parche no escribe. `test_jit`
+compara 65 codificaciones con lo que da el ensamblador de devkitPPC.
+
+Prototipo `jit_proto` (`cpu/jit.c`), en una quinta copia del bucle del
+predecodificado (`run_unido_jit`; las otras cuatro no cambian):
+- Al entrar en un bloque por segunda vez se intenta compilar
+  (`JIT_UMBRAL`). Se traduce el prefijo de instrucciones que sabe hacer
+  (`jit_prefijo`: enteras, cargas y escrituras de 1/2/4 bytes, saltos
+  condicionales no "likely", j/jal/jr/jalr; un salto solo como penúltima
+  con su delay slot). `alive` = 2 si hay código nativo, 3 si no se puede
+  (el bloque sigue con tarjetas).
+- ABI: `r3` = `cpu.r`, `r4` = la RAM, `r5` = `cpu_code_map`. Devuelve
+  `JIT_HECHO` (0x7FFF) si hizo el bloque entero (el pc siguiente queda en
+  `cpu.pc`) o k: hizo las k primeras y sigue la tarjeta k (el estado de la
+  PSP al día). El bucle vuelve a las tarjetas (`c = CB + k`); si k es el
+  delay slot, el destino del salto ya está en `cpu.pc`.
+- Registros: los cinco más usados del prefijo (dos usos o más, hi y lo
+  incluidos) en `r6`-`r10`; se cargan al principio si se leen antes de
+  escribirse y se guardan al salir si se escribieron. Temporales `r0`,
+  `r11`, `r12`.
+- Memoria: dirección = base + inmediato, `addis -0x800`, `rlwinm` quita
+  los 2 bits altos (los espejos de la PSP), y un `rlwinm.` mira a la vez
+  la alineación y el rango (32 o 64 MB); si falla, sale a la tarjeta, que
+  hace lo de siempre (memoria lenta, fallo). Cargas con `lwbrx`/`lhbrx`
+  (+ `extsh`) y `lbzx`; escrituras con `stwbrx`/`sthbrx`/`stbx` después
+  de mirar el mapa del código (si la zona tiene bloques, sale a la
+  tarjeta, que avisa y tira lo que haga falta).
+- `jit_verificar`: el código guarda en un registro (r31) cada escritura
+  (dirección, valor de antes, tamaño); en C se deshacen, se repite el
+  bloque con el intérprete y se compara todo (registros, hi/lo, pc y lo
+  escrito); si difiere, línea `[JIT] bloque ... distinto del interprete` y
+  vale lo del intérprete.
+- Arena de 4 MB; al llenarse se vacía todo (`cpu_predec_flush`) en el
+  siguiente punto seguro. En el Wii la pide `jit_pedir_arena` (main.c):
+  la punta de MEM2 (`sbrk` de libogc mira `SYS_GetArena2Hi` en cada
+  llamada, así que bajarla es seguro), solo la primera vez que hace falta,
+  si un IBAT la cubre y un `li`+`blr` de prueba corre ahí. Sin arena, no
+  compila nada.
+
+Censo `prof_jit` (en la copia de medir; líneas `[TIEMPOS] Censo JIT` cada
+ventana):
+- curva del código caliente: cuántas instrucciones distintas (y bloques)
+  hacen el 50/75/90/95/99 % de lo ejecutado, con los KB nativos que
+  costarían a las palabras por instrucción del prototipo (cubetas de 1/8
+  de octava por veces que se entra; las instrucciones de un bloque cuentan
+  las veces del bloque);
+- mezcla de instrucciones ejecutadas, cuánto cubriría `jit_proto` y en
+  qué instrucciones corta;
+- registros (lecturas + escrituras): los 8, 16 y 24 más usados y cada uno;
+- memoria: base (sp, gp, zero, "constante" = cargada con lui antes en el
+  mismo bloque, otra), tamaños, cuántos usan la misma base que un acceso
+  anterior del bloque (lo que se ahorraría comprobando una vez) y la
+  memoria lenta por región;
+- saltos: `jr`/`jalr` que no son `jr ra` y cuántos van al mismo destino
+  que la vez anterior (caché en línea), `jr ra` con la pila de 32;
+  escrituras de la CPU en zonas con código y cuántas caen sobre
+  instrucciones de bloques vivos (las que más escriben, por pc), todos los
+  avisos de escritura en código (con los de DMA/HLE) y los bloques
+  tirados;
+- HLE: el tiempo de cada llamada (con lo que corra el juego dentro), las
+  12 que más tardan;
+- los 10 bloques más calientes con sus instrucciones en hexadecimal.
+
+Microprobas `prueba_jit` (`wii/jit_banco.c`, al empezar el autotest,
+líneas `[PRUEBA_JIT]`; ciclos con PMC1): publicar código (con
+`dcbst`+`icbi`, sin `icbi`, sin `dcbst`, con las de libogc), su coste por
+línea; ciclos por salto con 256 bloques al azar (b, `lwzu`+`mtctr`+`bctr`
+como las tarjetas, `mtctr` pronto/tarde, `mtlr`+`blr`, `bl`/`blr`,
+`li`+`bl`, C con `bctrl` y con `bl`); `lwz`/`lwbrx`/`lha`/`lhbrx`+`extsh`
+(latencia y de cuatro en cuatro, también escrituras); un salto mal
+predicho (con PMC4); latencia de MEM1 y MEM2 de 16 KB a 8 MB; código en
+línea recta en MEM1 y MEM2 (de 16 KB a 4 MB); la CPU de la PSP con
+tarjetas y con `jit_proto` (alu, memoria, llamadas, ramas; registros
+comparados); una DSI de ida y vuelta por el gancho; DBAT6 (la RAM de la
+PSP en 0x08000000: ojo, empieza 0x800 bytes después del límite de 16 MB
+físico) y un alias IBAT de 256 KB en 0x7FFC0000 con un `bl` directo a C.
+Las de riesgo (DSI, BAT) van al final, con el registro sincronizado antes
+de cada una. Probadas en qemu con un arnés de Linux (todo menos lo del
+Wii: PMC, DSI, BAT): el arnés encontró un error (la cadena de `lwz`
+empezaba en una palabra a 0: en el Wii habría sido una DSI).
+
+Medido en qemu (solo orientativo): `test_interp` con el JIT, 2,27 M
+bloques nativos ejecutados, 817 mil verificados, 0 distintos; el banco de
+`cpu_banco.c` con `prof_jit`: el 50 % de lo ejecutado en 6 instrucciones,
+`jit_proto` cubriría el 95,6 % (corta en `beql` y `divu`), la pila de
+retornos acierta el 100 %, 6,1 palabras de PowerPC por instrucción.
+
+Verificación (completa, pedida por el usuario):
+
+- Pruebas: x86 con ASan 211.161 comprobaciones, 0 fallos; PowerPC bajo
+  qemu 406.379, 0 fallos; devkitPPC bajo `qemu-ppc -cpu 750` 406.380, 0
+  fallos (en `test_interp`, 2,27 M bloques nativos ejecutados y 817 mil
+  verificados, 0 distintos; en `test_jit`, 99.210 bloques al azar, 1,34 M
+  instrucciones nativas comparadas y ningún acceso hecho en nativo que
+  tuviera que salir a la tarjeta). Huellas de siempre (4D4A1D8B,
+  0657B177, B3A2BCD3).
+- pspautotests 275/275.
+- Mutaciones (`mutaciones/0.6.0.txt`, `mutar.py --dkp --solo interp,jit`):
+  24 de 24 detectadas. En la primera pasada sobrevivían "lw sin mirar la
+  alineación" y "escribir sin mirar el mapa del código": el intérprete
+  no ve la diferencia (lee palabras desalineadas sin fallar, y en qemu un
+  `lwbrx` desalineado funciona), pero en el Wii serían una excepción de
+  alineación o bloques viejos vivos. Por eso `test_jit` comprueba ahora,
+  paso a paso, cada acceso hecho en nativo.
+- A/B con el CLI de GX (555 programas, el JIT corriendo de verdad en
+  `qemu-ppc -cpu 750`): 0.5.23.7 contra 0.6.0, `jit_proto` 0/1,
+  `jit_proto` 1 con `jit_verificar`, `prof_jit` 0/1 y `jit_proto` 0/1 con
+  `cpu_enlace` 0 y `predec_sin_unir` 1: 0 distintos en todos.
+- `jit_verificar` en los 555: ninguna línea `[JIT]`; en los 75 que llegan
+  a un informe, 699,7 M bloques nativos comparados con el intérprete,
+  todos iguales (93-100 % de las instrucciones en nativo, 71-96 % de las
+  muestras de la CPU en código nativo).
+- `ge_verificar` en las 110 de `gpu/` (exacto y MR): 0 líneas `[VERIF]`.
+- Microprobas en qemu (`tools/banco/jit_banco.sh`): "todo bien".
+- Compilación para el Wii: `wiisp.dol` 0.6.0 sin avisos. El gancho de
+  excepciones revisado en el desensamblado: solo registros enteros (libogc
+  no guarda los de coma flotante en ese camino). Las tablas del censo del
+  HLE y el búfer de `jit_tam_estimado` se piden al usarlos: sin
+  `prof_jit` no ocupan MEM1.
+
+Autotest (4 registros y un `.capturas.txt`):
+- sin: como siempre (`jit_proto` 0), con `prueba_jit` antes de empezar;
+- con: `jit_proto` 1;
+- censo: `jit_proto` 0 con `prof_jit` (más lento: la copia de medir);
+- imagenes: `jit_proto` 1 con `jit_verificar` y las capturas.
+
+Qué mirar: en `sin`, las `[PRUEBA_JIT]` (que acabe en "todo bien"; los
+ciclos por salto de cada forma, lo que cuesta publicar, la latencia de
+MEM2, la DSI, si DBAT6 e IBAT funcionan y la CPU de la PSP con tarjetas
+y con `jit_proto`); en `censo`, la curva del código caliente, la mezcla,
+los registros, las bases, los `jr`, las escrituras sobre código y el HLE
+(con eso se diseña el IR); en `con`, la línea `JIT (jit_proto)` (% de
+instrucciones en nativo, salidas a tarjetas, % de muestras de la CPU en
+código nativo) y la velocidad contra `sin`; en `imagenes`, las capturas
+de siempre y `jit_verificar` sin diferencias (ninguna línea `[JIT]`).
+
 ### Para el siguiente chat (empezar aquí)
 
 Metodología acordada (detalle en `docs/HOJA_DE_RUTA.md`): primero medir
@@ -3619,10 +3771,13 @@ Metodología acordada (detalle en `docs/HOJA_DE_RUTA.md`): primero medir
   devkitPPC, perfil por función, psq_l emulado, A/B) y para leer los
   registros del Wii (`ventanas.py`): `tools/banco/LEEME.md`. El entorno
   (devkitPPC, qemu, pspautotests, PPSSPP): `tools/setup_entorno.sh`.
-- **Siguiente:** leer los registros de la 0.5.23.7 (qué mirar, en su
-  sección de arriba): si `ge_vdec_ps` baja la pelea y la verificación da
-  0. Después, el diseño del IR (fase 2, estudiando antes Lightrec y el IR
-  de PPSSPP). Opcionales: la pantalla en pares (si `ps_div` y los merges
+- **Siguiente:** leer los registros de la 0.6.0 (qué mirar, en su
+  sección de arriba): las microprobas del Broadway, el censo del código
+  de DBZ y lo que hace ya `jit_proto` (velocidad y `jit_verificar` a 0).
+  Con esos números, el diseño del IR propiamente dicho (qué despacho, qué
+  registros fijos, cómo se comprueba la memoria, DBAT/DSI o no, dónde va
+  el código). Lo de la 0.5.23.7 (ya leído): `ge_vdec_ps` −4/−5 % por
+  vértice, verificación a 0. Opcionales: la pantalla en pares (si `ps_div` y los merges
   salen a 0 en la autoprueba), la caché de huesos (~2 %), los índices CI8
   por la GPU y la charola parcial de los menús. El limitador de
   velocidad, al final de todo.

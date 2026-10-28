@@ -25,6 +25,7 @@
 #include "core/tirones.h"
 #include "core/registro.h"
 #include "cpu/predec.h"
+#include "cpu/jit.h"   //Arreglo
 
 /* Todos los imports de todos los módulos cargados: el código del syscall
    de cada stub es su índice aquí */
@@ -178,6 +179,11 @@ void hle_dump_state(const char *why){
 	hle_log_sync();
 }
 
+//Arreglo
+#define CENSO_HLE 2048
+static u64 *censo_hle_t;
+static u32 *censo_hle_n;
+
 void hle_syscall(u32 code){
 	if(code == HLE_SYSCALL_THREAD_RETURN){
 		kernel_thread_return();
@@ -214,8 +220,14 @@ void hle_syscall(u32 code){
 		{
 			u32 enq = kernel_enqueue_count();
 			int old = prof_switch(PROF_HLE);
+			const u64 t0 = opt_on[OPT_PROF_JIT] && prof_clock && censo_hle_n ? prof_clock() : 0;   //Arreglo
 			hle_stat_syscalls++;
 			resolved[code].func();
+			if(t0){   //Arreglo
+				const u32 k = code < CENSO_HLE ? code : CENSO_HLE - 1;   //Arreglo
+				censo_hle_t[k] += prof_clock() - t0;   //Arreglo
+				censo_hle_n[k]++;   //Arreglo
+			}   //Arreglo
 			prof_switch(old);
 			r->guest = kernel_enqueue_count() != enq;
 		}
@@ -447,6 +459,7 @@ static struct {
 	RegStats reg;
 	IoCenso es;
 	PredecStats pd;
+	JitStats jit;   //Arreglo
 	u32 samples[PROF_N], ge_samples[GEF_N];
 	u32 cpu_samples[CPF_N];   //arreglo
 	u32 vtx_samples[VXF_N];   //Arreglo
@@ -514,6 +527,13 @@ static void profile_snapshot(void){
 	reg_stats(&prof_base.reg);
 	io_censo(&prof_base.es);
 	cpu_predec_stats(&prof_base.pd);
+	jit_stats(&prof_base.jit);   //Arreglo
+	if(opt_on[OPT_PROF_JIT]){   //Arreglo
+		cpu_predec_censo_reiniciar();   //Arreglo
+		if(!censo_hle_t) censo_hle_t = calloc(CENSO_HLE, sizeof(*censo_hle_t));   //Arreglo
+		if(censo_hle_t && !censo_hle_n) censo_hle_n = calloc(CENSO_HLE, sizeof(*censo_hle_n));   //Arreglo
+		if(censo_hle_n){ memset(censo_hle_t, 0, CENSO_HLE * sizeof(*censo_hle_t)); memset(censo_hle_n, 0, CENSO_HLE * sizeof(*censo_hle_n)); }   //Arreglo
+	}   //Arreglo
 	memcpy(prof_base.samples, (const void *)prof_samples, sizeof(prof_base.samples));
 	memcpy(prof_base.ge_samples, (const void *)prof_ge_samples, sizeof(prof_base.ge_samples));
 	memcpy(prof_base.cpu_samples, (const void *)prof_cpu_samples, sizeof(prof_base.cpu_samples));   //arreglo
@@ -820,6 +840,56 @@ static void profile_report(const char *why, int forzar);   //Arreglo
 void hle_profile_report(const char *why){ profile_report(why, 0); }   //Arreglo
 
 //Arreglo
+//Arreglo
+static void jit_linea(const PredecStats *p, const PredecStats *b, u64 instr){
+	JitStats j, *jb = &prof_base.jit;
+	u32 ms = 0, k;
+	const u32 mn = prof_cpu_samples[CPF_NATIVO] - prof_base.cpu_samples[CPF_NATIVO];
+	const u64 eb = p->jit_bloques - b->jit_bloques, ei = p->jit_instr - b->jit_instr, sa = p->jit_salidas - b->jit_salidas;
+	jit_stats(&j);
+	for(k = 0; k < CPF_N; k++) ms += prof_cpu_samples[k] - prof_base.cpu_samples[k];
+	hle_log("[TIEMPOS] JIT (jit_proto): %llu bloques nativos ejecutados (%.1f%% de las instrucciones, %.2f por bloque), "
+	        "%llu salidas a tarjetas (%.1f%%); %llu compilados (%.2f instrucciones y %.1f palabras de PowerPC cada uno), "
+	        "%llu sin nada que compilar, %llu vaciados, %llu llenos; arena en %08X, %u de %u KB; CPU en codigo nativo "
+	        "%.1f%% de las muestras (%u de %u)\n",
+	        (unsigned long long)eb, instr ? 100.0 * (double)ei / (double)instr : 0.0, eb ? (double)ei / (double)eb : 0.0,
+	        (unsigned long long)sa, eb ? 100.0 * (double)sa / (double)eb : 0.0, (unsigned long long)(j.compilados - jb->compilados),
+	        j.compilados > jb->compilados ? (double)(j.instr_compiladas - jb->instr_compiladas) / (double)(j.compilados - jb->compilados) : 0.0,
+	        j.compilados > jb->compilados ? (double)(j.palabras - jb->palabras) / (double)(j.compilados - jb->compilados) : 0.0,
+	        (unsigned long long)(j.sin_nada - jb->sin_nada), (unsigned long long)(j.vaciados - jb->vaciados),
+	        (unsigned long long)(j.llenos - jb->llenos), (unsigned)(uintptr_t)jit_arena_dir(), jit_arena_usada() / 1024,
+	        jit_arena_total() / 1024, ms ? 100.0 * (double)mn / (double)ms : 0.0, mn, ms);
+	if(opt_on[OPT_JIT_VERIFICAR])
+		hle_log("[TIEMPOS] jit_verificar: %llu bloques nativos comparados con el interprete, %llu parciales sin comparar, %s\n",
+		        (unsigned long long)(j.verif_bloques - jb->verif_bloques), (unsigned long long)(j.verif_parciales - jb->verif_parciales),
+		        j.verif_mal ? "HAY DIFERENCIAS ([JIT] en el registro)" : "todos iguales");
+}
+
+//Arreglo
+static void censo_hle_linea(u64 total){
+	char l[1400];
+	size_t len;
+	u64 t = 0, n = 0;
+	u32 i, k;
+	if(!censo_hle_n) return;
+	for(i = 0; i < CENSO_HLE; i++){ t += censo_hle_t[i]; n += censo_hle_n[i]; }
+	len = (size_t)snprintf(l, sizeof(l), "[TIEMPOS] Censo JIT, HLE: %llu llamadas, %.1f%% del tiempo real (con lo que el juego "
+	                       "corre dentro); las que mas tardan:", (unsigned long long)n, total ? 100.0 * (double)t / (double)total : 0.0);
+	for(k = 0; k < 12 && len + 120 < sizeof(l); k++){
+		u32 m = CENSO_HLE;
+		for(i = 0; i < CENSO_HLE; i++) if(censo_hle_t[i] && (m == CENSO_HLE || censo_hle_t[i] > censo_hle_t[m])) m = i;
+		if(m == CENSO_HLE) break;
+		len += (size_t)snprintf(l + len, sizeof(l) - len, " %s %.2f%% (%u, %.1f us cada una)",
+		                        m < num_resolved && resolved[m].name ? resolved[m].name : "?",
+		                        total ? 100.0 * (double)censo_hle_t[m] / (double)total : 0.0, (unsigned)censo_hle_n[m],
+		                        1e6 * (double)censo_hle_t[m] / (double)prof_hz / (double)censo_hle_n[m]);
+		censo_hle_t[m] = 0;
+	}
+	hle_log("%s\n", l);
+	memset(censo_hle_t, 0, CENSO_HLE * sizeof(*censo_hle_t));
+	memset(censo_hle_n, 0, CENSO_HLE * sizeof(*censo_hle_n));
+}
+
 static void profile_bloques_lines(const PredecStats *p, const PredecStats *b, u64 instr){
 	static const char *const tn[7] = { "1", "2", "3-4", "5-8", "9-16", "17-32", "33-65" };   //Arreglo
 	u64 n = p->bq_bloques - b->bq_bloques, e[2][2], caidas = 0, ops[PREDEC_CAIDA_OPS];
@@ -942,9 +1012,9 @@ static void profile_report(const char *why, int forzar){   //Arreglo
 		/* La CPU por dentro (muestreo) y dónde está cada cosa (0x80... es
 		   MEM1 y 0x90... MEM2 en el Wii) */
 		{
-			static const char *const nom[CPF_N] = { "tarjetas", "VFPU", "FPU", "memoria lenta", "buscar y traducir", "interprete de siempre" };
+			static const char *const nom[CPF_N] = { "tarjetas", "VFPU", "FPU", "memoria lenta", "buscar y traducir", "interprete de siempre", "codigo nativo" };   //Arreglo
 			const u64 cuenta[CPF_N] = { 0, p.vfpu - b->vfpu, p.fpu - b->fpu, p.lentas - b->lentas,
-			                            p.busquedas - b->busquedas, p.pasos - b->pasos };
+			                            p.busquedas - b->busquedas, p.pasos - b->pasos, p.jit_bloques - b->jit_bloques };   //Arreglo
 			double cpu_s = (double)(prof_acc[PROF_CPU] - prof_base.acc[PROF_CPU]) / (double)prof_hz;
 			u32 ms = 0, k;
 			char l2[640];
@@ -972,6 +1042,8 @@ static void profile_report(const char *why, int forzar){   //Arreglo
 			hle_log("%s\n", l2);
 		}
 		if(opt_on[OPT_PROF_BLOQUES]) profile_bloques_lines(&p, b, instr);   //Arreglo
+		if(opt_on[OPT_JIT_PROTO]) jit_linea(&p, b, instr);   //Arreglo
+		if(opt_on[OPT_PROF_JIT]){ cpu_predec_censo(NULL); censo_hle_linea(total); }   //Arreglo
 	}
 	if(opt_on[OPT_PROF_ES]){
 		IoCenso c;

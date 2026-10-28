@@ -17,17 +17,24 @@ PREDEC_ATRIB static u32 PREDEC_BUCLE(u32 max_cycles){   //arreglo
 	u8 *const r8 = (u8 *)cpu.r;
 	u8 *const f8 = (u8 *)cpu.fpr;
 	const int verif = opt_on[OPT_CPU_VERIFICAR];
+#if PREDEC_JIT   //Arreglo
+	const int jv = opt_on[OPT_JIT_VERIFICAR];   //Arreglo
+#endif   //Arreglo
 #if PREDEC_MEDIR   //Arreglo
 	const int bq = opt_on[OPT_PROF_BLOQUES];   //Arreglo
+	const int pj = opt_on[OPT_PROF_JIT];   //Arreglo
+	const int ra = bq | pj;   //Arreglo
 #define FASE(f) (prof_cpu_phase = (f))   //Arreglo
 #define CAIDA(m) do { if(bq) caida((m), pc, lim4); } while(0)   //Arreglo
 #define CONTAR(x) ((void)(x))   //Arreglo
-#define RAS_PUSH() do { if(bq) ras_push(cblk->end); } while(0)   //Arreglo
+#define RAS_PUSH() do { if(ra) ras_push(cblk->end); } while(0)   //Arreglo
+#define CENSO_ESC(o, size) do { if(pj) censo_escritura((o), (size), IPC()); } while(0)   //Arreglo
 #else   //Arreglo
 #define FASE(f) ((void)0)   //Arreglo
 #define CAIDA(m) ((void)0)   //Arreglo
 #define CONTAR(x) ((void)0)   //Arreglo
 #define RAS_PUSH() ((void)0)   //Arreglo
+#define CENSO_ESC(o, size) ((void)0)   //Arreglo
 #endif   //Arreglo
 	u32 pc, npc, left, seg, bt = 0;
 	const Card *c = NULL;
@@ -110,6 +117,7 @@ PREDEC_ATRIB static u32 PREDEC_BUCLE(u32 max_cycles){   //arreglo
 		if(likely(o_ < (lim))){ \
 			wr; \
 			if(unlikely(cpu_code_map[o_ >> PREDEC_ZONA_BITS])){ \
+				CENSO_ESC(o_, size); \
 				cpu_predec_store(o_, size); tail; \
 				if(!cblk->alive) goto x_after; \
 			} else { tail; } \
@@ -132,6 +140,9 @@ PREDEC_ATRIB static u32 PREDEC_BUCLE(u32 max_cycles){   //arreglo
 /* Buscar (o traducir) el bloque de pc */
 dispatch:
 	FASE(CPF_BUSCAR);   //Arreglo
+#if PREDEC_JIT   //Arreglo
+	if(unlikely(jit_lleno())) cpu_predec_flush();   //Arreglo
+#endif   //Arreglo
 	if(unlikely(!left)) goto done;
 	if(npc != pc + 4 || (pc & 3) || RAM_OFF(pc) >= lim4){ CAIDA(npc != pc + 4 ? CAIDA_DELAY : CAIDA_FUERA); goto step; }   //Arreglo
 	nb = lookup(pc);
@@ -147,10 +158,15 @@ dispatch:
 enter:
 #if PREDEC_MEDIR   //Arreglo
 	if(bq){ st.bq_bloques++; st.bq_instr += nb->n; st.bq_tam[tam_bloque(nb->n)]++; }   //Arreglo
+	if(pj){ FRIO(nb)->veces++; cz.entradas++; cz.instr_ent += nb->n; }   //Arreglo
 #endif   //Arreglo
 	cblk = nb;
 	c = nb->c;
 	left -= nb->n;
+#if PREDEC_JIT   //Arreglo
+	if(nb->alive != 1){ if(nb->alive == 2) goto nativo; }   //Arreglo
+	else if(++FRIO(nb)->veces >= JIT_UMBRAL){ jit_intentar(nb); if(nb->alive == 2) goto nativo; }   //Arreglo
+#endif   //Arreglo
 	goto *c->h;
 
 /* El final del bloque: al siguiente por el enlace guardado (los bloques
@@ -223,6 +239,23 @@ x_likely_nt:
 	pc = cblk->end;
 	left++;
 	goto link_end;
+
+#if PREDEC_JIT   //Arreglo
+nativo: {   //Arreglo
+		const JitFn f_ = FRIO(cblk)->nat;   //Arreglo
+		u32 k_;   //Arreglo
+		prof_cpu_phase = CPF_NATIVO;   //Arreglo
+		k_ = unlikely(jv) ? jit_verificar_bloque(f_, cblk->pc, BN) : f_(r8, ram, cpu_code_map);   //Arreglo
+		prof_cpu_phase = CPF_TARJETAS;   //Arreglo
+		st.jit_bloques++;   //Arreglo
+		if(likely(k_ == JIT_HECHO)){ st.jit_instr += BN; pc = cpu.pc; goto link; }   //Arreglo
+		st.jit_instr += k_;   //Arreglo
+		st.jit_salidas++;   //Arreglo
+		if(cblk->branch && k_ == BN - 1){ bt = cpu.pc; nbx = cblk->succ[bt != cblk->end]; }   //Arreglo
+		c = CB + k_;   //Arreglo
+		goto *c->h;   //Arreglo
+	}   //Arreglo
+#endif   //Arreglo
 
 x_vfpu:   //Arreglo
 	SYNC_AT();   //Arreglo
@@ -351,7 +384,7 @@ ret:
 		mem = merge; \
 		if(likely(o_ < lim4)){ \
 			wr_le32(ram + o_, mem); \
-			if(unlikely(cpu_code_map[o_ >> PREDEC_ZONA_BITS])){ cpu_predec_store(o_, 4); chk |= !cblk->alive; } \
+			if(unlikely(cpu_code_map[o_ >> PREDEC_ZONA_BITS])){ CENSO_ESC(o_, 4); cpu_predec_store(o_, 4); chk |= !cblk->alive; } \
 		} else { SYNC_AT(); lenta_store(a_, 4, mem, RAW()); chk |= cpu_stop_requested; } \
 		if(unlikely(chk)) goto x_after; \
 		c++; \
@@ -438,7 +471,7 @@ ret:
 	}   //Arreglo
 	L_SYSCALL:
 #if PREDEC_MEDIR   //Arreglo
-		if(bq && cblk->branch && IDX() == BN - 1 && CB[BN - 2].h == h_tab[OP_JR] && CB[BN - 2].a.r.s == 31 * 4){   //Arreglo
+		if(ra && cblk->branch && IDX() == BN - 1 && CB[BN - 2].h == h_tab[OP_JR] && CB[BN - 2].a.r.s == 31 * 4){   //Arreglo
 			st.ras_stub++;   //Arreglo
 			st.ras_stub_ok += (u64)ras_pop(bt);   //Arreglo
 		}   //Arreglo
@@ -503,13 +536,18 @@ ret:
 	L_BEND:
 		pc = bt;
 #if PREDEC_MEDIR   //Arreglo
-		if(bq && CB[BN - 2].h == h_tab[OP_JR] && CB[BN - 2].a.r.s == 31 * 4){   //Arreglo
+		if(ra && CB[BN - 2].h == h_tab[OP_JR] && CB[BN - 2].a.r.s == 31 * 4){   //Arreglo
 			const Block *e_ = cblk->succ[pc != cblk->end];   //Arreglo
 			const int eok = e_ && e_->pc == pc && e_->alive && left >= e_->n && !verif, rok = ras_pop(pc);   //Arreglo
 			st.ras_jr++;   //Arreglo
 			st.ras_enlace += (u64)eok;   //Arreglo
 			st.ras_ok += (u64)rok;   //Arreglo
 			st.ras_gana += (u64)(rok && !eok);   //Arreglo
+		} else if(pj && (CB[BN - 2].h == h_tab[OP_JR] || CB[BN - 2].h == h_tab[OP_JALR])){   //Arreglo
+			Frio *f_ = FRIO(cblk);   //Arreglo
+			cz.jr_otros++;   //Arreglo
+			cz.jr_igual += (u64)(f_->jr_ult == pc);   //Arreglo
+			f_->jr_ult = pc;   //Arreglo
 		}   //Arreglo
 #endif   //Arreglo
 		goto link;
@@ -520,7 +558,7 @@ ret:
 		pc = bt;
 		if(unlikely(verif) && nb_->alive && !verif_ok(nb_)) kill_block(nb_);
 		if(likely(nb_->alive && left >= n_)){
-#if PREDEC_MEDIR
+#if PREDEC_MEDIR || PREDEC_JIT   //Arreglo
 			(void)h_;
 			CONTAR(bq && st.bq_enlace[pc != cblk->end][0]++);
 			nb = nb_;
@@ -567,4 +605,5 @@ ret:
 #undef CAIDA   //Arreglo
 #undef CONTAR   //Arreglo
 #undef RAS_PUSH   //Arreglo
+#undef CENSO_ESC   //Arreglo
 }

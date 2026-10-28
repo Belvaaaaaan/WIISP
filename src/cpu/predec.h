@@ -85,6 +85,7 @@ typedef struct {
 	u64 bq_caidas[4], bq_caida_op[PREDEC_CAIDA_OPS];   //Arreglo
 	u64 vfpu_tarjetas, vfpu_verif, vfpu_verif_mal;   //Arreglo
 	u64 ras_jr, ras_enlace, ras_ok, ras_gana, ras_stub, ras_stub_ok;   //Arreglo
+	u64 jit_bloques, jit_instr, jit_salidas;   //Arreglo
 } PredecStats;
 void cpu_predec_stats(PredecStats *out);
 
@@ -99,5 +100,15 @@ void cpu_predec_tam_pruebas(u32 bloques, u32 frio);
 int cpu_predec_tarjetas_ok(void);
 void cpu_predec_caida_nombre(u32 k, char *buf, u32 size);   //Arreglo
 int cpu_predec_enlaces_ok(void);   //Arreglo
+//Arreglo
+enum { CENSO_ALU, CENSO_ALUI, CENSO_LUI, CENSO_HILO, CENSO_DIV, CENSO_CARGA, CENSO_GUARDA, CENSO_NOALIN, CENSO_SALTO,
+       CENSO_J, CENSO_JR, CENSO_FPU, CENSO_VFPU, CENSO_SYSCALL, CENSO_NOP, CENSO_OTRA, CENSO_N };
+typedef struct {
+	u64 entradas, instr_entradas, bloques, distintas, ejec, prefijo, mem, base_cte, repe;
+	u64 cat[CENSO_N], reg[34], jr_otros, jr_igual, esc_cpu, esc_instr;
+	u32 top_pc, top_veces;
+} CensoJit;
+void cpu_predec_censo(CensoJit *out);   //Arreglo
+void cpu_predec_censo_reiniciar(void);   //Arreglo
 
 #endif
