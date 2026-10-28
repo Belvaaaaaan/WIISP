@@ -375,6 +375,22 @@ pasadas; la autoprueba `prueba_ps` comprueba en el Wii que los paired
 singles dan lo mismo que los escalares, carril a carril. Con eso se decide
 entre la caché de huesos, leer vértices con paired singles o el IR.
 
+Resultado de la 0.5.23.6: los paired singles dan por carril lo mismo que
+los escalares (0 distintos en 109 M operaciones por carril; solo el carril
+que copia `ps_sum` convierte un denormal en cero). El ~30 % de vértices con
+los mismos datos y huesos cambia mundo, proyección y comandos: la caché de
+huesos daría ~2 % (opcional).
+
+Hecha (v0.5.23.7): `ge_vdec_ps`, los vértices con huesos (0x301, los
+personajes de DBZ) de dos en dos con paired singles: la mezcla de los
+huesos, aplicarla y la transformación, cada carril con las mismas cuentas
+que el camino de siempre (bit a bit). Banco de qemu, instrucciones por
+vértice: 2 huesos 324 → 282 (−13 %), 4 huesos 383 → 322 (−16 %), 8
+huesos 502 → 402 (−20 %); en ciclos debería ser más (una sola FPU, y la
+mitad de cuentas). Sin huesos (0x11A) no salía a cuenta (+3 %): sigue como
+estaba. La autoprueba prueba ya lo que haría falta para la pantalla en
+pares (merges, `ps_div`, `ps_sel`). Sigue: el diseño del IR.
+
 Primera tanda acordada (todas "más barato", verificables en el PC):
 0.1 `prof_espera`, **skinning rápido** (`ge_skin_rapido`), **matrices al
 cambiar** (`ge_mtx_cache`), **color constante** (`ge_color_const`), 2.1

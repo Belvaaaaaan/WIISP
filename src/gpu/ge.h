@@ -52,6 +52,7 @@ typedef struct {
 	u32 mtx_combined;       /* mundo*vista*proyección calculadas */
 	u32 mtx_reused;         /* las mismas matrices: reutilizadas (ge_mtx_cache) */
 	u32 tris_cull_off;      /* sin descarte de caras: se procesan en los dos sentidos */
+	u32 vertices_ps;   //Arreglo
 
 	/* Censo de estado (prof_estado): qué se repite de una llamada de dibujo
 	   a la siguiente. "igual": el resultado salió como en la llamada
@@ -122,6 +123,7 @@ void ge_bbox_census_report(const GeStats *g, const GeStats *g0, u64 hz, char *bu
 void ge_cmd_census_report(char *buf, size_t size);   //Arreglo
 /* ge_verificar: vértices y descartes comparados y distintos desde el último informe */
 void ge_vdec_verif_report(char *buf, size_t size);
+int ge_vdec_ps_disponible(void);   //Arreglo
 
 /* Sube cada vez que la CPU se sincroniza con el GE (sceGeDrawSync,
    sceGeListSync, fin de una lista) y cuando un framebuffer de la GPU baja a

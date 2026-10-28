@@ -1,0 +1,200 @@
+=== ps: el peso del vertice B es el de A
+@ src/gpu/ge_vertex.c
+<<<
+		"psq_lu 14,1(%[wb]),1,2\n\t"
+>>>
+		"psq_lu 14,1(%[wa]),1,2\n\t"
+===
+=== ps: pesos con merge01
+@ src/gpu/ge_vertex.c
+<<<
+	"ps_merge00 13,13,14\n\t" \
+	"lfs 17,8(%[hb])\n\t" \
+>>>
+	"ps_merge01 13,13,14\n\t" \
+	"lfs 17,8(%[hb])\n\t" \
+===
+=== ps: huesos de 44 bytes
+@ src/gpu/ge_vertex.c
+<<<
+		"lfsu 15,48(%[hb])\n\t"
+>>>
+		"lfsu 15,44(%[hb])\n\t"
+===
+=== ps: un hueso de mas
+@ src/gpu/ge_vertex.c
+<<<
+		"addic. %[cnt],%[nb],-1\n\t"
+>>>
+		"addic. %[cnt],%[nb],0\n\t"
+===
+=== ps: el primer hueso empieza en el segundo
+@ src/gpu/ge_vertex.c
+<<<
+		"mr %[hb],%[hu]\n\t"
+>>>
+		"addi %[hb],%[hu],48\n\t"
+===
+=== ps: el primer hueso suma lo que habia
+@ src/gpu/ge_vertex.c
+<<<
+		PS_MEZCLA(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)
+>>>
+		PS_MEZCLA(1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12)
+===
+=== ps: el cero de partida es -0
+@ src/gpu/ge_vertex.c
+<<<
+	cte[0] = cte[1] = 0.0f;
+>>>
+	cte[0] = cte[1] = -0.0f;
+===
+=== ps: posicion baja con GQR2
+@ src/gpu/ge_vertex.c
+<<<
+	"psq_l 13,0(%[pp]),1,4\n\t" \
+>>>
+	"psq_l 13,0(%[pp]),1,2\n\t" \
+===
+=== ps: posicion alta sin signo
+@ src/gpu/ge_vertex.c
+<<<
+	"psq_l 20,3(%[pb]),1,3\n\t" \
+>>>
+	"psq_l 20,3(%[pb]),1,2\n\t" \
+===
+=== ps: posicion sin la parte baja
+@ src/gpu/ge_vertex.c
+<<<
+	"ps_add 13,15,13\n\t" \
+>>>
+	"ps_add 13,15,15\n\t" \
+===
+=== ps: aplicar con S2 en lugar de S1
+@ src/gpu/ge_vertex.c
+<<<
+	"ps_madd 10,4,17,10\n\t" \
+>>>
+	"ps_madd 10,4,21,10\n\t" \
+===
+=== ps: aplicar en otro orden (redondeo)
+@ src/gpu/ge_vertex.c
+<<<
+	"ps_madd 10,1,13,10\n\t" \
+	"ps_madd 11,2,13,11\n\t" \
+	"ps_madd 12,3,13,12\n\t" \
+	"ps_madd 10,4,17,10\n\t" \
+>>>
+	"ps_madd 10,4,17,10\n\t" \
+	"ps_madd 11,2,13,11\n\t" \
+	"ps_madd 12,3,13,12\n\t" \
+	"ps_madd 10,1,13,10\n\t" \
+===
+=== ps: transformar en otro orden (redondeo)
+@ src/gpu/ge_vertex.c
+<<<
+	"ps_madds0 24," #p0 ",14,24\n\t" \
+	"lfs 14,32(%[tm])\n\t" \
+	"ps_madds0 25," #p0 ",15,25\n\t" \
+	"lfs 15,36(%[tm])\n\t" \
+	"ps_madds0 26," #p0 ",16,26\n\t" \
+	"lfs 16,40(%[tm])\n\t" \
+	"ps_madds0 27," #p0 ",18,27\n\t" \
+	"lfs 18,44(%[tm])\n\t" \
+	"ps_madds0 24," #p2 ",14,24\n\t" \
+>>>
+	"lfs 19,32(%[tm])\n\t" \
+	"ps_madds0 24," #p2 ",19,24\n\t" \
+	"ps_madds0 24," #p0 ",14,24\n\t" \
+	"lfs 14,32(%[tm])\n\t" \
+	"ps_madds0 25," #p0 ",15,25\n\t" \
+	"lfs 15,36(%[tm])\n\t" \
+	"ps_madds0 26," #p0 ",16,26\n\t" \
+	"lfs 16,40(%[tm])\n\t" \
+	"ps_madds0 27," #p0 ",18,27\n\t" \
+	"lfs 18,44(%[tm])\n\t" \
+===
+=== ps: transformar con p0 en lugar de p1
+@ src/gpu/ge_vertex.c
+<<<
+	"ps_muls0 24," #p1 ",14\n\t" \
+>>>
+	"ps_muls0 24," #p0 ",14\n\t" \
+===
+=== ps: sin el desplazamiento de clip3
+@ src/gpu/ge_vertex.c
+<<<
+	"ps_add 27,27,31\n\t"
+>>>
+	"ps_add 27,27,0\n\t"
+===
+=== ps: clip1 guardado en el lugar de clip0
+@ src/gpu/ge_vertex.c
+<<<
+	"psq_st 24,24(%[out]),0,0\n\t" \
+>>>
+	"psq_st 25,24(%[out]),0,0\n\t" \
+===
+=== ps: siempre el carril A
+@ src/gpu/ge_vertex.c
+<<<
+			read_vertex_body(f, &d, &dst[j + i], 1, 0, pl, buf + (i & ~1) * 7 + (i & 1));
+>>>
+			read_vertex_body(f, &d, &dst[j + i], 1, 0, pl, buf + (i & ~1) * 7);
+===
+=== ps: sin el ultimo vertice impar
+@ src/gpu/ge_vertex.c
+<<<
+		if(m & 1) ps_nucleo_huesos(u + f->off_w, u + f->off_pos, 0, 1, buf + (m - 1) * 7, ge.bone[0], (u32)f->nweights,
+>>>
+		if(0) ps_nucleo_huesos(u + f->off_w, u + f->off_pos, 0, 1, buf + (m - 1) * 7, ge.bone[0], (u32)f->nweights,
+===
+=== ps: todos los trozos leen el primero
+@ src/gpu/ge_vertex.c
+<<<
+		const u8 *q = p + (u32)j * size, *u = q + (u32)(m - 1) * size;
+>>>
+		const u8 *q = p, *u = q + (u32)(m - 1) * size;
+===
+=== ps: huesos raros sin comprobar
+@ src/gpu/ge_vertex.c
+<<<
+		if(e == 0x7F800000u || (e == 0 && (b & 0x007FFFFFu))) return 0;
+>>>
+		if(0) return 0;
+===
+=== ps: solo se comprueba el primer hueso
+@ src/gpu/ge_vertex.c
+<<<
+	if(!ps_normales(ts.matrix, 16) || !ps_normales(ge.bone[0], f->nweights * 12)) return 0;
+>>>
+	if(!ps_normales(ts.matrix, 16) || !ps_normales(ge.bone[0], 12)) return 0;
+===
+=== ps: clip leido sin el paso de 2
+@ src/gpu/ge_vertex.c
+<<<
+				for(i = 0; i < 4; i++) out->clip[i] = pc[6 + 2 * i];   //Arreglo
+>>>
+				for(i = 0; i < 4; i++) out->clip[i] = pc[6 + i];   //Arreglo
+===
+=== ps: posicion z de otro sitio (luces y niebla)
+@ src/gpu/ge_vertex.c
+<<<
+	if(pc){ pos[0] = pc[0]; pos[1] = pc[2]; pos[2] = pc[4]; }   //Arreglo
+>>>
+	if(pc){ pos[0] = pc[0]; pos[1] = pc[2]; pos[2] = pc[5]; }   //Arreglo
+===
+=== ps: sin contar los vertices
+@ src/gpu/ge_vertex.c
+<<<
+	ge_stats.vertices_ps += (u32)n;   //Arreglo
+>>>
+	(void)0;   //Arreglo
+===
+=== ps: el peso de A no avanza
+@ src/gpu/ge_vertex.c
+<<<
+		"psq_lu 13,1(%[wa]),1,2\n\t"
+>>>
+		"psq_lu 13,0(%[wa]),1,2\n\t"
+===

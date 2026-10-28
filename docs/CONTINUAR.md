@@ -3442,6 +3442,123 @@ instrucciones y BF55BF17 en el caso de Strikers); en `censo`, la línea
   posición final: ~130 de ~490 ciclos por vértice en el 31 %, ~2 % de la
   pelea.
 
+### v0.5.23.7: vértices con huesos de dos en dos con paired singles (`ge_vdec_ps`)
+
+Con la autoprueba de la 0.5.23.6 a 0 (cada carril de los paired singles da
+lo mismo que la instrucción escalar), los vértices con huesos se calculan
+de dos en dos: el carril 0 es un vértice y el 1 el siguiente, con las
+mismas cuentas en el mismo orden que el camino de siempre, así que salen
+los mismos bits. Solo el formato 0x301 (uv de 8 bits, posición de 16,
+pesos de 8 bits, de 1 a 8 huesos: los personajes de DBZ, 0x4301, 0xC301,
+0x1C301...).
+
+Cómo va (`ps_lote` en `gpu/ge_vertex.c`):
+- Por trozos de 64 vértices, el núcleo `ps_nucleo_huesos` (un solo bloque
+  de ensamblador: si el compilador guardara un registro en la pila con
+  `stfd` perdería ps1) hace, por cada par:
+  - los pesos: `psq_l` de cada vértice (u8 por 2^-7, como `psq_u8`) y
+    `ps_merge00` para tenerlos en un par;
+  - la mezcla: por hueso y elemento, `ps_madds0` (el peso de cada carril
+    por el elemento del hueso, cargado con `lfs` en ps0) más lo que lleva;
+    el primer hueso, sobre +0 (el escalar empieza en 0 con `fmadds`);
+  - la posición: los bytes bajo y alto de cada componente con `psq_l`
+    (GQR4 y GQR3, como `psq_s16le`), merges y `ps_add`;
+  - aplicarla: `ps_madd` en el orden que compila GCC el escalar
+    (`m[9+c] + s0*m[c]`, luego `+ s1*m[3+c]`, luego `+ s2*m[6+c]`);
+  - la transformación: `ps_muls0`, `ps_madds0`, `ps_madds0`, `ps_add`, el
+    orden de `ge_dot3_fused` (`p1*m[4+i]`, `+ p0*m[i]`, `+ p2*m[8+i]`,
+    `+ m[12+i]`);
+  - guarda la posición y el clip de los dos (`psq_st`).
+  Un vértice suelto al final va como un par consigo mismo.
+- El resto (uv, pantalla, niebla, luces) va en C, vértice a vértice y en
+  orden, con `read_vertex_body`, que ahora acepta la posición y el clip ya
+  calculados.
+
+Por qué da lo mismo (comprobado a mano y en las pruebas):
+- Lo único que hace distinto es no saltarse los pesos 0 (los dos carriles
+  hacen todos los huesos). Sumar `0 * elemento` no cambia nada si el
+  elemento es finito y lo acumulado no es -0, y lo acumulado nunca es -0:
+  empieza en +0 y, redondeando al más cercano, una suma que da 0 da +0
+  salvo -0 + -0. Por eso cada lote comprueba que los huesos que usa el
+  formato y la matriz combinada no tengan infinitos, NaN ni denormales
+  (los denormales, por si acaso: la carga de pares de float no está
+  comprobada en el Wii); si no, va por el camino de siempre.
+- Las cuentas por carril son las de la autoprueba (0 distintos en 109 M
+  operaciones por carril en el Wii); los merges solo mueven pesos y bytes
+  de la posición, nunca denormales (con NI = 1 el carril que se copia en
+  `ps_sum` convierte un denormal en cero).
+- libogc guarda los dos carriles de cada registro al cambiar de hilo (el
+  manejador de la FPU usa `psq_st`); los GQR2-4 se ponen en cada lote,
+  como en `ge_vdec_psq`.
+- Con `prof_vertices`, sin `ge_vdec_psq`, sin `ge_skin_rapido` o sin
+  `ge_vdec_esp`, el camino de siempre (que no se toca).
+
+Medido en el banco de qemu (`gevert.sh`, instrucciones por vértice de
+`batch_range` más el núcleo; la instrucción emulada cuenta como una):
+2 huesos (0x4301) 323,8 → 282,4 (−13 %), 4 huesos (0xC301) 382,6 → 322,4
+(−16 %), 8 huesos (0x1C301) 502,0 → 402,1 (−20 %). En ciclos debería ganar
+más: la mitad de operaciones de la FPU (que es una sola) en la mezcla, la
+aplicación y la transformación. Sin huesos (0x11A) se probó y salía +3 %
+de instrucciones (la carga de la posición en pares, los merges, guardar y
+volver a leer cuestan lo que ahorra la transformación): sigue como estaba.
+Lo que queda por vértice es la pantalla (la división por w y las
+conversiones a entero), la uv y escribir el vértice; la división se
+podría hacer en pares (`ps_div`), y por eso la autoprueba ya lo prueba.
+
+Autoprueba ampliada (`prueba_ps`): además, `psq_l` + `psq_st` sin cuentas
+(contra la copia de bits: ¿la carga o el guardado de pares convierten
+denormales?), `ps_merge00/01/10/11` y `ps_mr` (copias), `ps_neg`,
+`ps_abs`, `ps_nabs` (contra `fneg`, `fabs`, `fnabs`), `ps_div` (contra
+`fdivs`) y `ps_sel` (contra `fsel`).
+
+Herramientas: `sigill_ppc.c` emula los paired singles en qemu (ps1 en una
+sombra; cada carril con la operación escalar; `psq_st` de float convierte
+un denormal en cero como Dolphin y lo cuenta, igual que los merges que
+mueven uno); `mutar.py --dkp` (las mutaciones con el código del Wii, en
+`qemu-ppc -cpu 750`); `build_cli_gx.sh` con `GE_VERTEX_DKP=1` (también
+ge_vertex.c con devkitPPC); `ab_versiones.py --cli ARG`.
+
+Verificación (completa, pedida por el usuario):
+
+- Pruebas: x86 con ASan 167.530 comprobaciones, 0 fallos; PowerPC bajo
+  qemu 167.530, 0 fallos; devkitPPC bajo `qemu-ppc -cpu 750` 167.531, 0
+  fallos (64.451 vértices por paired singles en `test_ps_bordes`, 96.147
+  comparados con `ge_verificar`, 0 distintos; 0 denormales aplanados por
+  `psq_st` y 0 movidos por merges). Huellas de siempre (4D4A1D8B,
+  0657B177, B3A2BCD3).
+- pspautotests 275/275.
+- Mutaciones (`mutaciones/0.5.23.7.txt`, `mutar.py --dkp --solo vdec` y
+  el repaso con todas las suites): 24 de 25 detectadas. Sobrevive "el cero
+  de partida es -0", que es equivalente: un -0 en la posición mezclada
+  solo sale si todos los pesos son 0, y entonces se suma a la traslación
+  de la matriz o se multiplica (ni la posición ni el clip ni las luces lo
+  ven). "Transformar en otro orden" (un bit distinto en clip0) solo se
+  ve comparando bit a bit: por eso `test_ps_bordes` va con
+  `ge_verificar`.
+- A/B con el CLI de GX (555 programas): la 0.5.23.6 contra la 0.5.23.7, 0
+  distintos; `ge_vdec_ps` 0/1 con ge_vertex.c de devkitPPC
+  (`GE_VERTEX_DKP=1`) y matemática rápida, 0 distintos (las pspautotests
+  no tienen vértices 0x301 con huesos: lo prueba `test_vdec`).
+- `ge_verificar` en las 110 de `gpu/` (exacto y MR, con ge_vertex.c de
+  devkitPPC): 0 líneas `[VERIF]`.
+- Compilación para el Wii: `wiisp.dol` 0.5.23.7. Desensamblado del
+  núcleo y de la autoprueba revisado (sin `stfd`/`lfd` en medio de los
+  paired singles; en el Wii, libogc guarda los dos carriles al cambiar de
+  hilo).
+
+Autotest (4 registros y un `.capturas.txt`):
+- con: todo encendido, con `prueba_ps` (líneas `[PRUEBA]` al principio);
+- sin: con `ge_vdec_ps` 0;
+- con2: igual que con (para ver cuánto cambia de una corrida a otra);
+- imagenes: con `ge_verificar` y las 12 capturas, sin `prof_pmc`.
+
+Qué mirar: en `con`, las líneas `[PRUEBA]` (las de antes a 0; las nuevas
+dicen si los merges, la carga y el guardado de pares, `ps_div` y `ps_sel`
+dan lo mismo que lo escalar) y, en `[TIEMPOS] Vertices`, el % con paired
+singles; la pelea, `con` y `con2` contra `sin` (leer vértices, ciclos del
+GE); `imagenes`, las 12 capturas y la verificación a 0 (cada vértice del
+camino por pares comparado bit a bit con el de siempre).
+
 ### Para el siguiente chat (empezar aquí)
 
 Metodología acordada (detalle en `docs/HOJA_DE_RUTA.md`): primero medir
@@ -3475,10 +3592,15 @@ Metodología acordada (detalle en `docs/HOJA_DE_RUTA.md`): primero medir
   devkitPPC, perfil por función, psq_l emulado, A/B) y para leer los
   registros del Wii (`ventanas.py`): `tools/banco/LEEME.md`. El entorno
   (devkitPPC, qemu, pspautotests, PPSSPP): `tools/setup_entorno.sh`.
-- **Siguiente:** leer los registros de la 0.5.23.6 (las líneas `[PRUEBA]`
-  y la de "Repetidas, que cambia..."; qué mirar, en su sección de arriba)
-  y decidir: caché de huesos o de vértices, leer vértices con paired
-  singles, o el diseño del IR (estudiando antes Lightrec).
+- **Siguiente:** leer los registros de la 0.5.23.7 (qué mirar, en su
+  sección de arriba): si `ge_vdec_ps` baja la pelea y la verificación da
+  0. Después, el diseño del IR (fase 2, estudiando antes Lightrec y el IR
+  de PPSSPP). Opcionales: la pantalla en pares (si `ps_div` y los merges
+  salen a 0 en la autoprueba), la caché de huesos (~2 %), los índices CI8
+  por la GPU y la charola parcial de los menús. El limitador de
+  velocidad, al final de todo.
+  Lo de la 0.5.23.6 (ya leído, ver su resultado): la autoprueba a 0 y el
+  censo (la caché de huesos daría ~2 %).
   Lo de la 0.5.23.4 (ya leído, ver su resultado):
   velocidad y ciclos de las peleas, el % de llamadas que siguen la charola
   y por qué no siguen las demás (si "con otra clave" pesa mucho, mirar qué

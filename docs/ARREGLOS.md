@@ -5,6 +5,52 @@ la 0.5.17.2; antes se marcaban con `//arreglo`). Aquí va, por versión, qué
 se arregló o cambió y una descripción breve. El detalle está en
 `docs/CONTINUAR.md`.
 
+## 0.5.23.7
+
+- `gpu/ge_vertex.c`: `ge_vdec_ps` (encendido). Los vértices con huesos de
+  formato 0x301 (uv de 8 bits, posición de 16, pesos de 8 bits; DBZ dibuja
+  así a los personajes, con 1 a 8 huesos) se calculan de dos en dos con
+  paired singles: el carril 0 es un vértice y el 1 el siguiente, y cada
+  carril hace exactamente las cuentas del camino de siempre (las de
+  `fast_skin_plain` y `read_vertex_body`, en el mismo orden): la mezcla de
+  los huesos (`ps_madds0`, el peso de cada vértice por el elemento del
+  hueso), aplicarla a la posición (`ps_madd`) y la transformación por la
+  matriz combinada (`ps_muls0`, `ps_madds0`, `ps_add`). Un núcleo en
+  ensamblador (`ps_nucleo_huesos`, un solo bloque: lo de ps1 nunca pasa
+  por el compilador) escribe la posición y el clip de cada par en un
+  búfer; el resto del vértice (uv, pantalla, niebla, luces) sigue en C
+  con `read_vertex_body`, que ahora acepta la posición y el clip ya
+  calculados. Lo que cambia respecto al camino de siempre, y por qué da lo
+  mismo: los pesos 0 no se saltan (con todos los elementos de los huesos
+  finitos, sumar 0 por un elemento no cambia nada, porque la matriz
+  mezclada nunca es -0: empieza en +0 y una suma que da 0 da +0); por
+  eso, en cada lote se comprueba que los huesos que usa el formato y la
+  matriz combinada no tengan infinitos, NaN ni denormales, y si no, se va
+  por el camino de siempre. Los merges solo mueven pesos y bytes de la
+  posición (nunca denormales). Con `prof_vertices`, sin `ge_vdec_psq` o
+  sin `ge_skin_rapido`, el camino de siempre.
+- `gpu/ge.h`, `hle/hle.c`: `vertices_ps` en `GeStats` y en la línea
+  `[TIEMPOS] Vertices` (% con paired singles). `ge_vdec_ps_disponible`.
+- `wii/broadway.c`: la autoprueba `prueba_ps` también prueba
+  `psq_l`+`psq_st` sin cuentas, `ps_merge00/01/10/11`, `ps_mr`, `ps_neg`,
+  `ps_abs`, `ps_nabs`, `ps_div` y `ps_sel` (contra copias de bits,
+  `fneg`, `fabs`, `fnabs`, `fdivs` y `fsel`): lo que haría falta para
+  llevar la pantalla (la división por w) a paired singles.
+- `core/opt.h`, `core/opt.c`: `ge_vdec_ps`.
+- `tests/test_vdec.c`: `test_ps_bordes`, 400 tandas de 0x301 (y 0x11A) de
+  hasta 200 vértices (trozos de 64 y vértices sueltos), con pesos a 0,
+  vértices con todos los pesos a 0, un hueso que es el opuesto de otro
+  (sumas que dan 0) y huesos o matriz de mundo con ±0, ±infinito, NaN,
+  denormales y valores enormes; contra el camino de siempre, sin
+  `ge_vdec_ps` y con `ge_verificar` (bit a bit cada campo del vértice).
+- `tools/banco/sigill_ppc.c`: emula los paired singles para qemu (ps1 en
+  una sombra, cada carril con la operación escalar), `psq_l`/`psq_lu` y
+  `psq_st`/`psq_stu` con W = 0 y 1; cuenta los denormales que `psq_st`
+  convierte en cero y los que mueven los merges. `tools/banco/mutar.py`:
+  `--dkp` (las mutaciones con el código del Wii en `qemu-ppc -cpu 750`).
+  `mutaciones/0.5.23.7.txt`.
+- `hle/hle.h`, `dist/apps/wiisp/meta.xml`: versión 0.5.23.7.
+
 ## 0.5.23.6
 
 - `gpu/ge_vertex.c`: censo `prof_repetidos` arreglado y afinado. "Con

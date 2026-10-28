@@ -98,6 +98,7 @@ enum {
 	OPT_GE_CLUT_IGUAL,   //Arreglo
 	OPT_GE_ESTADO_CLAVE,   //Arreglo
 	OPT_GE_CI8_RAPIDO,   //Arreglo
+	OPT_GE_VDEC_PS,   //Arreglo
 	/* Fase 2: intérprete cacheado */
 	OPT_CPU_SIN_EXTRA,    /* 2.1 sin costo por instrucción */
 	OPT_CPU_PREDEC,       /* 2.2 predecodificación (cpu/predec.h) */

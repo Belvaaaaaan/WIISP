@@ -58,7 +58,7 @@ al repositorio), `gcc-powerpc-linux-gnu` y `qemu-user`. Las salidas van a
   22341 / 23161; 7: 8111 / 8130; 8: 10432 / 10659; 9: 23134 / 24331; 10:
   8485 / 8515 (ninguna escena tiene llamadas que crucen la cámara: solo el
   coste).
-- `mutar.py MUTACIONES [--solo suite,suite] [--hilos N] [--asan] [--ppc]`:
+- `mutar.py MUTACIONES [--solo suite,suite] [--hilos N] [--asan] [--ppc] [--dkp]`:
   pruebas de mutaciones rápidas. Compila una vez los objetos de las
   pruebas del PC (-O2, sin sanitizers; se rehacen solos si cambia un `.c`
   o un `.h`), y por cada mutación recompila solo el archivo mutado,
@@ -72,7 +72,11 @@ al repositorio), `gcc-powerpc-linux-gnu` y `qemu-user`. Las salidas van a
   `=== nombre`, `@ archivo`, `<<<`, antes, `>>>`, después, `===`. Las de
   cada versión se guardan en `tools/banco/mutaciones/`. Una mutación que
   deja la lista dando vueltas cuenta como colgada (detectada); el límite
-  es 10 veces lo que tardan las suites sin mutar (30 s como poco).
+  es 10 veces lo que tardan las suites sin mutar (30 s como poco). Con
+  `--dkp`, lo que compila `build_tests_dkp.sh` va con devkitPPC y
+  `-DGEKKO` y las pruebas corren en `qemu-ppc -cpu 750` con
+  `sigill_ppc.c`: para el código que solo existe en el Wii (los paired
+  singles de `ge_vdec_ps`).
 - `bench_charolas.c` (lo compila `build_banco.sh`) + `banco_charolas.sh
   SEMILLAS LLAMADAS "OPCIONES_A" "OPCIONES_B" [fifo]`: listas al azar por el
   bucle de `ge.c` y el renderizador de GX sobre `stub_estado.c`, con
@@ -138,12 +142,24 @@ al repositorio), `gcc-powerpc-linux-gnu` y `qemu-user`. Las salidas van a
   entre lo que tiene en línea. `qcallers.py`: quién llama a una función
   (memcpy, memset...), por el bloque que corre antes de entrar.
 - `sigill_ppc.c`: emula con SIGILL lo que un PowerPC normal no tiene o es
-  privilegiado (mfmsr/mtmsr, mfspr/mtspr con los GQR, psq_l con W = 1).
-  `PSQ_INFORME=1` dice cuántos psq_l emuló.
+  privilegiado (mfmsr/mtmsr, mfspr/mtspr con los GQR, psq_l y psq_lu,
+  psq_st y psq_stu con W = 0 y 1) y las instrucciones de paired singles
+  (opcode 4: sumas, productos, `ps_madd`, `ps_madds0/1`, `ps_muls0/1`,
+  `ps_sum0/1`, merges, `ps_mr`, `ps_neg`, `ps_abs`, `ps_nabs`, `ps_div`,
+  `ps_sel`). ps1 va en una sombra; cada carril con la operación escalar
+  de precisión simple (lo que `prueba_ps` comprobó en el Wii). `psq_st` de
+  float convierte un denormal en cero (como Dolphin) y lo cuenta, igual
+  que los merges que mueven un denormal. `PSQ_INFORME=1` dice cuántos
+  psq_l y paired singles emuló. Correr con `qemu-ppc -cpu 750` (sin
+  AltiVec: con otra CPU, algún opcode 4 podría ser una instrucción
+  AltiVec válida en vez de dar SIGILL). En el perfil de `qprof.py`, la
+  instrucción emulada cuenta en su función (está en el bloque traducido),
+  y el manejador aparte (`on_sigill`, `lane_a`, `dequant`...).
 - `build_tests_dkp.sh`: las pruebas del PC con ge_vertex.c, test_gxemit.c,
   interp.c y predec.c
-  compilados por devkitPPC; correr `qemu-ppc $SALIDA/tests-dkp` desde la
-  raíz del repositorio. Huella de test_vdec con devkitPPC: B3A2BCD3.
+  compilados por devkitPPC; correr `qemu-ppc -cpu 750 $SALIDA/tests-dkp`
+  desde la raíz del repositorio. Huella de test_vdec con devkitPPC:
+  B3A2BCD3.
 - `build_cli_gx.sh` + `stub_estado.c`: el CLI dibujando por gx_ge.c
   (compilado con devkitPPC) sobre una libogc de mentira que guarda el
   estado de GX: al salir escribe `[GX] N dibujos, huella X`, la de todo el
@@ -162,7 +178,10 @@ al repositorio), `gcc-powerpc-linux-gnu` y `qemu-user`. Las salidas van a
   destinos de `GX_CopyTex`/`GX_CopyDisp`): desde la 0.5.23.2 el script
   corre qemu con `MALLOC_PERTURB_=165` y sale igual en las dos.
 - `gevert.sh DIR_BANCO [opcion=valor...]`: instrucciones por vértice
-  (total y `batch_range`) en el banco del GE para los formatos de DBZ.
+  (total, `batch_range` y el núcleo de `ge_vdec_ps`) en el banco del GE
+  para los formatos de DBZ. 0.5.23.7, `batch_range` más el núcleo, con
+  `ge_vdec_ps`: 0x4301 282, 0xC301 322, 0x1C301 402 (sin: 324, 383, 502;
+  0x11A sigue en 252).
 - `ventanas.py sin=a.log con=b.log ...`: compara los registros del
   autotest del Wii por ventanas de juego (tiempo, velocidad, tirones, CPU
   y GE, leer vértices y ciclos por unidad del PMC del GE, también de

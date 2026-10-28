@@ -1172,14 +1172,15 @@ static float last_uv[2], last_normal[3];
    camino por lotes de ge_vdec_esp usa exactamente estas mismas expresiones,
    así que el compilador hace las mismas operaciones y salen los mismos bits) */
 static inline __attribute__((always_inline)) void read_vertex_body(const VFormat *f, const DecVertex *d, GeClipVertex *out, const int fast,
-                                                                   const int pv, const PantallaLote *pl){   //Arreglo
+                                                                   const int pv, const PantallaLote *pl, const float *pc){   //Arreglo
 	GeVertex *v = &out->v;
 	float pos[3], normal[3];
 	int i;
 	if(pv) prof_vtx_phase = VXF_TRANSFORMAR;   //Arreglo
 
 	/* Todos los campos se escriben más abajo en todos los caminos */
-	memcpy(pos, d->pos, sizeof(pos));
+	if(pc){ pos[0] = pc[0]; pos[1] = pc[2]; pos[2] = pc[4]; }   //Arreglo
+	else memcpy(pos, d->pos, sizeof(pos));   //Arreglo
 
 	if(f->tc){ last_uv[0] = d->uv[0]; last_uv[1] = d->uv[1]; }
 	{
@@ -1211,8 +1212,13 @@ static inline __attribute__((always_inline)) void read_vertex_body(const VFormat
 			   respecto al GE, pero igual en todas las pasadas */
 			const float *m = ts.matrix;
 			float iw;
+			if(pc){   //Arreglo
 #pragma GCC unroll 4
-			for(i = 0; i < 4; i++) out->clip[i] = ge_dot3_fused(pos[0], m[i], pos[1], m[4 + i], pos[2], m[8 + i]) + m[12 + i];
+				for(i = 0; i < 4; i++) out->clip[i] = pc[6 + 2 * i];   //Arreglo
+			} else {   //Arreglo
+#pragma GCC unroll 4
+				for(i = 0; i < 4; i++) out->clip[i] = ge_dot3_fused(pos[0], m[i], pos[1], m[4 + i], pos[2], m[8 + i]) + m[12 + i];
+			}   //Arreglo
 			iw = 1.0f / out->clip[3];
 			sx = out->clip[0] * iw * ts.screen_scale[0] + ts.screen_add[0];
 			sy = out->clip[1] * iw * ts.screen_scale[1] + ts.screen_add[1];
@@ -1311,8 +1317,8 @@ static inline __attribute__((always_inline)) void read_vertex_body(const VFormat
 }
 
 static void read_vertex(const VFormat *f, const DecVertex *d, GeClipVertex *out){
-	if(ge_fast_math) read_vertex_body(f, d, out, 1, 0, NULL);   //Arreglo
-	else read_vertex_body(f, d, out, 0, 0, NULL);   //Arreglo
+	if(ge_fast_math) read_vertex_body(f, d, out, 1, 0, NULL, NULL);   //Arreglo
+	else read_vertex_body(f, d, out, 0, 0, NULL, NULL);   //Arreglo
 }
 
 /* --- Recorte (Clipper.cpp) -------------------------------------------------- */
@@ -1959,6 +1965,232 @@ void ge_vdec_verif_report(char *buf, size_t size){
 	verif_tris = verif_tris_bad = 0;
 }
 
+#ifdef GEKKO
+//Arreglo
+#define PS_MEZCLA(a0, a1, a2, a3, a4, a5, a6, a7, a8, a9, a10, a11) \
+	"lfs 16,4(%[hb])\n\t" \
+	"ps_merge00 13,13,14\n\t" \
+	"lfs 17,8(%[hb])\n\t" \
+	"ps_madds0 1,13,15," #a0 "\n\t" \
+	"lfs 18,12(%[hb])\n\t" \
+	"ps_madds0 2,13,16," #a1 "\n\t" \
+	"lfs 19,16(%[hb])\n\t" \
+	"ps_madds0 3,13,17," #a2 "\n\t" \
+	"lfs 20,20(%[hb])\n\t" \
+	"ps_madds0 4,13,18," #a3 "\n\t" \
+	"lfs 15,24(%[hb])\n\t" \
+	"ps_madds0 5,13,19," #a4 "\n\t" \
+	"lfs 16,28(%[hb])\n\t" \
+	"ps_madds0 6,13,20," #a5 "\n\t" \
+	"lfs 17,32(%[hb])\n\t" \
+	"ps_madds0 7,13,15," #a6 "\n\t" \
+	"lfs 18,36(%[hb])\n\t" \
+	"ps_madds0 8,13,16," #a7 "\n\t" \
+	"lfs 19,40(%[hb])\n\t" \
+	"ps_madds0 9,13,17," #a8 "\n\t" \
+	"lfs 20,44(%[hb])\n\t" \
+	"ps_madds0 10,13,18," #a9 "\n\t" \
+	"ps_madds0 11,13,19," #a10 "\n\t" \
+	"ps_madds0 12,13,20," #a11 "\n\t"
+
+//Arreglo
+#define PS_POS \
+	"add %[pb],%[pp],%[sz]\n\t" \
+	"psq_l 13,0(%[pp]),1,4\n\t" \
+	"psq_l 14,0(%[pb]),1,4\n\t" \
+	"psq_l 15,1(%[pp]),1,3\n\t" \
+	"psq_l 16,1(%[pb]),1,3\n\t" \
+	"psq_l 17,2(%[pp]),1,4\n\t" \
+	"psq_l 18,2(%[pb]),1,4\n\t" \
+	"ps_merge00 13,13,14\n\t" \
+	"psq_l 19,3(%[pp]),1,3\n\t" \
+	"ps_merge00 15,15,16\n\t" \
+	"psq_l 20,3(%[pb]),1,3\n\t" \
+	"ps_add 13,15,13\n\t" \
+	"psq_l 21,4(%[pp]),1,4\n\t" \
+	"ps_merge00 17,17,18\n\t" \
+	"psq_l 22,4(%[pb]),1,4\n\t" \
+	"ps_merge00 19,19,20\n\t" \
+	"psq_l 23,5(%[pp]),1,3\n\t" \
+	"ps_add 17,19,17\n\t" \
+	"psq_l 14,5(%[pb]),1,3\n\t" \
+	"ps_merge00 21,21,22\n\t" \
+	"ps_merge00 23,23,14\n\t" \
+	"ps_add 21,23,21\n\t"
+
+//Arreglo
+#define PS_APLICA \
+	"ps_madd 10,1,13,10\n\t" \
+	"ps_madd 11,2,13,11\n\t" \
+	"ps_madd 12,3,13,12\n\t" \
+	"ps_madd 10,4,17,10\n\t" \
+	"ps_madd 11,5,17,11\n\t" \
+	"ps_madd 12,6,17,12\n\t" \
+	"ps_madd 10,7,21,10\n\t" \
+	"ps_madd 11,8,21,11\n\t" \
+	"ps_madd 12,9,21,12\n\t"
+
+//Arreglo
+#define PS_TRANSF(p0, p1, p2) \
+	"lfs 14,16(%[tm])\n\t" \
+	"lfs 15,20(%[tm])\n\t" \
+	"lfs 16,24(%[tm])\n\t" \
+	"lfs 18,28(%[tm])\n\t" \
+	"ps_muls0 24," #p1 ",14\n\t" \
+	"lfs 14,0(%[tm])\n\t" \
+	"ps_muls0 25," #p1 ",15\n\t" \
+	"lfs 15,4(%[tm])\n\t" \
+	"ps_muls0 26," #p1 ",16\n\t" \
+	"lfs 16,8(%[tm])\n\t" \
+	"ps_muls0 27," #p1 ",18\n\t" \
+	"lfs 18,12(%[tm])\n\t" \
+	"ps_madds0 24," #p0 ",14,24\n\t" \
+	"lfs 14,32(%[tm])\n\t" \
+	"ps_madds0 25," #p0 ",15,25\n\t" \
+	"lfs 15,36(%[tm])\n\t" \
+	"ps_madds0 26," #p0 ",16,26\n\t" \
+	"lfs 16,40(%[tm])\n\t" \
+	"ps_madds0 27," #p0 ",18,27\n\t" \
+	"lfs 18,44(%[tm])\n\t" \
+	"ps_madds0 24," #p2 ",14,24\n\t" \
+	"ps_madds0 25," #p2 ",15,25\n\t" \
+	"ps_madds0 26," #p2 ",16,26\n\t" \
+	"ps_madds0 27," #p2 ",18,27\n\t" \
+	"ps_add 24,24,28\n\t" \
+	"ps_add 25,25,29\n\t" \
+	"ps_add 26,26,30\n\t" \
+	"ps_add 27,27,31\n\t"
+
+//Arreglo
+#define PS_GUARDA(p0, p1, p2) \
+	"psq_st " #p0 ",0(%[out]),0,0\n\t" \
+	"psq_st " #p1 ",8(%[out]),0,0\n\t" \
+	"psq_st " #p2 ",16(%[out]),0,0\n\t" \
+	"psq_st 24,24(%[out]),0,0\n\t" \
+	"psq_st 25,32(%[out]),0,0\n\t" \
+	"psq_st 26,40(%[out]),0,0\n\t" \
+	"psq_st 27,48(%[out]),0,0\n\t" \
+	"addi %[out],%[out],56\n\t"
+
+//Arreglo
+#define PS_CTE \
+	"psq_l 0,0(%[cte]),0,0\n\t" \
+	"psq_l 28,8(%[cte]),0,0\n\t" \
+	"psq_l 29,16(%[cte]),0,0\n\t" \
+	"psq_l 30,24(%[cte]),0,0\n\t" \
+	"psq_l 31,32(%[cte]),0,0\n\t" \
+	"mtctr %[np]\n"
+
+//Arreglo
+#define PS_CLOBBER "fr0", "fr1", "fr2", "fr3", "fr4", "fr5", "fr6", "fr7", "fr8", "fr9", "fr10", "fr11", "fr12", "fr13", \
+	"fr14", "fr15", "fr16", "fr17", "fr18", "fr19", "fr20", "fr21", "fr22", "fr23", "fr24", "fr25", "fr26", "fr27", "fr28", \
+	"fr29", "fr30", "fr31", "ctr", "cr0", "xer", "memory"
+
+//Arreglo
+static void ps_nucleo_huesos(const u8 *pw, const u8 *pp, u32 sz, u32 np, float *out, const float *hu, u32 nb,
+                             const float *tm, const float *cte){
+	const u32 sz2 = sz * 2;
+	const u8 *wa, *wb, *pb;
+	const float *hb;
+	u32 cnt;
+	if(!np) return;
+	__asm__ __volatile__(
+		PS_CTE
+		"1:\n\t"
+		"mr %[wa],%[pw]\n\t"
+		"add %[wb],%[pw],%[sz]\n\t"
+		"mr %[hb],%[hu]\n\t"
+		"psq_l 13,0(%[wa]),1,2\n\t"
+		"psq_l 14,0(%[wb]),1,2\n\t"
+		"lfs 15,0(%[hb])\n\t"
+		PS_MEZCLA(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)
+		"addic. %[cnt],%[nb],-1\n\t"
+		"beq 3f\n"
+		"2:\n\t"
+		"psq_lu 13,1(%[wa]),1,2\n\t"
+		"psq_lu 14,1(%[wb]),1,2\n\t"
+		"lfsu 15,48(%[hb])\n\t"
+		PS_MEZCLA(1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12)
+		"addic. %[cnt],%[cnt],-1\n\t"
+		"bne 2b\n"
+		"3:\n\t"
+		PS_POS
+		PS_APLICA
+		PS_TRANSF(10, 11, 12)
+		PS_GUARDA(10, 11, 12)
+		"add %[pw],%[pw],%[sz2]\n\t"
+		"add %[pp],%[pp],%[sz2]\n\t"
+		"bdnz 1b\n\t"
+		: [pw]"+b"(pw), [pp]"+b"(pp), [out]"+b"(out), [wa]"=&b"(wa), [wb]"=&b"(wb), [hb]"=&b"(hb), [pb]"=&b"(pb),
+		  [cnt]"=&r"(cnt)
+		: [sz]"r"(sz), [sz2]"r"(sz2), [np]"r"(np), [hu]"r"(hu), [nb]"r"(nb), [tm]"b"(tm), [cte]"b"(cte)
+		: PS_CLOBBER);
+}
+
+//Arreglo
+static int ps_normales(const float *v, int n){
+	int i;
+	for(i = 0; i < n; i++){
+		u32 b, e;
+		memcpy(&b, &v[i], 4);
+		e = b & 0x7F800000u;
+		if(e == 0x7F800000u || (e == 0 && (b & 0x007FFFFFu))) return 0;
+	}
+	return 1;
+}
+
+//Arreglo
+static inline __attribute__((always_inline)) void decode_sin_pos(const VFormat *f, const u8 *p, DecVertex *d, const int tc,
+                                                                 const int col){
+	int i;
+	if(tc){
+#pragma GCC unroll 2
+		for(i = 0; i < 2; i++) d->uv[i] = raw_weight_q(p + f->off_tc, tc, i, 1);
+	}
+	if(col >= 4) d->color0 = color_to_8888(col, p + f->off_col);
+	else if(col) d->color0 = 0;
+}
+
+//Arreglo
+#define PS_TROZO 64
+
+//Arreglo
+static inline __attribute__((always_inline)) int ps_lote(const VFormat *f, const u8 *p, u32 size, int n, GeClipVertex *dst,
+                                                          const PantallaLote *pl, const int tc, const int col){
+	static float buf[PS_TROZO * 7] __attribute__((aligned(32)));
+	float cte[10] __attribute__((aligned(8)));
+	int j, i;
+	if(!ps_normales(ts.matrix, 16) || !ps_normales(ge.bone[0], f->nweights * 12)) return 0;
+	cte[0] = cte[1] = 0.0f;
+	for(i = 0; i < 4; i++) cte[2 + 2 * i] = cte[3 + 2 * i] = ts.matrix[12 + i];
+	for(j = 0; j < n; j += PS_TROZO){
+		const int m = n - j < PS_TROZO ? n - j : PS_TROZO;
+		const u8 *q = p + (u32)j * size, *u = q + (u32)(m - 1) * size;
+		ps_nucleo_huesos(q + f->off_w, q + f->off_pos, size, (u32)m >> 1, buf, ge.bone[0], (u32)f->nweights, ts.matrix, cte);
+		if(m & 1) ps_nucleo_huesos(u + f->off_w, u + f->off_pos, 0, 1, buf + (m - 1) * 7, ge.bone[0], (u32)f->nweights,
+		                           ts.matrix, cte);
+		for(i = 0; i < m; i++, q += size){
+			DecVertex d;
+			if(f->tc != tc || f->col != col || f->nrm != 0 || f->pos != 2 || f->wt != 1) __builtin_unreachable();
+			d.color0 = 0;
+			decode_sin_pos(f, q, &d, tc, col);
+			read_vertex_body(f, &d, &dst[j + i], 1, 0, pl, buf + (i & ~1) * 7 + (i & 1));
+		}
+	}
+	ge_stats.vertices_ps += (u32)n;   //Arreglo
+	return 1;
+}
+#endif
+
+//Arreglo
+int ge_vdec_ps_disponible(void){
+#ifdef GEKKO
+	return 1;
+#else
+	return 0;
+#endif
+}
+
 static int batch_range(const VSource *s, u32 first, int n, GeClipVertex *dst){
 	const VFormat *f = s->f;
 	const u8 *p;
@@ -1997,14 +2229,21 @@ static int batch_range(const VSource *s, u32 first, int n, GeClipVertex *dst){
 		d.color0 = 0; \
 		if(pv) prof_vtx_phase = (WT) ? VXF_HUESOS : VXF_DECODIFICAR; \
 		decode_plain(f, p, &d, TC, COL, NRM, POS, WT, Q); \
-		read_vertex_body(f, &d, &dst[i], 1, pv, pl); \
+		read_vertex_body(f, &d, &dst[i], 1, pv, pl, NULL); \
 	}   //Arreglo
 #define BATCH(TC, COL, NRM, POS, WT) do { if(psq){ BATCH1(TC, COL, NRM, POS, WT, 1) } else { BATCH1(TC, COL, NRM, POS, WT, 0) } } while(0)
+#ifdef GEKKO
+	const int ps = psq && !pv && opt_on[OPT_GE_VDEC_PS] && ts.enable_transform;   //Arreglo
+#endif
 	switch((f->vtype & 0x7FF) | (f->wt && !opt_on[OPT_GE_SKIN_RAPIDO] ? 0x800 : 0)){
 	case 0x11A: BATCH(2, 6, 0, 2, 0); break;    /* uv16 c4444 p16 */
 	case 0x11E: BATCH(2, 7, 0, 2, 0); break;    /* uv16 c8888 p16 */
 	case 0x19F: { BATCH1(3, 7, 0, 3, 0, 0) } break;    /* uvf c8888 pf: nada que convertir */
-	case 0x301: BATCH(1, 0, 0, 2, 1); break;    /* uv8 p16, pesos de 8 bits */
+	case 0x301:    /* uv8 p16, pesos de 8 bits */
+#ifdef GEKKO
+		if(ps && ps_lote(f, p, size, n, dst, pl, 1, 0)) break;   //Arreglo
+#endif
+		BATCH(1, 0, 0, 2, 1); break;
 	case 0x321: BATCH(1, 0, 1, 2, 1); break;    /* uv8 n8 p16, pesos de 8 bits */
 	case 0x341: BATCH(1, 0, 2, 2, 1); break;    /* uv8 n16 p16, pesos de 8 bits */
 	default:
@@ -2012,7 +2251,7 @@ static int batch_range(const VSource *s, u32 first, int n, GeClipVertex *dst){
 			DecVertex d;
 			if(pv) prof_vtx_phase = f->wt ? VXF_HUESOS : VXF_DECODIFICAR;   //Arreglo
 			decode_vertex(f, p, &d);
-			read_vertex_body(f, &d, &dst[i], 1, pv, pl);   //Arreglo
+			read_vertex_body(f, &d, &dst[i], 1, pv, pl, NULL);   //Arreglo
 		}
 		break;
 	}

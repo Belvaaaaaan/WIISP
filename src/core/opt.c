@@ -64,6 +64,7 @@ const OptInfo opt_info[OPT_N] = {
 	[OPT_GE_CLUT_IGUAL] = { "ge_clut_igual", 1, 1 },   //Arreglo
 	[OPT_GE_ESTADO_CLAVE] = { "ge_estado_clave", 1, 1 },   //Arreglo
 	[OPT_GE_CI8_RAPIDO] = { "ge_ci8_rapido", 1, 1 },   //Arreglo
+	[OPT_GE_VDEC_PS] = { "ge_vdec_ps", 1, 1 },   //Arreglo
 	[OPT_CPU_SIN_EXTRA]  = { "cpu_sin_extra",  1, 1 },
 	[OPT_CPU_PREDEC]     = { "cpu_predec",     1, 1 },
 	[OPT_CPU_VERIFICAR]  = { "cpu_verificar",  1, 0 },

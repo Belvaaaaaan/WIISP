@@ -7,7 +7,12 @@ suites (y, con --asan o --ppc, también con ASan o en PowerPC bajo qemu), así
 que el resultado final es el mismo que corriendo todo con cada una.
 
 Uso: mutar.py MUTACIONES [--solo listas,bbox] [--hilos N] [--asan] [--ppc]
-             [--solo-estas nombre,nombre]
+             [--solo-estas nombre,nombre] [--dkp]
+
+--dkp: las mutaciones se prueban con lo del Wii (ge_vertex.c, ge.c,
+ge_raster.c, test_gxemit.c, interp.c y predec.c con devkitPPC y -DGEKKO,
+como build_tests_dkp.sh) en qemu-ppc -cpu 750 con sigill_ppc.c: para el
+código que solo existe en el Wii (paired singles).
 
 Formato de MUTACIONES (texto exacto: tiene que aparecer una sola vez):
     === nombre de la mutación
@@ -27,7 +32,16 @@ VARIANTES = {
     'asan': dict(cc='cc', flags=['-O1', '-g', '-fsanitize=address,undefined', '-fno-omit-frame-pointer'],
                  ld=['-fsanitize=address,undefined', '-lm'], run=[]),
     'ppc': dict(cc='powerpc-linux-gnu-gcc', flags=['-O2'], ld=['-static', '-lm'], run=['qemu-ppc']),
+    'dkp': dict(cc='powerpc-linux-gnu-gcc', flags=['-O2'], ld=['-static', '-lm'], run=['qemu-ppc', '-cpu', '750']),
 }
+DKP = ['src/gpu/ge_vertex.c', 'src/gpu/ge.c', 'src/gpu/ge_raster.c', 'tests/test_gxemit.c', 'src/cpu/interp.c', 'src/cpu/predec.c']
+DKF = ['-O2', '-fwrapv', '-std=gnu11', '-mcpu=750', '-mhard-float', '-msdata=none', '-G0', '-maix-struct-return',
+       '-fno-stack-protector', '-DGEKKO', '-w', '-Isrc', '-Itests']
+SIGILL = 'tools/banco/sigill_ppc.c'
+
+def devkitppc():
+    d = os.environ.get('DEVKITPPC') or os.path.join(RAIZ, '..', 'wiisp-entorno', 'devkitpro', 'devkitPPC')
+    return os.path.join(d, 'bin', 'powerpc-eabi-gcc')
 
 def fuentes():
     pat = ['src/core/*.c', 'src/loader/*.c', 'src/cpu/*.c', 'src/hle/*.c', 'src/gpu/*.c', 'tests/*.c']
@@ -50,9 +64,14 @@ def leer_mutaciones(path):
         m['antes'] = '\n'.join(m['antes']); m['despues'] = '\n'.join(m['despues'])
     return muts
 
-def compilar(var, src, obj, extra=()):
+def compilar(var, src, obj, extra=(), orig=None):
     v = VARIANTES[var]
     os.makedirs(os.path.dirname(obj), exist_ok=True)
+    if var == 'dkp' and (orig or src) in DKP:
+        r = subprocess.run([devkitppc()] + DKF + list(extra) + ['-c', src, '-o', obj], cwd=RAIZ, capture_output=True, text=True)
+        if r.returncode == 0:
+            subprocess.run(['powerpc-linux-gnu-objcopy', '--remove-section', '.gnu.attributes', obj], cwd=RAIZ)
+        return r.returncode == 0, r.stderr
     r = subprocess.run([v['cc']] + v['flags'] + FLAGS + list(extra) + ['-c', src, '-o', obj], cwd=RAIZ,
                        capture_output=True, text=True)
     return r.returncode == 0, r.stderr
@@ -68,6 +87,7 @@ def base(var, salida, hilos):
         o = objeto(dirobj, f)
         if os.path.exists(o) and os.path.getmtime(o) >= max(os.path.getmtime(os.path.join(RAIZ, f)), cabeceras): return True, ''
         return compilar(var, f, o)
+    if var == 'dkp': fs = fs + [SIGILL]
     with concurrent.futures.ThreadPoolExecutor(hilos) as ex:
         for f, (ok, err) in zip(fs, ex.map(uno, fs)):
             if not ok: sys.exit(f'no compila {f} ({var}):\n{err}')
@@ -75,7 +95,7 @@ def base(var, salida, hilos):
 
 def enlazar(var, dirobj, salida_bin, cambio=None):
     v = VARIANTES[var]
-    objs = [objeto(dirobj, f) for f in fuentes()]
+    objs = [objeto(dirobj, f) for f in fuentes() + ([SIGILL] if var == 'dkp' else [])]
     if cambio:
         cambios = cambio if isinstance(cambio, dict) else {cambio[0]: cambio[1]}
         objs = [next((n for f, n in cambios.items() if o == objeto(dirobj, f)), o) for o in objs]
@@ -114,7 +134,7 @@ def mutar(var, dirobj, salida, k, m, solo, limite):
         cambios = {}
         for i, f in enumerate(usan):
             o = os.path.join(d, 'mutado%d.o' % i)
-            ok, err = compilar(var, f, o, ['-iquote', os.path.join(d, 'src'), '-iquote', os.path.dirname(msrc)])
+            ok, err = compilar(var, f, o, ['-iquote', os.path.join(d, 'src'), '-iquote', os.path.dirname(msrc)], orig=f)
             if not ok: return 'no compila', 0, err.strip().splitlines()[0] if err.strip() else ''
             cambios[f] = o
         binario = os.path.join(d, 'tests')
@@ -122,7 +142,7 @@ def mutar(var, dirobj, salida, k, m, solo, limite):
         if not ok: return 'no enlaza', 0, err.strip().splitlines()[-1] if err.strip() else ''
         return correr(var, binario, solo, limite)
     mobj = os.path.join(d, 'mutado.o')
-    ok, err = compilar(var, msrc, mobj, ['-iquote', os.path.dirname(os.path.join(RAIZ, m['archivo']))])
+    ok, err = compilar(var, msrc, mobj, ['-iquote', os.path.dirname(os.path.join(RAIZ, m['archivo']))], orig=m['archivo'])
     if not ok: return 'no compila', 0, err.strip().splitlines()[0] if err.strip() else ''
     binario = os.path.join(d, 'tests')
     ok, err = enlazar(var, dirobj, binario, (m['archivo'], mobj))
@@ -141,30 +161,31 @@ def main():
         return False
     solo = opcion('--solo'); hilos = int(opcion('--hilos', str(os.cpu_count() or 4)))
     estas = opcion('--solo-estas'); asan = bandera('--asan'); ppc = bandera('--ppc')
+    prim = 'dkp' if bandera('--dkp') else 'o2'
     muts = leer_mutaciones(args[0])
     if estas: muts = [m for m in muts if m['nombre'] in estas.split('|' if '|' in estas else ',')]
     salida = os.path.join(os.environ.get('SALIDA', '/tmp/banco'), 'mutar')
     t0 = time.time()
-    dirobj = base('o2', salida, hilos)
-    ok, err = enlazar('o2', dirobj, os.path.join(salida, 'tests_o2'))
+    dirobj = base(prim, salida, hilos)
+    ok, err = enlazar(prim, dirobj, os.path.join(salida, 'tests_' + prim))
     if not ok: sys.exit('no enlaza la base:\n' + err)
-    est, tb, fallo = correr('o2', os.path.join(salida, 'tests_o2'), solo, 3600)
+    est, tb, fallo = correr(prim, os.path.join(salida, 'tests_' + prim), solo, 3600)
     if est != 'sobrevive': sys.exit('la base no pasa sus pruebas: ' + fallo)
     limite = max(30, 10 * tb)
     print(f'base: {time.time() - t0:.0f} s (las suites elegidas, {tb:.1f} s); {len(muts)} mutaciones con {hilos} hilos')
     res = [None] * len(muts)
     with concurrent.futures.ThreadPoolExecutor(hilos) as ex:
-        futs = {ex.submit(mutar, 'o2', dirobj, salida, k, m, solo, limite): k for k, m in enumerate(muts)}
+        futs = {ex.submit(mutar, prim, dirobj, salida, k, m, solo, limite): k for k, m in enumerate(muts)}
         for f in concurrent.futures.as_completed(futs):
             res[futs[f]] = f.result()
     # Las que sobreviven, con todas las suites (y con ASan o en PowerPC si se pide)
-    repasos = [('o2', None)] if solo else []
+    repasos = [(prim, None)] if solo else []
     if asan: repasos.append(('asan', None))
     if ppc: repasos.append(('ppc', None))
     for var, s in repasos:
         vivas = [k for k, r in enumerate(res) if r[0] == 'sobrevive']
         if not vivas: break
-        d = base(var, salida, hilos) if var != 'o2' else dirobj
+        d = base(var, salida, hilos) if var != prim else dirobj
         ok, err = enlazar(var, d, os.path.join(salida, 'tests_' + var))
         if not ok: sys.exit(f'no enlaza la base ({var}):\n' + err)
         est, tb2, fallo = correr(var, os.path.join(salida, 'tests_' + var), None, 7200)

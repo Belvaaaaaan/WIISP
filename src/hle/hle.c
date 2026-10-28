@@ -572,11 +572,11 @@ static void profile_ge_lines(const GeStats *g, const GeStats *b, u32 vblanks){
 	            (g->draws_prim[2] - b->draws_prim[2]), draws),
 	        (unsigned)(g->curves - b->curves));
 	hle_log("[TIEMPOS] Vertices: %u pedidos, %u calculados (%.0f por vblank): %.0f%% con huesos, %.0f%% con morph, "
-	        "%.0f%% con luces (%.1f de media), %.0f%% en 2D\n",
+	        "%.0f%% con luces (%.1f de media), %.0f%% en 2D, %.0f%% con paired singles\n",   //Arreglo
 	        (unsigned)(g->vertex_reads - b->vertex_reads), (unsigned)verts, verts / per,
 	        pct(g->vertices_skinned - b->vertices_skinned, verts), pct(g->vertices_morph - b->vertices_morph, verts),
 	        pct(lit, verts), lit ? (double)(g->lights - b->lights) / (double)lit : 0.0,
-	        pct(g->vertices_through - b->vertices_through, verts));
+	        pct(g->vertices_through - b->vertices_through, verts), pct(g->vertices_ps - b->vertices_ps, verts));   //Arreglo
 	hle_log("[TIEMPOS] Triangulos: %u recibidos (%.0f por vblank): %.0f%% dibujados, %.0f%% de espaldas o sin area, "
 	        "%.0f%% fuera de pantalla; %u recortados; %u sprites; %u primitivas dibujadas en total; "
 	        "%.0f%% sin descarte de caras\n",

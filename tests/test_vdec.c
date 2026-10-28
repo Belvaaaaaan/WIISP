@@ -256,6 +256,7 @@ static void write_case_data(const Case *c){
 
 static size_t cap_draws;   /* lo capturado antes de los vértices inmediatos */
 static int pantalla_off;   //Arreglo
+static int ps_off;   //Arreglo
 static int envio_off, tiras_off;   //Arreglo
 
 /* opt: los interruptores de los vértices; ens: ge_ensamblar_rapido */
@@ -270,6 +271,7 @@ static void run_case(const Case *c, int opt, int ens, GeStats *st){
 	memcpy(ge.bone, c->bone, sizeof(ge.bone));
 	opt_on[OPT_GE_VDEC_ESP] = (u8)opt;
 	opt_on[OPT_GE_VDEC_PSQ] = (u8)opt;   /* solo cambia algo en el Wii (y en qemu con psq_l emulado) */
+	opt_on[OPT_GE_VDEC_PS] = (u8)(opt && !ps_off);   //Arreglo
 	opt_on[OPT_GE_TRI_RAPIDO] = (u8)opt;
 	opt_on[OPT_GE_ENSAMBLAR] = (u8)ens;
 	opt_on[OPT_GE_PANTALLA_RAPIDA] = (u8)(opt && !pantalla_off);   //Arreglo
@@ -457,10 +459,77 @@ static void test_pantalla_bordes(Case *c){
 	rs = saved;
 }
 
+//Arreglo
+static void test_ps_bordes(Case *c){
+	static const float raros[9] = { 0.0f, -0.0f, 1e-40f, -1e-40f, __builtin_inff(), -__builtin_inff(), __builtin_nanf(""), 1e30f,
+	                                -1e38f };
+	u32 *a0 = NULL, ps_total = 0;
+	unsigned vc = 0, vd = 1;
+	int n, k, bad = 0, prims = 0;
+	char rep[400];
+	ge_vdec_verif_report(rep, sizeof(rep));
+	for(n = 0; n < 400; n++){
+		GeStats s0, s1, s2;
+		size_t n0;
+		u32 i, j;
+		random_case(c);
+		c->imm_n = 0;
+		if(rnd() % 4 == 0) for(i = 0; i < 12; i++) c->bone[1][i] = -c->bone[0][i];
+		for(k = 0; k < 3; k++){
+			c->vt[k] = (rnd() % 3 ? 0x301 : 0x11A) | (rnd() % 4 == 0 ? (1 + rnd() % 2) << 11 : 0) | ((rnd() % 8) << 14);
+			c->count[k] = 1 + rnd() % 200;
+			if(c->prim[k] == GE_PRIM_CONTINUE && k == 0) c->prim[k] = GE_PRIM_TRIANGLE_STRIP;
+		}
+		if(n % 10 == 9){
+			if(rnd() % 2) c->bone[rnd() % 8][rnd() % 12] = raros[rnd() % 9];
+			else c->world[rnd() % 12] = raros[rnd() % 9];
+		}
+		write_case_data(c);
+		for(k = 0; k < 3; k++){
+			u32 ow = 0, ot = 0, oc = 0, on = 0, op = 0, one, sz = vsize(c->vt[k], &ow, &ot, &oc, &on, &op, &one);
+			u32 nw = ((c->vt[k] >> 14) & 7) + 1, nv = c->count[k] > 40 ? c->count[k] : 40;
+			u8 *p = mem_ptr(VBASE + (u32)k * 0x40000u, nv * sz);
+			if((c->vt[k] & 0x7FF) != 0x301 || !p) continue;
+			for(i = 0; i < nv; i++){
+				const int todos = rnd() % 8 == 0;
+				for(j = 0; j < nw; j++) if(todos || rnd() % 3 == 0) p[i * sz + ow + j] = 0;
+			}
+		}
+		run_case(c, 0, 0, &s0);
+		free(a0);
+		n0 = cap_n;
+		a0 = malloc(n0 * sizeof(u32) + 4);
+		if(!a0) break;
+		memcpy(a0, cap, n0 * sizeof(u32));
+		opt_on[OPT_GE_VERIF] = 1;
+		run_case(c, 1, 1, &s1);
+		opt_on[OPT_GE_VERIF] = 0;
+		prims += (int)s1.primitives;
+		ps_total += s1.vertices_ps;
+		if(n0 != cap_n || memcmp(a0, cap, n0 * sizeof(u32)) || s0.vertices != s1.vertices || s0.primitives != s1.primitives){
+			if(bad++ < 5) printf("  caso %d: vt %06X %06X %06X distinto\n", n, (unsigned)c->vt[0], (unsigned)c->vt[1], (unsigned)c->vt[2]);
+		}
+		ps_off = 1;
+		run_case(c, 1, 1, &s2);
+		ps_off = 0;
+		if(n0 != cap_n || memcmp(a0, cap, n0 * sizeof(u32)) || s2.vertices_ps) bad++;
+	}
+	free(a0);
+	ge_vdec_verif_report(rep, sizeof(rep));
+	CHECK(sscanf(rep, "Verificacion (ge_verificar): vertices %u comparados, %u distintos", &vc, &vd) == 2);
+	CHECK(vc > 50000 && vd == 0);
+	CHECK_EQ(bad, 0);
+	CHECK(prims > 10000);
+	if(ge_vdec_ps_disponible()) CHECK(ps_total > 30000);
+	printf("  ge_vdec_ps: %d tandas, %d primitivas, %u vertices con paired singles; %u comparados con ge_verificar, %u distintos\n",
+	       n, prims, (unsigned)ps_total, vc, vd);
+}
+
 void test_vdec(void){
 	const GeHwRenderer *saved_hw = ge_hw;
 	int saved_fast = ge_fast_math, saved_opt = opt_on[OPT_GE_VDEC_ESP], saved_skin = opt_on[OPT_GE_SKIN_RAPIDO];
 	int saved_tri = opt_on[OPT_GE_TRI_RAPIDO], saved_ens = opt_on[OPT_GE_ENSAMBLAR], saved_psq = opt_on[OPT_GE_VDEC_PSQ];
+	const int saved_ps = opt_on[OPT_GE_VDEC_PS];   //Arreglo
 	int n, bad = 0, ens_bad = 0, total_prims = 0;
 	size_t imm_words = 0;
 	u32 golden = 2166136261u;   /* lo que sale con los interruptores apagados */
@@ -528,6 +597,7 @@ void test_vdec(void){
 	test_area_big();
 	test_batch_formats(&c);
 	test_pantalla_bordes(&c);   //Arreglo
+	test_ps_bordes(&c);   //Arreglo
 	/* El modo de verificación del Wii no encuentra nada aquí */
 	{
 		char rep[200];
@@ -558,5 +628,6 @@ void test_vdec(void){
 	opt_on[OPT_GE_TRI_RAPIDO] = (u8)saved_tri;
 	opt_on[OPT_GE_ENSAMBLAR] = (u8)saved_ens;
 	opt_on[OPT_GE_VDEC_PSQ] = (u8)saved_psq;
+	opt_on[OPT_GE_VDEC_PS] = (u8)saved_ps;   //Arreglo
 	ge_vertex_reset();
 }

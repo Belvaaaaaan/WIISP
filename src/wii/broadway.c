@@ -130,11 +130,16 @@ void broadway_pmc_init(void){
 #define PS2(ins, d, a, b) __asm__ volatile(ins " %0,%1,%2" : "=f"(d) : "f"(a), "f"(b))   //Arreglo
 #define FS3(ins, a, c, b) ({ float d_; __asm__ volatile(ins " %0,%1,%2,%3" : "=f"(d_) : "f"(a), "f"(c), "f"(b)); d_; })   //Arreglo
 #define FS2(ins, a, b) ({ float d_; __asm__ volatile(ins " %0,%1,%2" : "=f"(d_) : "f"(a), "f"(b)); d_; })   //Arreglo
+#define PS1(ins, d, b) __asm__ volatile(ins " %0,%1" : "=f"(d) : "f"(b))   //Arreglo
+#define FS1(ins, b) ({ float d_; __asm__ volatile(ins " %0,%1" : "=f"(d_) : "f"(b)); d_; })   //Arreglo
 
 enum { PSP_ADD, PSP_SUB, PSP_MUL, PSP_MADD, PSP_MSUB, PSP_NMADD, PSP_NMSUB, PSP_SUM0, PSP_SUM1, PSP_MULS0, PSP_MULS1,
-       PSP_MADDS0, PSP_MADDS1, PSP_N };   //Arreglo
+       PSP_MADDS0, PSP_MADDS1, PSP_LS, PSP_MERGE00, PSP_MERGE01, PSP_MERGE10, PSP_MERGE11, PSP_MR, PSP_NEG, PSP_ABS, PSP_NABS,
+       PSP_DIV, PSP_SEL, PSP_N };   //Arreglo
 static const char *const psp_nombre[PSP_N] = { "ps_add", "ps_sub", "ps_mul", "ps_madd", "ps_msub", "ps_nmadd", "ps_nmsub",
-                                               "ps_sum0", "ps_sum1", "ps_muls0", "ps_muls1", "ps_madds0", "ps_madds1" };   //Arreglo
+                                               "ps_sum0", "ps_sum1", "ps_muls0", "ps_muls1", "ps_madds0", "ps_madds1",
+                                               "psq_l+psq_st", "ps_merge00", "ps_merge01", "ps_merge10", "ps_merge11", "ps_mr",
+                                               "ps_neg", "ps_abs", "ps_nabs", "ps_div", "ps_sel" };   //Arreglo
 
 static u32 psp_bits(float f){ u32 u; memcpy(&u, &f, 4); return u; }   //Arreglo
 static float psp_f(u32 u){ float f; memcpy(&f, &u, 4); return f; }   //Arreglo
@@ -155,6 +160,17 @@ static void __attribute__((noinline)) psp_pares(const float *a, const float *b, 
 	PS2("ps_muls1", d, fa, fc); PSQ_ST(d, out[PSP_MULS1]);
 	PS3("ps_madds0", d, fa, fc, fb); PSQ_ST(d, out[PSP_MADDS0]);
 	PS3("ps_madds1", d, fa, fc, fb); PSQ_ST(d, out[PSP_MADDS1]);
+	PSQ_ST(fa, out[PSP_LS]);   //Arreglo
+	PS2("ps_merge00", d, fa, fb); PSQ_ST(d, out[PSP_MERGE00]);   //Arreglo
+	PS2("ps_merge01", d, fa, fb); PSQ_ST(d, out[PSP_MERGE01]);   //Arreglo
+	PS2("ps_merge10", d, fa, fb); PSQ_ST(d, out[PSP_MERGE10]);   //Arreglo
+	PS2("ps_merge11", d, fa, fb); PSQ_ST(d, out[PSP_MERGE11]);   //Arreglo
+	PS1("ps_mr", d, fb); PSQ_ST(d, out[PSP_MR]);   //Arreglo
+	PS1("ps_neg", d, fb); PSQ_ST(d, out[PSP_NEG]);   //Arreglo
+	PS1("ps_abs", d, fb); PSQ_ST(d, out[PSP_ABS]);   //Arreglo
+	PS1("ps_nabs", d, fb); PSQ_ST(d, out[PSP_NABS]);   //Arreglo
+	PS2("ps_div", d, fa, fb); PSQ_ST(d, out[PSP_DIV]);   //Arreglo
+	PS3("ps_sel", d, fa, fc, fb); PSQ_ST(d, out[PSP_SEL]);   //Arreglo
 }
 
 static void __attribute__((noinline)) psp_escalares(const float *a, const float *b, const float *c, float out[PSP_N][2]){   //Arreglo
@@ -172,7 +188,18 @@ static void __attribute__((noinline)) psp_escalares(const float *a, const float 
 		out[PSP_MULS1][i] = FS2("fmuls", x, c[1]);
 		out[PSP_MADDS0][i] = FS3("fmadds", x, c[0], y);
 		out[PSP_MADDS1][i] = FS3("fmadds", x, c[1], y);
+		memcpy(&out[PSP_LS][i], &a[i], 4);   //Arreglo
+		memcpy(&out[PSP_MR][i], &b[i], 4);   //Arreglo
+		out[PSP_NEG][i] = FS1("fneg", y);   //Arreglo
+		out[PSP_ABS][i] = FS1("fabs", y);   //Arreglo
+		out[PSP_NABS][i] = FS1("fnabs", y);   //Arreglo
+		out[PSP_DIV][i] = FS2("fdivs", x, y);   //Arreglo
+		out[PSP_SEL][i] = FS3("fsel", x, z, y);   //Arreglo
 	}
+	memcpy(&out[PSP_MERGE00][0], &a[0], 4); memcpy(&out[PSP_MERGE00][1], &b[0], 4);   //Arreglo
+	memcpy(&out[PSP_MERGE01][0], &a[0], 4); memcpy(&out[PSP_MERGE01][1], &b[1], 4);   //Arreglo
+	memcpy(&out[PSP_MERGE10][0], &a[1], 4); memcpy(&out[PSP_MERGE10][1], &b[0], 4);   //Arreglo
+	memcpy(&out[PSP_MERGE11][0], &a[1], 4); memcpy(&out[PSP_MERGE11][1], &b[1], 4);   //Arreglo
 	out[PSP_SUM0][0] = FS2("fadds", a[0], b[1]);
 	out[PSP_SUM0][1] = c[1];
 	out[PSP_SUM1][0] = c[0];
@@ -232,7 +259,7 @@ void broadway_prueba_ps(u32 pares){   //Arreglo
 				}
 	}
 	{
-		char l[512];
+		char l[900];   //Arreglo
 		size_t len = 0;
 		for(i = 0; i < PSP_N && len < sizeof(l); i++)
 			len += (size_t)snprintf(l + len, sizeof(l) - len, "%s%s %u", i ? ", " : "", psp_nombre[i], malos[i]);
