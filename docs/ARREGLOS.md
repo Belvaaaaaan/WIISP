@@ -5,6 +5,43 @@ la 0.5.17.2; antes se marcaban con `//arreglo`). Aquí va, por versión, qué
 se arregló o cambió y una descripción breve. El detalle está en
 `docs/CONTINUAR.md`.
 
+## 0.6.1
+
+El censo completo para diseñar el IR (solo medidas; detalle en CONTINUAR).
+
+- `cpu/predec.c`, `cpu/predec.h`: el censo `prof_jit` ya no pierde las
+  cuentas de los bloques que mueren: al tirarse uno (`kill_block`) o
+  vaciarse la arena (`cpu_predec_flush`), lo que llevaba se suma a lo de
+  la ventana y a una tabla por pc (`censo_bloque`, `censo_tab_sumar`;
+  2^17 entradas, pedida a `cpu_predec_pedir_mem` o a malloc). La curva y
+  los bloques calientes salen de la tabla. `predec_config` vacía antes de
+  liberar las arenas. Nuevo en el informe: lo contado de bloques muertos,
+  las 25 instrucciones más ejecutadas, las cuentas de la FPU, registros
+  distintos por bloque, los 4 bits altos de cada dirección al ejecutarse
+  y los desalineados, y las escrituras en zonas con código por pc
+  (escrituras, sobre instrucciones, bloques tirados, última dirección),
+  los bloques tirados sin tocar ninguna instrucción y los avisos de fuera
+  de la CPU por llamada del HLE. `cpu_predec_caida_nombre` con nombres
+  para casi todas las instrucciones (también en `prof_bloques`).
+- `cpu/predec_bucle.h`: `CENSO_DIR` en las cargas y escrituras de la
+  copia de medir.
+- `hle/hle.c`, `hle/hle.h`: el censo del HLE cuenta el tiempo de cada
+  llamada en su cubeta (sin el GE, el juego de dentro ni las anidadas) y
+  aparte el total; llamadas por 1000 instrucciones. `hle_llamada_actual`
+  (la llamada en curso, para saber quién avisa de escrituras en código).
+- `wii/main.c`: `mem2_alto` (la punta de MEM2, ejecutable o no) para la
+  arena del JIT y para la tabla del censo.
+- `wii/jit_banco.c`: la latencia usa el resultado (antes el compilador
+  quitaba la persecución y salía 0); DBAT6 se da por libre si la mitad
+  alta no es válida y ahora mapea 32 MB, con DBAT7 para los últimos 128
+  KB (la RAM de la PSP entera), con la latencia por el alias, y deja las
+  BAT como estaban; dos formas más de despachar (`b` con presupuesto y
+  `jr` por tabla con etiqueta).
+- `tests/test_interp.c`: el censo con un vaciado a mitad de ventana,
+  bloques tirados por la CPU (sobre y sin tocar instrucciones) y desde
+  fuera, espejos 0x4… y un `lh` desalineado. `mutaciones/0.6.1.txt`.
+- `hle/hle.h`, `dist/apps/wiisp/meta.xml`: versión 0.6.1.
+
 ## 0.6.0
 
 El paso 0 del IR/JIT: medir antes de diseñar (detalle en CONTINUAR).

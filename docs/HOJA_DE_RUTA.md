@@ -405,6 +405,19 @@ microprobas `prueba_jit` del Broadway (despacho, publicar código, `lwbrx`,
 latencias, DSI, DBAT6, alias IBAT). Sigue: el diseño del IR con esos
 números (paso 11).
 
+Resultado de la 0.6.0: `jit_proto` correcto en el Wii pero más lento
+(pelea 50,8 → 41,8 %: entrar y salir de C en cada bloque cuesta más de lo
+que ahorra); despachar es barato (`b` 2 ciclos, `bctr` 5), `lwbrx` igual
+que `lwz`, el código fuera de caché cuesta el triple desde MEM2, la DSI
+247 ciclos y el alias IBAT funciona. El censo perdía las cuentas al
+vaciarse la arena; la latencia y DBAT6 no se midieron.
+
+Hecha (v0.6.1): el censo completo (las cuentas de los bloques que mueren,
+el HLE sin lo de dentro, quién escribe en las zonas con código, las
+direcciones reales, las instrucciones y la FPU), la latencia, DBAT6/7 con
+la RAM de la PSP entera y dos formas más de despachar. Sigue: el diseño
+del IR.
+
 Primera tanda acordada (todas "más barato", verificables en el PC):
 0.1 `prof_espera`, **skinning rápido** (`ge_skin_rapido`), **matrices al
 cambiar** (`ge_mtx_cache`), **color constante** (`ge_color_const`), 2.1

@@ -111,17 +111,31 @@ static void reserva_mem1(void){
 }
 
 //Arreglo
-static void *arena_jit(u32 bytes){
-	u32 nivel, hi, lo, r;
-	u32 *p = NULL;
+static void *mem2_alto(u32 bytes, int ejecutable){
+	u32 nivel, hi, lo;
+	void *p = NULL;
 	_CPU_ISR_Disable(nivel);
 	hi = (u32)SYS_GetArena2Hi() & ~31u;
 	lo = (u32)SYS_GetArena2Lo();
-	if(hi > lo && hi - lo >= bytes + (1u << 20) && broadway_ibat_cubre(hi - bytes, bytes)){
-		p = (u32 *)(hi - bytes);
+	if(hi > lo && hi - lo >= bytes + (1u << 20) && (!ejecutable || broadway_ibat_cubre(hi - bytes, bytes))){
+		p = (void *)(hi - bytes);
 		SYS_SetArena2Hi(p);
 	}
 	_CPU_ISR_Restore(nivel);
+	return p;
+}
+
+//Arreglo
+static void *mem2_censo(u32 bytes){
+	void *const p = mem2_alto(bytes, 0);
+	hle_log_quiet("[CENSO] tabla de %u KB en %08X (punta de MEM2)\n", bytes / 1024, (u32)p);
+	return p;
+}
+
+//Arreglo
+static void *arena_jit(u32 bytes){
+	u32 r, lo = (u32)SYS_GetArena2Lo(), hi = (u32)SYS_GetArena2Hi();
+	u32 *const p = (u32 *)mem2_alto(bytes, 1);
 	if(!p){
 		hle_log_quiet("[JIT] sin arena: MEM2 libre %08X-%08X, ningun IBAT la cubre o no cabe\n", lo, hi);
 		return NULL;
@@ -725,6 +739,7 @@ int main(int argc, char **argv){
 	broadway_report();
 	broadway_pmc_init();
 	jit_pedir_arena = arena_jit;   //Arreglo
+	cpu_predec_pedir_mem = mem2_censo;   //Arreglo
 	/* Las capturas de los guiones necesitan la imagen en la VRAM emulada */
 	app_set_before_capture(gx_ge_sync_vram);
 	app_set_mode_text(mode_text);

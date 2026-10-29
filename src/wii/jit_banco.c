@@ -147,17 +147,46 @@ static void prueba_coste_publicar(u32 *buf, u32 bytes, const char *donde){
 }
 
 //Arreglo
-enum { D_VACIO, D_RECTA, D_B, D_BCTR, D_BCTR_PRONTO, D_BCTR_TARDE, D_MTLR, D_BL, D_LI_BL, D_BCTRL_C, D_BL_C, D_N };
+enum { D_VACIO, D_RECTA, D_B, D_BCTR, D_BCTR_PRONTO, D_BCTR_TARDE, D_MTLR, D_BL, D_LI_BL, D_BCTRL_C, D_BL_C, D_B_PRESUPUESTO,
+       D_TABLA, D_N };
 
 //Arreglo
-static Fn generar_salto(u32 *buf, u32 palabras, int estilo, const u32 *orden, u32 *tabla){
+#define G_PC(s) (0x08800000u + 4u * (s))
+
+//Arreglo
+static u32 *buscar_en_tabla(Emit *e){
+	u32 *h;
+	e_rlwinm(e, 0, 5, 1, 19, 28);
+	e_add(e, 12, 4, 0);
+	e_lwz(e, 11, 0, 12);
+	e_lwz(e, 12, 4, 12);
+	e_cmpw(e, 0, 11, 5);
+	h = e_bc_hueco(e, BO_FALSO, CR_EQ);
+	e_mtctr(e, 12);
+	e_bctr(e);
+	return h;
+}
+
+//Arreglo
+static Fn generar_salto(u32 *buf, u32 palabras, int estilo, const u32 *orden, u32 *tabla, u32 *t2){
 	Emit e;
+	const u32 paso = estilo == D_TABLA ? 16 : 8;
 	u32 *const huecos = buf + 4 * K_SALTOS + 64;
-	u32 i, *hueco = NULL, *salida;
+	u32 i, *hueco = NULL, *salida, *fallos[K_SALTOS + 1];
 	e_ini(&e, buf, palabras);
-	if(palabras < 4 * K_SALTOS + 64 + 8 * K_SALTOS) return NULL;
+	if(palabras < 4 * K_SALTOS + 64 + paso * K_SALTOS) return NULL;
+	memset(fallos, 0, sizeof(fallos));
 	prologo(&e);
 	switch(estilo){
+	case D_B_PRESUPUESTO:
+		e_lis(&e, 9, 0x7FFF);
+		hueco = e_b_hueco(&e);
+		break;
+	case D_TABLA:
+		e_lis(&e, 5, (s32)(G_PC(orden[0]) >> 16));
+		e_ori(&e, 5, 5, G_PC(orden[0]) & 0xFFFF);
+		fallos[K_SALTOS] = buscar_en_tabla(&e);
+		break;
 	case D_RECTA:
 		for(i = 0; i < K_SALTOS; i++) e_addi(&e, 3, 3, 1);
 		break;
@@ -170,7 +199,7 @@ static Fn generar_salto(u32 *buf, u32 palabras, int estilo, const u32 *orden, u3
 		else { e_mtctr(&e, 0); e_bctr(&e); }
 		break;
 	case D_BL:
-		for(i = 0; i < K_SALTOS; i++) e_bl(&e, huecos + 8 * orden[i]);
+		for(i = 0; i < K_SALTOS; i++) e_bl(&e, huecos + paso * orden[i]);
 		break;
 	case D_LI_BL:
 		for(i = 0; i < K_SALTOS; i++){ e_li(&e, 5, 1); e_bl(&e, huecos); }
@@ -192,12 +221,26 @@ static Fn generar_salto(u32 *buf, u32 palabras, int estilo, const u32 *orden, u3
 	}
 	for(i = 0; i < K_SALTOS && estilo != D_LI_BL; i++){
 		Emit b;
-		u32 *const s = huecos + 8 * orden[i];
-		e_ini(&b, s, 8);
+		u32 *const s = huecos + paso * orden[i];
+		e_ini(&b, s, paso);
 		switch(estilo){
+		case D_B_PRESUPUESTO:
+			e_addi(&b, 3, 3, 1);
+			e_w(&b, PPC_D(13, 9, 9, -4));
+			e_w(&b, ppc_bc(BO_CIERTO, CR_LT, (s32)((const u8 *)salida - (const u8 *)b.p)));
+			e_b(&b, i + 1 < K_SALTOS ? huecos + paso * orden[i + 1] : salida);
+			break;
+		case D_TABLA: {
+			const u32 g = i + 1 < K_SALTOS ? G_PC(orden[i + 1]) : G_PC(K_SALTOS);
+			e_addi(&b, 3, 3, 1);
+			e_lis(&b, 5, (s32)(g >> 16));
+			e_ori(&b, 5, 5, g & 0xFFFF);
+			fallos[i] = buscar_en_tabla(&b);
+			break;
+		}
 		case D_B:
 			e_addi(&b, 3, 3, 1);
-			e_b(&b, i + 1 < K_SALTOS ? huecos + 8 * orden[i + 1] : salida);
+			e_b(&b, i + 1 < K_SALTOS ? huecos + paso * orden[i + 1] : salida);
 			break;
 		case D_BCTR:
 			e_addi(&b, 3, 3, 1);
@@ -229,35 +272,42 @@ static Fn generar_salto(u32 *buf, u32 palabras, int estilo, const u32 *orden, u3
 			break;
 		}
 		if(tabla) tabla[i] = (u32)(uintptr_t)s;
+		if(t2){ t2[2 * (orden[i] & 0x3FF)] = G_PC(orden[i]); t2[2 * (orden[i] & 0x3FF) + 1] = (u32)(uintptr_t)s; }
+		if(b.lleno) return NULL;
 	}
 	if(tabla) tabla[K_SALTOS] = (u32)(uintptr_t)salida;
-	e_parchea_b(hueco, huecos + 8 * orden[0]);
-	jit_publicar(buf, (4 * K_SALTOS + 64 + 8 * K_SALTOS) * 4);
+	if(t2){ t2[2 * K_SALTOS] = G_PC(K_SALTOS); t2[2 * K_SALTOS + 1] = (u32)(uintptr_t)salida; }
+	for(i = 0; i <= K_SALTOS; i++) e_parchea_bc(fallos[i], salida);
+	e_parchea_b(hueco, huecos + paso * orden[0]);
+	jit_publicar(buf, (4 * K_SALTOS + 64 + paso * K_SALTOS) * 4);
 	return (Fn)(uintptr_t)buf;
 }
 
 //Arreglo
 static void prueba_saltos(u32 *buf, u32 bytes, const char *donde){
 	static const char *const nom[D_N] = { "vacio", "recta (por addi)", "b", "lwzu+mtctr+bctr (tarjetas)", "mtctr pronto", "mtctr tarde",
-	                                      "mtlr+blr", "bl+blr (llamadas)", "li+bl a la misma", "bctrl a C", "bl a C" };
+	                                      "mtlr+blr", "bl+blr (llamadas)", "li+bl a la misma", "bctrl a C", "bl a C",
+	                                      "b con presupuesto (addic.+blt)", "jr por tabla con etiqueta (lis/ori, rlwinm, lwz x2, cmpw, bne, mtctr, bctr)" };
 	static u32 orden[K_SALTOS], tabla[K_SALTOS + 1];
+	u32 *const t2 = (u32 *)(psp_mem.ram + 0x20000);
 	u32 c[D_N], i, r;
-	char l[900];
+	char l[1400];
 	size_t len;
 	for(i = 0; i < K_SALTOS; i++) orden[i] = i;
 	for(i = K_SALTOS - 1; i > 0; i--){ const u32 j = azar() % (i + 1), t = orden[i]; orden[i] = orden[j]; orden[j] = t; }
-	len = (size_t)snprintf(l, sizeof(l), "[PRUEBA_JIT] saltos en %s (%u bloques de 32 bytes en orden al azar), ciclos por salto:", donde,
+	len = (size_t)snprintf(l, sizeof(l), "[PRUEBA_JIT] saltos en %s (%u bloques de 32 bytes, 64 en el de tabla, en orden al azar), ciclos por salto:", donde,
 	                       (unsigned)K_SALTOS);
 	for(i = 0; i < D_N; i++){
-		const Fn f = generar_salto(buf, bytes / 4, (int)i, orden, tabla);
+		const Fn f = generar_salto(buf, bytes / 4, (int)i, orden, tabla, i == D_TABLA ? t2 : NULL);
 		const u32 bien = i == D_VACIO ? 0 : K_SALTOS;
 		if(!f){ c[i] = 0; len += (size_t)snprintf(l + len, sizeof(l) - len, " %s -", nom[i]); continue; }
-		c[i] = medir(f, 0, (u32)(uintptr_t)tabla - 4, 0, &r);
+		c[i] = medir(f, 0, i == D_TABLA ? (u32)(uintptr_t)t2 : (u32)(uintptr_t)tabla - 4, 0, &r);
 		comprobar(nom[i], r, bien);
 		if(i) len += (size_t)snprintf(l + len, sizeof(l) - len, " %s %.2f", nom[i], (double)((s32)(c[i] - c[0])) / K_SALTOS);
 		else len += (size_t)snprintf(l + len, sizeof(l) - len, " (vacio %u ciclos)", (unsigned)c[0]);
 	}
 	hle_log_quiet("%s\n", l);
+	memset(t2, 0, 8 * 1024);
 }
 
 //Arreglo
@@ -348,6 +398,9 @@ static void prueba_prediccion(u32 *buf, u32 bytes, u8 *datos){
 }
 
 //Arreglo
+static volatile u32 sumidero;
+
+//Arreglo
 static u32 __attribute__((noinline)) perseguir(u32 *p, u32 n){
 	u32 i;
 	for(i = 0; i < n; i += 8){
@@ -372,11 +425,11 @@ static void prueba_latencia(u8 *zona, u32 bytes, const char *donde){
 			*(u32 *)(zona + 32 * x) = (u32)(uintptr_t)(zona + 32 * y);
 			x = y;
 		}
-		perseguir((u32 *)zona, n);
+		sumidero += perseguir((u32 *)zona, n);
 		for(v = 0; v < 3; v++){
 			SIN_IRQ(nivel);
 			t0 = reloj();
-			perseguir((u32 *)zona, n);
+			sumidero += perseguir((u32 *)zona, n);
 			t1 = reloj();
 			CON_IRQ(nivel);
 			if(t1 - t0 < mejor) mejor = t1 - t0;
@@ -533,47 +586,90 @@ static void prueba_dsi(u32 *buf){
 }
 
 //Arreglo
+static u32 cadena(u8 *zona, u32 bytes, u32 base_punteros){
+	const u32 lineas = bytes / 32, n = 16384;
+	u32 i, x = 0, t0, t1, mejor = 0xFFFFFFFFu, v, nivel;
+	for(i = 0; i < lineas; i++){
+		const u32 y = (x * 1664525u + 1013904223u) & (lineas - 1);
+		*(u32 *)(zona + 32 * x) = base_punteros + 32 * y;
+		x = y;
+	}
+	sumidero += perseguir((u32 *)(uintptr_t)base_punteros, n);
+	for(v = 0; v < 3; v++){
+		SIN_IRQ(nivel);
+		t0 = reloj();
+		sumidero += perseguir((u32 *)(uintptr_t)base_punteros, n);
+		t1 = reloj();
+		CON_IRQ(nivel);
+		if(t1 - t0 < mejor) mejor = t1 - t0;
+	}
+	return mejor;
+}
+
+//Arreglo
 static void prueba_dbat(void){
 	const u32 hid4 = MFSPR(1011), sbe = (hid4 & 0x02000000u) != 0;
-	const u32 u6 = sbe ? MFSPR(572) : 0, l6 = sbe ? MFSPR(573) : 0, u4 = sbe ? MFSPR(568) : 0, l4 = sbe ? MFSPR(569) : 0;
+	const u32 u6 = sbe ? MFSPR(572) : 0, l6 = sbe ? MFSPR(573) : 0, u7 = sbe ? MFSPR(574) : 0, l7 = sbe ? MFSPR(575) : 0;
+	const u32 u4 = sbe ? MFSPR(568) : 0, l4 = sbe ? MFSPR(569) : 0;
 	const u32 ram = (u32)(uintptr_t)psp_mem.ram, fis = (l4 & 0xFFFE0000u) + (ram - (u4 & 0xFFFE0000u));
-	const u32 brpn = fis & ~0x00FFFFFFu, desp = fis - brpn;
-	u32 nivel, i, mal = 0, escrito, t_bat = 0, t_ram = 0, s1 = 0, s2 = 0, t0;
+	const u32 brpn = fis & ~0x01FFFFFFu, desp = fis - brpn, tam = psp_mem.ram_size;
+	const int con7 = !(u7 & 3);
+	u32 nivel, i, mal = 0, escrito, c_bat, c_ram, mitad, ultima = 0, s1 = 0, s2 = 0;
 	volatile u32 *const alias = (volatile u32 *)(uintptr_t)(0x08000000u + desp);
 	const u32 *const ram32 = (const u32 *)psp_mem.ram;
-	if(!sbe || (u6 & 3) || l6 || !(u4 & 2) || ram < (u4 & 0xFFFE0000u) || (l4 & 0x28)){
-		hle_log_quiet("[PRUEBA_JIT] DBAT6: no se prueba (HID4 %08X, DBAT6 %08X %08X, DBAT4 %08X %08X)\n", (unsigned)hid4, (unsigned)u6,
-		              (unsigned)l6, (unsigned)u4, (unsigned)l4);
+	if(!sbe || (u6 & 3) || !(u4 & 2) || ram < (u4 & 0xFFFE0000u) || (l4 & 0x28) || desp >= 0x20000u){
+		hle_log_quiet("[PRUEBA_JIT] DBAT6: no se prueba (HID4 %08X, DBAT6 %08X %08X, DBAT7 %08X %08X, DBAT4 %08X %08X)\n", (unsigned)hid4,
+		              (unsigned)u6, (unsigned)l6, (unsigned)u7, (unsigned)l7, (unsigned)u4, (unsigned)l4);
 		return;
 	}
 	for(i = 0; i < 1024; i++) ((u32 *)psp_mem.ram)[i] = i * 2654435761u;
+	((u32 *)psp_mem.ram)[(16u << 20) / 4] = 0x16161616u;
+	((u32 *)psp_mem.ram)[tam / 4 - 1] = 0x1A57u;
 	SIN_IRQ(nivel);
 	__asm__ volatile("sync" ::: "memory");
 	MTSPR(572, 0);
 	MTSPR(573, brpn | (l4 & 0x7Fu));
-	MTSPR(572, 0x08000000u | (0x7Fu << 2) | 2u);
+	MTSPR(572, 0x08000000u | (0xFFu << 2) | 2u);
+	if(con7){
+		MTSPR(574, 0);
+		MTSPR(575, (brpn + (32u << 20)) | (l4 & 0x7Fu));
+		MTSPR(574, 0x0A000000u | 2u);
+	}
 	__asm__ volatile("isync" ::: "memory");
 	for(i = 0; i < 1024; i++) if(alias[i] != ram32[i]) mal++;
+	mitad = alias[(16u << 20) / 4];
+	if(con7) ultima = alias[tam / 4 - 1];
 	alias[5] = 0xCAFEF00Du;
 	escrito = ram32[5];
-	t0 = reloj();
-	for(i = 0; i < 1024; i++) s1 += alias[i];
-	t_bat = reloj() - t0;
-	t0 = reloj();
-	for(i = 0; i < 1024; i++) s2 += ((volatile const u32 *)ram32)[i];
-	t_ram = reloj() - t0;
+	for(i = 0; i < 1024; i++){ s1 += alias[i]; s2 += ((volatile const u32 *)ram32)[i]; }
+	CON_IRQ(nivel);
+	c_bat = cadena(psp_mem.ram + (4u << 20), 1u << 20, 0x08000000u + desp + (4u << 20));
+	c_ram = cadena(psp_mem.ram + (4u << 20), 1u << 20, ram + (4u << 20));
+	SIN_IRQ(nivel);
 	__asm__ volatile("sync" ::: "memory");
 	MTSPR(572, 0);
-	MTSPR(573, 0);
+	MTSPR(573, l6);
+	MTSPR(572, u6);
+	if(con7){
+		MTSPR(574, 0);
+		MTSPR(575, l7);
+		MTSPR(574, u7);
+	}
 	__asm__ volatile("isync" ::: "memory");
 	CON_IRQ(nivel);
-	hle_log_quiet("[PRUEBA_JIT] DBAT6: 0x08000000 (16 MB) -> fisica %08X (la RAM de la PSP empieza %u bytes despues: en el JIT, "
-	              "direccion + %u); %u de 1024 palabras distintas, escribir por el alias se ve en la RAM: %s; 1024 lecturas %u ciclos "
-	              "por el BAT y %u por la RAM (sumas %s); DBAT6 otra vez libre: %s\n", (unsigned)brpn, (unsigned)desp, (unsigned)desp,
-	              (unsigned)mal, escrito == 0xCAFEF00Du ? "si" : "NO", (unsigned)t_bat, (unsigned)t_ram, s1 == s2 ? "iguales" : "DISTINTAS",
-	              MFSPR(572) == 0 && MFSPR(573) == 0 ? "si" : "NO");
-	if(mal || escrito != 0xCAFEF00Du || s1 != s2) malos++;
+	hle_log_quiet("[PRUEBA_JIT] DBAT6 (32 MB en 0x08000000 -> fisica %08X) y %s: la RAM de la PSP empieza %u bytes despues (en el JIT, "
+	              "direccion + %u); %u de 1024 palabras distintas, a 16 MB %s, la ultima palabra %s; escribir por el alias se ve en la "
+	              "RAM: %s (sumas %s); 1 MB persiguiendo punteros: %.1f ciclos por carga por el BAT y %.1f por la RAM; DBAT6 y 7 como "
+	              "estaban: %s\n", (unsigned)brpn, con7 ? "DBAT7 (128 KB en 0x0A000000, el final)" : "sin DBAT7 (ocupado)",
+	              (unsigned)desp, (unsigned)desp, (unsigned)mal, mitad == 0x16161616u ? "bien" : "MAL",
+	              !con7 ? "sin probar" : ultima == 0x1A57u ? "bien" : "MAL", escrito == 0xCAFEF00Du ? "si" : "NO",
+	              s1 == s2 ? "iguales" : "DISTINTAS", (double)c_bat / 16384.0, (double)c_ram / 16384.0,
+	              MFSPR(572) == u6 && MFSPR(573) == l6 && MFSPR(574) == u7 && MFSPR(575) == l7 ? "si" : "NO");
+	if(mal || mitad != 0x16161616u || (con7 && ultima != 0x1A57u) || escrito != 0xCAFEF00Du || s1 != s2) malos++;
 	memset(psp_mem.ram, 0, 4096);
+	memset(psp_mem.ram + (4u << 20), 0, 1u << 20);
+	((u32 *)psp_mem.ram)[(16u << 20) / 4] = 0;
+	((u32 *)psp_mem.ram)[tam / 4 - 1] = 0;
 	hle_log_sync();
 }
 

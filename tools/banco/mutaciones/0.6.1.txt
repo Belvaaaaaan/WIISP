@@ -1,0 +1,84 @@
+=== censo: el vaciado no suma los bloques
+@ src/cpu/predec.c
+<<<
+	if(unlikely(opt_on[OPT_PROF_JIT])) censo_vaciado();   //Arreglo
+>>>
+	(void)0;   //Arreglo
+===
+=== censo: un bloque tirado no se suma
+@ src/cpu/predec.c
+<<<
+	if(unlikely(opt_on[OPT_PROF_JIT]) && FRIO(b)->veces) censo_morir(b);   //Arreglo
+>>>
+	(void)0;   //Arreglo
+===
+=== censo: la tabla suma una vez de mas
+@ src/cpu/predec.c
+<<<
+			e->veces += v;
+>>>
+			e->veces += v + 1;
+===
+=== censo: la tabla por pc no junta
+@ src/cpu/predec.c
+<<<
+		if(e->pc == pc){
+>>>
+		if(e->pc == pc + 4){
+===
+=== censo: direccion real por los bits bajos
+@ src/cpu/predec_bucle.h
+<<<
+#define CENSO_DIR(a, size) do { if(pj){ cz.dir[(a) >> 28]++; cz.desal += ((a) & ((size) - 1)) != 0; } } while(0)   //Arreglo
+>>>
+#define CENSO_DIR(a, size) do { if(pj){ cz.dir[(a) & 15]++; cz.desal += ((a) & ((size) - 1)) != 0; } } while(0)   //Arreglo
+===
+=== censo: desalineados mal medidos
+@ src/cpu/predec_bucle.h
+<<<
+#define CENSO_DIR(a, size) do { if(pj){ cz.dir[(a) >> 28]++; cz.desal += ((a) & ((size) - 1)) != 0; } } while(0)   //Arreglo
+>>>
+#define CENSO_DIR(a, size) do { if(pj){ cz.dir[(a) >> 28]++; cz.desal += ((a) & (size)) != 0; } } while(0)   //Arreglo
+===
+=== censo: sin tocar al reves
+@ src/cpu/predec.c
+<<<
+		if(!cz.esc_sobre) cz.tirados_sin_tocar += n;
+>>>
+		if(cz.esc_sobre) cz.tirados_sin_tocar += n;
+===
+=== censo: lo de la CPU cuenta como de fuera
+@ src/cpu/predec.c
+<<<
+	cz.esc_activa = i + 1;
+>>>
+	cz.esc_activa = 0;
+===
+=== censo: el escritor equivocado
+@ src/cpu/predec.c
+<<<
+		cz.escr[i].pc = ipc;
+>>>
+		cz.escr[i].pc = ipc + 4;
+===
+=== censo: lo de fuera no se cuenta
+@ src/cpu/predec.c
+<<<
+	cz.tirados_fuera += n;
+>>>
+	cz.tirados_fuera += 0;
+===
+=== censo: lo muerto no se apunta
+@ src/cpu/predec.c
+<<<
+	cz.ejec_muertos += (u64)f->veces * b->n;
+>>>
+	cz.ejec_muertos += (u64)f->veces;
+===
+=== censo: reiniciar no limpia la tabla
+@ src/cpu/predec.c
+<<<
+	if(cz_tab && cz_tab_usadas) memset(cz_tab, 0, CZ_TAB * sizeof(CzPc));
+>>>
+	(void)0;
+===

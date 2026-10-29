@@ -107,8 +107,11 @@ typedef struct {
 	u64 entradas, instr_entradas, bloques, distintas, ejec, prefijo, mem, base_cte, repe;
 	u64 cat[CENSO_N], reg[34], jr_otros, jr_igual, esc_cpu, esc_instr;
 	u32 top_pc, top_veces;
+	u64 ejec_muertos, dir[16], desal, tirados_cpu, tirados_sin_tocar, tirados_fuera, tab_fuera;
+	u32 escritor_pc;
 } CensoJit;
 void cpu_predec_censo(CensoJit *out);   //Arreglo
+extern void *(*cpu_predec_pedir_mem)(u32 bytes);   //Arreglo
 void cpu_predec_censo_reiniciar(void);   //Arreglo
 
 #endif

@@ -29,12 +29,14 @@ PREDEC_ATRIB static u32 PREDEC_BUCLE(u32 max_cycles){   //arreglo
 #define CONTAR(x) ((void)(x))   //Arreglo
 #define RAS_PUSH() do { if(ra) ras_push(cblk->end); } while(0)   //Arreglo
 #define CENSO_ESC(o, size) do { if(pj) censo_escritura((o), (size), IPC()); } while(0)   //Arreglo
+#define CENSO_DIR(a, size) do { if(pj){ cz.dir[(a) >> 28]++; cz.desal += ((a) & ((size) - 1)) != 0; } } while(0)   //Arreglo
 #else   //Arreglo
 #define FASE(f) ((void)0)   //Arreglo
 #define CAIDA(m) ((void)0)   //Arreglo
 #define CONTAR(x) ((void)0)   //Arreglo
 #define RAS_PUSH() ((void)0)   //Arreglo
 #define CENSO_ESC(o, size) ((void)0)   //Arreglo
+#define CENSO_DIR(a, size) ((void)0)   //Arreglo
 #endif   //Arreglo
 	u32 pc, npc, left, seg, bt = 0;
 	const Card *c = NULL;
@@ -101,6 +103,7 @@ PREDEC_ATRIB static u32 PREDEC_BUCLE(u32 max_cycles){   //arreglo
 #define RAM_OFF(a) (((a) & PSP_ADDR_MASK) - PSP_RAM_BASE)
 #define LDX(dst, a, size, lim, rd, tail) do { \
 		u32 a_ = (a), o_ = RAM_OFF(a_); \
+		CENSO_DIR(a_, size); \
 		if(likely(o_ < (lim))){ dst = rd; tail; } \
 		else { \
 			SYNC_AT(); dst = lenta_load(a_, size, RAW()); tail; \
@@ -114,6 +117,7 @@ PREDEC_ATRIB static u32 PREDEC_BUCLE(u32 max_cycles){   //arreglo
    al acabar la instrucción */
 #define STX(a, v, size, lim, wr, tail) do { \
 		u32 a_ = (a), o_ = RAM_OFF(a_); \
+		CENSO_DIR(a_, size); \
 		if(likely(o_ < (lim))){ \
 			wr; \
 			if(unlikely(cpu_code_map[o_ >> PREDEC_ZONA_BITS])){ \
@@ -606,4 +610,5 @@ ret:
 #undef CONTAR   //Arreglo
 #undef RAS_PUSH   //Arreglo
 #undef CENSO_ESC   //Arreglo
+#undef CENSO_DIR   //Arreglo
 }

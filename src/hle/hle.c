@@ -181,8 +181,9 @@ void hle_dump_state(const char *why){
 
 //Arreglo
 #define CENSO_HLE 2048
-static u64 *censo_hle_t;
+static u64 *censo_hle_t, *censo_hle_x, censo_hle_anidado;
 static u32 *censo_hle_n;
+const char *hle_llamada_actual;
 
 void hle_syscall(u32 code){
 	if(code == HLE_SYSCALL_THREAD_RETURN){
@@ -220,15 +221,22 @@ void hle_syscall(u32 code){
 		{
 			u32 enq = kernel_enqueue_count();
 			int old = prof_switch(PROF_HLE);
-			const u64 t0 = opt_on[OPT_PROF_JIT] && prof_clock && censo_hle_n ? prof_clock() : 0;   //Arreglo
+			const int cz = opt_on[OPT_PROF_JIT] && prof_clock && censo_hle_n;   //Arreglo
+			const u64 t0 = cz ? prof_clock() : 0, h0 = cz ? prof_acc[PROF_HLE] : 0, a0 = censo_hle_anidado;   //Arreglo
+			const char *const llamada0 = hle_llamada_actual;   //Arreglo
 			hle_stat_syscalls++;
+			hle_llamada_actual = resolved[code].name;   //Arreglo
 			resolved[code].func();
-			if(t0){   //Arreglo
-				const u32 k = code < CENSO_HLE ? code : CENSO_HLE - 1;   //Arreglo
-				censo_hle_t[k] += prof_clock() - t0;   //Arreglo
-				censo_hle_n[k]++;   //Arreglo
-			}   //Arreglo
+			hle_llamada_actual = llamada0;   //Arreglo
 			prof_switch(old);
+			if(cz){   //Arreglo
+				const u32 k = code < CENSO_HLE ? code : CENSO_HLE - 1;   //Arreglo
+				const u64 x = prof_acc[PROF_HLE] - h0 - (censo_hle_anidado - a0);   //Arreglo
+				censo_hle_t[k] += prof_clock() - t0;   //Arreglo
+				censo_hle_x[k] += x;   //Arreglo
+				censo_hle_n[k]++;   //Arreglo
+				censo_hle_anidado += x;   //Arreglo
+			}   //Arreglo
 			r->guest = kernel_enqueue_count() != enq;
 		}
 		r->ret = cpu.r[R_V0];
@@ -531,8 +539,13 @@ static void profile_snapshot(void){
 	if(opt_on[OPT_PROF_JIT]){   //Arreglo
 		cpu_predec_censo_reiniciar();   //Arreglo
 		if(!censo_hle_t) censo_hle_t = calloc(CENSO_HLE, sizeof(*censo_hle_t));   //Arreglo
-		if(censo_hle_t && !censo_hle_n) censo_hle_n = calloc(CENSO_HLE, sizeof(*censo_hle_n));   //Arreglo
-		if(censo_hle_n){ memset(censo_hle_t, 0, CENSO_HLE * sizeof(*censo_hle_t)); memset(censo_hle_n, 0, CENSO_HLE * sizeof(*censo_hle_n)); }   //Arreglo
+		if(censo_hle_t && !censo_hle_x) censo_hle_x = calloc(CENSO_HLE, sizeof(*censo_hle_x));   //Arreglo
+		if(censo_hle_x && !censo_hle_n) censo_hle_n = calloc(CENSO_HLE, sizeof(*censo_hle_n));   //Arreglo
+		if(censo_hle_n){   //Arreglo
+			memset(censo_hle_t, 0, CENSO_HLE * sizeof(*censo_hle_t));   //Arreglo
+			memset(censo_hle_x, 0, CENSO_HLE * sizeof(*censo_hle_x));   //Arreglo
+			memset(censo_hle_n, 0, CENSO_HLE * sizeof(*censo_hle_n));   //Arreglo
+		}   //Arreglo
 	}   //Arreglo
 	memcpy(prof_base.samples, (const void *)prof_samples, sizeof(prof_base.samples));
 	memcpy(prof_base.ge_samples, (const void *)prof_ge_samples, sizeof(prof_base.ge_samples));
@@ -866,27 +879,32 @@ static void jit_linea(const PredecStats *p, const PredecStats *b, u64 instr){
 }
 
 //Arreglo
-static void censo_hle_linea(u64 total){
-	char l[1400];
+static void censo_hle_linea(u64 total, u64 instr){
+	char l[1600];
 	size_t len;
-	u64 t = 0, n = 0;
+	u64 t = 0, x = 0, n = 0;
 	u32 i, k;
 	if(!censo_hle_n) return;
-	for(i = 0; i < CENSO_HLE; i++){ t += censo_hle_t[i]; n += censo_hle_n[i]; }
-	len = (size_t)snprintf(l, sizeof(l), "[TIEMPOS] Censo JIT, HLE: %llu llamadas, %.1f%% del tiempo real (con lo que el juego "
-	                       "corre dentro); las que mas tardan:", (unsigned long long)n, total ? 100.0 * (double)t / (double)total : 0.0);
-	for(k = 0; k < 12 && len + 120 < sizeof(l); k++){
+	for(i = 0; i < CENSO_HLE; i++){ t += censo_hle_t[i]; x += censo_hle_x[i]; n += censo_hle_n[i]; }
+	len = (size_t)snprintf(l, sizeof(l), "[TIEMPOS] Censo JIT, HLE: %llu llamadas (%.2f por 1000 instrucciones), %.1f%% del tiempo real "
+	                       "en el propio HLE (%.1f%% contando lo que corre dentro: el GE, el juego en los callbacks); las que mas "
+	                       "tardan (llamadas, us cada una en el HLE, %% con lo de dentro):", (unsigned long long)n,
+	                       instr ? 1000.0 * (double)n / (double)instr : 0.0, total ? 100.0 * (double)x / (double)total : 0.0,
+	                       total ? 100.0 * (double)t / (double)total : 0.0);
+	for(k = 0; k < 14 && len + 120 < sizeof(l); k++){
 		u32 m = CENSO_HLE;
-		for(i = 0; i < CENSO_HLE; i++) if(censo_hle_t[i] && (m == CENSO_HLE || censo_hle_t[i] > censo_hle_t[m])) m = i;
+		for(i = 0; i < CENSO_HLE; i++) if(censo_hle_n[i] && (m == CENSO_HLE || censo_hle_x[i] > censo_hle_x[m])) m = i;
 		if(m == CENSO_HLE) break;
-		len += (size_t)snprintf(l + len, sizeof(l) - len, " %s %.2f%% (%u, %.1f us cada una)",
+		len += (size_t)snprintf(l + len, sizeof(l) - len, " %s %.2f%% (%u, %.1f us, %.2f%%)",
 		                        m < num_resolved && resolved[m].name ? resolved[m].name : "?",
-		                        total ? 100.0 * (double)censo_hle_t[m] / (double)total : 0.0, (unsigned)censo_hle_n[m],
-		                        1e6 * (double)censo_hle_t[m] / (double)prof_hz / (double)censo_hle_n[m]);
-		censo_hle_t[m] = 0;
+		                        total ? 100.0 * (double)censo_hle_x[m] / (double)total : 0.0, (unsigned)censo_hle_n[m],
+		                        1e6 * (double)censo_hle_x[m] / (double)prof_hz / (double)censo_hle_n[m],
+		                        total ? 100.0 * (double)censo_hle_t[m] / (double)total : 0.0);
+		censo_hle_n[m] = 0;
 	}
 	hle_log("%s\n", l);
 	memset(censo_hle_t, 0, CENSO_HLE * sizeof(*censo_hle_t));
+	memset(censo_hle_x, 0, CENSO_HLE * sizeof(*censo_hle_x));
 	memset(censo_hle_n, 0, CENSO_HLE * sizeof(*censo_hle_n));
 }
 
@@ -1043,7 +1061,7 @@ static void profile_report(const char *why, int forzar){   //Arreglo
 		}
 		if(opt_on[OPT_PROF_BLOQUES]) profile_bloques_lines(&p, b, instr);   //Arreglo
 		if(opt_on[OPT_JIT_PROTO]) jit_linea(&p, b, instr);   //Arreglo
-		if(opt_on[OPT_PROF_JIT]){ cpu_predec_censo(NULL); censo_hle_linea(total); }   //Arreglo
+		if(opt_on[OPT_PROF_JIT]){ cpu_predec_censo(NULL); censo_hle_linea(total, instr); }   //Arreglo
 	}
 	if(opt_on[OPT_PROF_ES]){
 		IoCenso c;

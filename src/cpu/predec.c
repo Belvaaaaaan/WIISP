@@ -140,7 +140,13 @@ static void unhash(Block *b){
 	if(*pp) *pp = FRIO(b)->hnext;   //arreglo
 }
 
+//Arreglo
+static void censo_morir(Block *b);
+static void censo_vaciado(void);
+static void censo_tirados(u64 n);
+
 static void kill_block(Block *b){
+	if(unlikely(opt_on[OPT_PROF_JIT]) && FRIO(b)->veces) censo_morir(b);   //Arreglo
 	b->alive = 0;
 	unhash(b);
 	st.bloques_tirados++;
@@ -162,11 +168,14 @@ static void kill_zone(u32 z){
 
 void cpu_predec_store(u32 off, u32 len){
 	u32 z = off >> PREDEC_ZONA_BITS, last = (off + (len ? len - 1 : 0)) >> PREDEC_ZONA_BITS;
+	const u64 t0 = st.bloques_tirados;   //Arreglo
 	st.escrituras_en_codigo++;
 	for(; z <= last && z < zonas; z++) if(cpu_code_map[z]) kill_zone(z);
+	if(unlikely(opt_on[OPT_PROF_JIT])) censo_tirados(st.bloques_tirados - t0);   //Arreglo
 }
 
 void cpu_predec_flush(void){
+	if(unlikely(opt_on[OPT_PROF_JIT])) censo_vaciado();   //Arreglo
 	if(arena_used) st.vaciados++;
 	memset(tabla, 0, sizeof(tabla));
 	if(zona_head) memset(zona_head, 0, zonas * sizeof(*zona_head));
@@ -246,6 +255,7 @@ static int predec_config(void){
 	               (opt_on[OPT_CPU_SYSCALL_SLOT] ? 64 : 0) | (opt_on[OPT_JIT_PROTO] ? 128 : 0) |
 	               (opt_on[OPT_JIT_VERIFICAR] ? 256 : 0));   //Arreglo
 	if(likely(want == conf)) return arena != NULL;
+	cpu_predec_flush();   //Arreglo
 	conf = want;
 	vt_on = (want >> 2) & 1;   //Arreglo
 	vt_verif = (want >> 3) & 1;   //Arreglo
@@ -648,7 +658,10 @@ static int verif_ok(const Block *b){
 //Arreglo
 static struct {
 	u64 entradas, instr_ent, jr_otros, jr_igual, esc_cpu, esc_instr, lentas[3];
-	u32 esc_pc[8], esc_pc_n[8];
+	u64 dir[16], desal, tirados_cpu, tirados_sin_tocar, tirados_fuera, avisos_fuera, ejec_muertos;
+	struct { u32 pc, ultima, esc, sobre, tirados; } escr[8];
+	struct { const char *nom; u32 avisos, tirados; } otros[8];
+	u32 esc_activa, esc_sobre;
 	u64 ras_jr0, ras_ok0, tirados0, esc0;
 } cz;
 
@@ -671,14 +684,47 @@ static void censo_escritura(u32 o, u32 size, u32 ipc){
 		if(b->alive && o < be && o + size > bo) sobre = 1;
 		b = f->znext[f->z0 == (o >> PREDEC_ZONA_BITS) ? 0 : 1];
 	}
-	if(!sobre) return;
-	cz.esc_instr++;
+	cz.esc_instr += (u64)sobre;
 	for(i = 0; i < 8; i++){
-		if(cz.esc_pc_n[i] && cz.esc_pc[i] == ipc){ cz.esc_pc_n[i]++; return; }
-		if(cz.esc_pc_n[i] < cz.esc_pc_n[k]) k = i;
+		if(cz.escr[i].esc && cz.escr[i].pc == ipc) break;
+		if(cz.escr[i].esc < cz.escr[k].esc) k = i;
 	}
-	cz.esc_pc[k] = ipc;
-	cz.esc_pc_n[k] = 1;
+	if(i == 8){
+		i = k;
+		cz.escr[i].pc = ipc;
+		cz.escr[i].esc = cz.escr[i].sobre = cz.escr[i].tirados = 0;
+	}
+	cz.escr[i].esc++;
+	cz.escr[i].sobre += (u32)sobre;
+	cz.escr[i].ultima = o + PSP_RAM_BASE;
+	cz.esc_activa = i + 1;
+	cz.esc_sobre = (u32)sobre;
+}
+
+//Arreglo
+static void censo_tirados(u64 n){
+	u32 i, k = 0;
+	const char *const nom = hle_llamada_actual;
+	if(cz.esc_activa){
+		cz.escr[cz.esc_activa - 1].tirados += (u32)n;
+		cz.tirados_cpu += n;
+		if(!cz.esc_sobre) cz.tirados_sin_tocar += n;
+		cz.esc_activa = 0;
+		return;
+	}
+	cz.avisos_fuera++;
+	cz.tirados_fuera += n;
+	for(i = 0; i < 8; i++){
+		if(cz.otros[i].avisos && cz.otros[i].nom == nom) break;
+		if(cz.otros[i].avisos < cz.otros[k].avisos) k = i;
+	}
+	if(i == 8){
+		i = k;
+		cz.otros[i].nom = nom;
+		cz.otros[i].avisos = cz.otros[i].tirados = 0;
+	}
+	cz.otros[i].avisos++;
+	cz.otros[i].tirados += (u32)n;
 }
 
 static u32 lenta_load(u32 addr, u32 size, u32 instr){
@@ -889,13 +935,25 @@ void cpu_predec_caida_nombre(u32 k, char *buf, u32 size){
 		[0x3E] = "sv.q", [0x3F] = "vflush"
 	};
 	static const char *const spec[64] = {
-		[0x08] = "jr", [0x09] = "jalr", [0x0C] = "syscall", [0x0D] = "break", [0x0F] = "sync"
+		[0x00] = "sll", [0x02] = "srl", [0x03] = "sra", [0x04] = "sllv", [0x06] = "srlv", [0x07] = "srav",   //Arreglo
+		[0x08] = "jr", [0x09] = "jalr", [0x0A] = "movz", [0x0B] = "movn", [0x0C] = "syscall", [0x0D] = "break", [0x0F] = "sync",
+		[0x10] = "mfhi", [0x11] = "mthi", [0x12] = "mflo", [0x13] = "mtlo", [0x16] = "clz", [0x17] = "clo",   //Arreglo
+		[0x18] = "mult", [0x19] = "multu", [0x1A] = "div", [0x1B] = "divu", [0x1C] = "madd", [0x1D] = "maddu",   //Arreglo
+		[0x20] = "add", [0x21] = "addu", [0x22] = "sub", [0x23] = "subu", [0x24] = "and", [0x25] = "or", [0x26] = "xor",   //Arreglo
+		[0x27] = "nor", [0x2A] = "slt", [0x2B] = "sltu", [0x2C] = "max", [0x2D] = "min", [0x2E] = "msub", [0x2F] = "msubu"   //Arreglo
 	};
-	static const char *const regimm[4] = { "bltz", "bgez", "bltzl", "bgezl" };
+	static const char *const regimm[20] = { "bltz", "bgez", "bltzl", "bgezl", [0x10] = "bltzal", [0x11] = "bgezal",   //Arreglo
+	                                        [0x12] = "bltzall", [0x13] = "bgezall" };   //Arreglo
+	static const char *const cop1[32] = { [0x00] = "mfc1", [0x02] = "cfc1", [0x04] = "mtc1", [0x06] = "ctc1", [0x08] = "bc1",   //Arreglo
+	                                      [0x10] = "cop1.s", [0x14] = "cvt.s.w" };   //Arreglo
 	const char *nm = NULL;
 	if(k < 64) nm = prim[k];
 	else if(k < 128) nm = spec[k - 64];
-	else if(k >= 224 && k - 224 < 4) nm = regimm[k - 224];
+	else if(k == 128) nm = "ext";   //Arreglo
+	else if(k == 132) nm = "ins";   //Arreglo
+	else if(k == 160) nm = "seb/seh/wsbh";   //Arreglo
+	else if(k >= 192 && k < 224) nm = cop1[k - 192];   //Arreglo
+	else if(k >= 224 && k - 224 < 20) nm = regimm[k - 224];   //Arreglo
 	if(nm) snprintf(buf, size, "%s", nm);
 	else if(k < 64) snprintf(buf, size, "op%02X", (unsigned)k);
 	else if(k < 128) snprintf(buf, size, "special.%02X", (unsigned)(k - 64));
@@ -944,6 +1002,141 @@ static u32 censo_cubo(u32 v){
 }
 
 //Arreglo
+typedef struct { u32 pc, veces, ejec; u16 n, pad; } CzPc;
+#define CZ_TAB_BITS 17
+#define CZ_TAB (1u << CZ_TAB_BITS)
+static CzPc *cz_tab;
+static u32 cz_tab_usadas, cz_tab_pedida;
+static u64 cz_tab_fuera;
+void *(*cpu_predec_pedir_mem)(u32 bytes);
+
+//Arreglo
+static struct {
+	u64 ejec, prefijo, mem, repe, cat[CENSO_N], reg[34], tam[5], base[5];
+	u64 corte[PREDEC_CAIDA_OPS], todas[PREDEC_CAIDA_OPS], fpu[64], regs_bloque[6];
+} ca;
+
+//Arreglo
+static void censo_tab_sumar(u32 pc, u32 n, u32 v){
+	u32 h, i;
+	if(!cz_tab && !cz_tab_pedida){
+		cz_tab_pedida = 1;
+		cz_tab = (CzPc *)(cpu_predec_pedir_mem ? cpu_predec_pedir_mem(CZ_TAB * (u32)sizeof(CzPc)) : malloc(CZ_TAB * sizeof(CzPc)));
+		if(cz_tab) memset(cz_tab, 0, CZ_TAB * sizeof(CzPc));
+	}
+	if(!cz_tab){ cz_tab_fuera += (u64)v * n; return; }
+	h = ((pc >> 2) * 2654435761u) >> (32 - CZ_TAB_BITS);
+	for(i = 0; i < CZ_TAB; i++){
+		CzPc *const e = &cz_tab[(h + i) & (CZ_TAB - 1)];
+		if(e->pc == pc){
+			e->veces += v;
+			e->ejec += v * n;
+			if(n > e->n) e->n = (u16)n;
+			return;
+		}
+		if(!e->pc){
+			if(cz_tab_usadas >= CZ_TAB / 4 * 3) break;
+			e->pc = pc;
+			e->veces = v;
+			e->ejec = v * n;
+			e->n = (u16)n;
+			cz_tab_usadas++;
+			return;
+		}
+	}
+	cz_tab_fuera += (u64)v * n;
+}
+
+//Arreglo
+static void censo_bloque(const Block *b, u32 v){
+	const Frio *f = FRIO(b);
+	const u32 cubre = jit_prefijo(f->raw, b->n, b->branch);
+	u32 k, cte = 0, vista = 0, nr;
+	u64 usados = 0;
+	ca.ejec += (u64)v * b->n;
+	ca.prefijo += (u64)v * cubre;
+	if(cubre < b->n) ca.corte[caida_clave(f->raw[cubre])] += v;
+	for(k = 0; k < b->n; k++){
+		const u32 w = f->raw[k], rs = RS_(w), rt = RT_(w);
+		const int t = censo_tam(w);
+		u64 le, es, m;
+		Card cd;
+		u32 tg, r;
+		decode(w, b->pc + 4 * k, &cd, &tg);
+		ca.cat[censo_cat(ult_op)] += v;
+		ca.todas[caida_clave(w)] += v;
+		if((w >> 26) == 0x11 && rs == 0x10) ca.fpu[FN_(w)] += v;
+		jit_uso_regs(w, &le, &es);
+		usados |= le | es;
+		for(m = le | es; m; m &= m - 1){
+			r = (u32)__builtin_ctzll(m);
+			ca.reg[r] += v * (u64)(((le >> r) & 1) + ((es >> r) & 1));
+		}
+		if(t >= 0){
+			ca.tam[t] += v;
+			ca.base[rs == 29 ? 0 : rs == 28 ? 1 : rs == 0 ? 2 : (cte >> rs) & 1 ? 3 : 4] += v;
+			if((vista >> rs) & 1) ca.repe += v;
+			vista |= 1u << rs;
+			ca.mem += v;
+		}
+		if((w >> 26) == 0x0F) cte |= 1u << rt;
+		else if(((w >> 26) == 0x09 || (w >> 26) == 0x0D) && ((cte >> rs) & 1) && rt) cte |= 1u << rt;
+		else cte &= ~(u32)es;
+		vista &= ~(u32)es;
+	}
+	nr = (u32)__builtin_popcountll(usados);
+	ca.regs_bloque[nr <= 4 ? 0 : nr <= 8 ? 1 : nr <= 12 ? 2 : nr <= 16 ? 3 : nr <= 20 ? 4 : 5] += (u64)v * b->n;
+	censo_tab_sumar(b->pc, b->n, v);
+}
+
+//Arreglo
+static void censo_morir(Block *b){
+	Frio *const f = FRIO(b);
+	censo_bloque(b, f->veces);
+	cz.ejec_muertos += (u64)f->veces * b->n;
+	f->veces = 0;
+}
+
+//Arreglo
+static void censo_vaciado(void){
+	u32 i;
+	Block *b;
+	for(i = 0; i < (1u << TABLA_BITS); i++)
+		for(b = tabla[i]; b; b = FRIO(b)->hnext)
+			if(FRIO(b)->veces) censo_morir(b);
+}
+
+//Arreglo
+static void censo_top(const char *titulo, const u64 *v, u32 n, u64 total, u32 cuantos, char *l, size_t tam, size_t *len,
+                      void (*nombre)(u32, char *, u32)){
+	static u64 copia[PREDEC_CAIDA_OPS];
+	char nm[24];
+	u32 i, k;
+	memcpy(copia, v, n * sizeof(*v));
+	*len += (size_t)snprintf(l + *len, tam - *len, "%s", titulo);
+	for(k = 0; k < cuantos && *len + 40 < tam; k++){
+		u32 m = n;
+		for(i = 0; i < n; i++) if(copia[i] && (m == n || copia[i] > copia[m])) m = i;
+		if(m == n) break;
+		nombre(m, nm, sizeof(nm));
+		*len += (size_t)snprintf(l + *len, tam - *len, " %s %.1f%%", nm, total ? 100.0 * (double)copia[m] / (double)total : 0.0);
+		copia[m] = 0;
+	}
+}
+
+//Arreglo
+static void censo_nombre_fpu(u32 k, char *buf, u32 size){
+	static const char *const n[64] = {
+		[0x00] = "add.s", [0x01] = "sub.s", [0x02] = "mul.s", [0x03] = "div.s", [0x04] = "sqrt.s", [0x05] = "abs.s",
+		[0x06] = "mov.s", [0x07] = "neg.s", [0x0C] = "round.w.s", [0x0D] = "trunc.w.s", [0x0E] = "ceil.w.s",
+		[0x0F] = "floor.w.s", [0x24] = "cvt.w.s"
+	};
+	if(n[k]) snprintf(buf, size, "%s", n[k]);
+	else if(k >= 0x30) snprintf(buf, size, "c.%u.s", (unsigned)(k - 0x30));
+	else snprintf(buf, size, "cop1.s.%02X", (unsigned)k);
+}
+
+//Arreglo
 void cpu_predec_censo(CensoJit *out){
 	static const char *const cn[CENSO_N] = { "alu", "alu-imm", "lui", "mult/hilo", "div", "carga", "guarda", "lwl/lwr/swl/swr",
 	                                      "salto cond", "j/jal", "jr/jalr", "FPU", "VFPU", "syscall", "nop", "otras" };
@@ -952,173 +1145,191 @@ void cpu_predec_censo(CensoJit *out){
 	                                    "gp", "sp", "fp", "ra", "hi", "lo" };
 	static const char *const tn[5] = { "1", "2", "4", "16", "no alineadas" };
 	static const char *const bn[5] = { "sp", "gp", "zero", "constante (lui)", "otra" };
+	static const char *const rb[6] = { "hasta 4", "5-8", "9-12", "13-16", "17-20", "mas de 20" };
 	static struct { u64 instr, bloques, ejec; } cubo[256];
-	static u64 corte[PREDEC_CAIDA_OPS];
 	CensoJit c;
-	u64 cat[CENSO_N], reg[34], tam[5], base[5], repe = 0, mem = 0, tot_pal = 0, tot_cubre = 0, acc;
-	u32 i, k, j, r, orden[34], no;
-	const Block *top[10];
-	u64 topp[10];
-	u32 ntop = 0;
-	char l[1600], nm[24];
+	u64 tot_pal = 0, tot_cubre = 0, acc, ejec_tab = 0;
+	u32 i, k, j, r, orden[34];
+	u32 top[10], ntop = 0;
+	char l[1600];
 	size_t len;
 	Block *b;
 	memset(&c, 0, sizeof(c));
 	memset(cubo, 0, sizeof(cubo));
-	memset(corte, 0, sizeof(corte));
-	memset(cat, 0, sizeof(cat));
-	memset(reg, 0, sizeof(reg));
-	memset(tam, 0, sizeof(tam));
-	memset(base, 0, sizeof(base));
 	c.entradas = cz.entradas;
 	c.instr_entradas = cz.instr_ent;
+	c.ejec_muertos = cz.ejec_muertos;
 	for(i = 0; i < (1u << TABLA_BITS); i++)
 		for(b = tabla[i]; b; b = FRIO(b)->hnext){
-			Frio *f = FRIO(b);
-			const u64 v = f->veces;
-			u32 cte = 0, vista = 0, cubre, pal;
-			if(!v || !b->n) continue;
-			pal = jit_tam_estimado(b->pc, f->raw, b->n, b->branch, &cubre);
-			{
-				const u32 q = censo_cubo(f->veces);
-				cubo[q].instr += b->n;
-				cubo[q].bloques++;
-				cubo[q].ejec += v * b->n;
-			}
-			tot_pal += pal;
+			Frio *const f = FRIO(b);
+			u32 cubre;
+			if(!f->veces || !b->n) continue;
+			tot_pal += jit_tam_estimado(b->pc, f->raw, b->n, b->branch, &cubre);
 			tot_cubre += cubre;
-			c.ejec += v * b->n;
-			c.distintas += b->n;
-			c.bloques++;
-			c.prefijo += v * cubre;
-			if(cubre < b->n) corte[caida_clave(f->raw[cubre])] += v;
-			if(ntop < 10 || topp[ntop - 1] < v * b->n){
-				if(ntop < 10) ntop++;
-				for(j = ntop - 1; j > 0 && topp[j - 1] < v * b->n; j--){ top[j] = top[j - 1]; topp[j] = topp[j - 1]; }
-				top[j] = b;
-				topp[j] = v * b->n;
-			}
-			for(k = 0; k < b->n; k++){
-				const u32 w = f->raw[k], rs = RS_(w), rt = RT_(w);
-				const int t = censo_tam(w);
-				u64 le, es, m;
-				Card cd;
-				u32 tg;
-				decode(w, b->pc + 4 * k, &cd, &tg);
-				cat[censo_cat(ult_op)] += v;
-				jit_uso_regs(w, &le, &es);
-				for(m = le | es; m; m &= m - 1){
-					r = (u32)__builtin_ctzll(m);
-					reg[r] += v * (u64)(((le >> r) & 1) + ((es >> r) & 1));
-				}
-				if(t >= 0){
-					tam[t] += v;
-					base[rs == 29 ? 0 : rs == 28 ? 1 : rs == 0 ? 2 : (cte >> rs) & 1 ? 3 : 4] += v;
-					if((vista >> rs) & 1) repe += v;
-					vista |= 1u << rs;
-					mem += v;
-				}
-				if((w >> 26) == 0x0F) cte |= 1u << rt;
-				else if(((w >> 26) == 0x09 || (w >> 26) == 0x0D) && ((cte >> rs) & 1) && rt) cte |= 1u << rt;
-				else cte &= ~(u32)es;
-				vista &= ~(u32)es;
-			}
+			censo_bloque(b, f->veces);
+			f->veces = 0;
 		}
-	memcpy(c.reg, reg, sizeof(reg));
-	memcpy(c.cat, cat, sizeof(cat));
-	c.mem = mem;
-	c.base_cte = base[3];
-	c.repe = repe;
-	c.top_pc = ntop ? top[0]->pc : 0;
-	c.top_veces = ntop ? FRIO(top[0])->veces : 0;
+	for(i = 0; cz_tab && i < CZ_TAB; i++){
+		const CzPc *const e = &cz_tab[i];
+		u32 q;
+		if(!e->pc) continue;
+		q = censo_cubo(e->veces);
+		cubo[q].instr += e->n;
+		cubo[q].bloques++;
+		cubo[q].ejec += e->ejec;
+		ejec_tab += e->ejec;
+		c.distintas += e->n;
+		c.bloques++;
+		if(ntop < 10 || cz_tab[top[ntop - 1]].ejec < e->ejec){
+			if(ntop < 10) ntop++;
+			for(j = ntop - 1; j > 0 && cz_tab[top[j - 1]].ejec < e->ejec; j--) top[j] = top[j - 1];
+			top[j] = i;
+		}
+	}
+	c.ejec = ca.ejec;
+	c.prefijo = ca.prefijo;
+	memcpy(c.reg, ca.reg, sizeof(c.reg));
+	memcpy(c.cat, ca.cat, sizeof(c.cat));
+	c.mem = ca.mem;
+	c.base_cte = ca.base[3];
+	c.repe = ca.repe;
+	c.top_pc = ntop ? cz_tab[top[0]].pc : 0;
+	c.top_veces = ntop ? cz_tab[top[0]].veces : 0;
 	c.jr_otros = cz.jr_otros;
 	c.jr_igual = cz.jr_igual;
 	c.esc_cpu = cz.esc_cpu;
 	c.esc_instr = cz.esc_instr;
-	len = (size_t)snprintf(l, sizeof(l), "[TIEMPOS] Censo JIT (prof_jit): %llu entradas a bloques (%llu instrucciones), %llu bloques "
-	                       "vivos con %llu instrucciones distintas y %llu ejecutadas (%.1f%% de lo que entro; lo demas se tiro o "
-	                       "vacio); codigo caliente:",
-	                       (unsigned long long)c.entradas, (unsigned long long)c.instr_entradas, (unsigned long long)c.bloques,
-	                       (unsigned long long)c.distintas, (unsigned long long)c.ejec,
-	                       c.instr_entradas ? 100.0 * (double)c.ejec / (double)c.instr_entradas : 0.0);
+	memcpy(c.dir, cz.dir, sizeof(c.dir));
+	c.desal = cz.desal;
+	c.tirados_cpu = cz.tirados_cpu;
+	c.tirados_sin_tocar = cz.tirados_sin_tocar;
+	c.tirados_fuera = cz.tirados_fuera;
+	for(i = 0, k = 8; i < 8; i++) if(cz.escr[i].esc && (k == 8 || cz.escr[i].tirados > cz.escr[k].tirados)) k = i;
+	c.escritor_pc = k < 8 ? cz.escr[k].pc : 0;
+	len = (size_t)snprintf(l, sizeof(l), "[TIEMPOS] Censo JIT (prof_jit): %llu entradas a bloques (%llu instrucciones), %llu ejecutadas "
+	                       "contadas (%.1f%% de lo que entro; %llu en bloques que se tiraron o vaciaron en la ventana), %llu bloques "
+	                       "distintos (por pc) con %llu instrucciones distintas%s; codigo caliente:",
+	                       (unsigned long long)c.entradas, (unsigned long long)c.instr_entradas, (unsigned long long)c.ejec,
+	                       c.instr_entradas ? 100.0 * (double)c.ejec / (double)c.instr_entradas : 0.0,
+	                       (unsigned long long)c.ejec_muertos, (unsigned long long)c.bloques, (unsigned long long)c.distintas,
+	                       cz_tab_fuera ? " (LA TABLA SE LLENO: parte de lo ejecutado no esta en la curva)" : cz_tab ? "" : " (SIN TABLA)");
 	{
 		static const double pc[5] = { 0.50, 0.75, 0.90, 0.95, 0.99 };
 		u64 ci = 0, cb = 0, ce = 0;
 		int q = 255, p = 0;
 		const double ppi = tot_cubre ? (double)tot_pal / (double)tot_cubre : 0.0;
 		for(; q >= 0 && p < 5; q--){
-			while(p < 5 && c.ejec && (double)(ce + cubo[q].ejec) >= pc[p] * (double)c.ejec){
-				const double f = cubo[q].ejec ? (pc[p] * (double)c.ejec - (double)ce) / (double)cubo[q].ejec : 0.0;
+			while(p < 5 && ejec_tab && (double)(ce + cubo[q].ejec) >= pc[p] * (double)ejec_tab){
+				const double f = cubo[q].ejec ? (pc[p] * (double)ejec_tab - (double)ce) / (double)cubo[q].ejec : 0.0;
 				const double ins = (double)ci + f * (double)cubo[q].instr;
-				len += (size_t)snprintf(l + len, sizeof(l) - len, " %.0f%% en %.0f instrucciones (%.0f bloques, ~%.0f KB nativos)",
-				                        100.0 * pc[p], ins, (double)cb + f * (double)cubo[q].bloques, ins * ppi * 4.0 / 1024.0);
+				len += (size_t)snprintf(l + len, sizeof(l) - len, " %.0f%% en %.0f instrucciones (%.0f bloques, ~%.0f KB a %.1f palabras)",
+				                        100.0 * pc[p], ins, (double)cb + f * (double)cubo[q].bloques, ins * ppi * 4.0 / 1024.0, ppi);
 				p++;
 			}
 			ci += cubo[q].instr;
 			cb += cubo[q].bloques;
 			ce += cubo[q].ejec;
 		}
-		snprintf(l + len, sizeof(l) - len, "; el prototipo hace %.1f palabras de PowerPC por instruccion que cubre", ppi);
+		snprintf(l + len, sizeof(l) - len, "; %.1f palabras de PowerPC por instruccion es lo que hace el prototipo", ppi);
 	}
 	hle_log("%s\n", l);
 	len = (size_t)snprintf(l, sizeof(l), "[TIEMPOS] Censo JIT, mezcla (por instrucciones ejecutadas):");
 	for(i = 0; i < CENSO_N; i++)
-		if(cat[i]) len += (size_t)snprintf(l + len, sizeof(l) - len, " %s %.1f%%", cn[i], c.ejec ? 100.0 * (double)cat[i] / (double)c.ejec : 0.0);
-	len += (size_t)snprintf(l + len, sizeof(l) - len, "; jit_proto cubriria %.1f%% (prefijos); corta en:",
-	                        c.ejec ? 100.0 * (double)c.prefijo / (double)c.ejec : 0.0);
-	for(no = 0; no < 10; no++){
-		u32 m = PREDEC_CAIDA_OPS;
-		for(i = 0; i < PREDEC_CAIDA_OPS; i++) if(corte[i] && (m == PREDEC_CAIDA_OPS || corte[i] > corte[m])) m = i;
-		if(m == PREDEC_CAIDA_OPS) break;
-		cpu_predec_caida_nombre(m, nm, sizeof(nm));
-		len += (size_t)snprintf(l + len, sizeof(l) - len, " %s %.1f%%", nm, c.ejec ? 100.0 * (double)corte[m] / (double)c.ejec : 0.0);
-		corte[m] = 0;
-	}
+		if(ca.cat[i]) len += (size_t)snprintf(l + len, sizeof(l) - len, " %s %.1f%%", cn[i], c.ejec ? 100.0 * (double)ca.cat[i] / (double)c.ejec : 0.0);
+	len += (size_t)snprintf(l + len, sizeof(l) - len, "; jit_proto cubriria %.1f%% (prefijos);", c.ejec ? 100.0 * (double)c.prefijo / (double)c.ejec : 0.0);
+	censo_top(" corta en:", ca.corte, PREDEC_CAIDA_OPS, c.ejec, 10, l, sizeof(l), &len, cpu_predec_caida_nombre);
+	hle_log("%s\n", l);
+	len = 0;
+	censo_top("[TIEMPOS] Censo JIT, instrucciones (las que mas se ejecutan):", ca.todas, PREDEC_CAIDA_OPS, c.ejec, 25, l, sizeof(l),
+	          &len, cpu_predec_caida_nombre);
+	acc = 0;
+	for(i = 0; i < 64; i++) acc += ca.fpu[i];
+	len += (size_t)snprintf(l + len, sizeof(l) - len, "; cuentas de la FPU (%.1f%%):", c.ejec ? 100.0 * (double)acc / (double)c.ejec : 0.0);
+	censo_top("", ca.fpu, 64, acc, 10, l, sizeof(l), &len, censo_nombre_fpu);
 	hle_log("%s\n", l);
 	for(i = 0; i < 34; i++) orden[i] = i;
-	for(i = 1; i < 34; i++) for(j = i; j > 0 && reg[orden[j]] > reg[orden[j - 1]]; j--){ r = orden[j]; orden[j] = orden[j - 1]; orden[j - 1] = r; }
+	for(i = 1; i < 34; i++) for(j = i; j > 0 && ca.reg[orden[j]] > ca.reg[orden[j - 1]]; j--){ r = orden[j]; orden[j] = orden[j - 1]; orden[j - 1] = r; }
 	{
 		u64 t = 0, a8 = 0, a16 = 0, a24 = 0;
-		for(i = 0; i < 34; i++){ t += reg[orden[i]]; if(i < 8) a8 = t; if(i < 16) a16 = t; if(i < 24) a24 = t; }
+		for(i = 0; i < 34; i++){ t += ca.reg[orden[i]]; if(i < 8) a8 = t; if(i < 16) a16 = t; if(i < 24) a24 = t; }
 		len = (size_t)snprintf(l, sizeof(l), "[TIEMPOS] Censo JIT, registros (lecturas y escrituras): los 8 mas usados %.1f%%, "
-		                       "16 %.1f%%, 24 %.1f%%; por registro:", t ? 100.0 * (double)a8 / (double)t : 0.0,
-		                       t ? 100.0 * (double)a16 / (double)t : 0.0, t ? 100.0 * (double)a24 / (double)t : 0.0);
-		for(i = 0; i < 34 && reg[orden[i]]; i++)
-			len += (size_t)snprintf(l + len, sizeof(l) - len, " %s %.1f%%", rn[orden[i]], 100.0 * (double)reg[orden[i]] / (double)t);
+		                       "16 %.1f%%, 24 %.1f%%; registros distintos por bloque (por instrucciones ejecutadas):",
+		                       t ? 100.0 * (double)a8 / (double)t : 0.0, t ? 100.0 * (double)a16 / (double)t : 0.0,
+		                       t ? 100.0 * (double)a24 / (double)t : 0.0);
+		for(i = 0; i < 6; i++)
+			len += (size_t)snprintf(l + len, sizeof(l) - len, " %s %.1f%%", rb[i], c.ejec ? 100.0 * (double)ca.regs_bloque[i] / (double)c.ejec : 0.0);
+		len += (size_t)snprintf(l + len, sizeof(l) - len, "; por registro:");
+		for(i = 0; i < 34 && ca.reg[orden[i]] && len + 24 < sizeof(l); i++)
+			len += (size_t)snprintf(l + len, sizeof(l) - len, " %s %.1f%%", rn[orden[i]], 100.0 * (double)ca.reg[orden[i]] / (double)t);
 	}
 	hle_log("%s\n", l);
 	len = (size_t)snprintf(l, sizeof(l), "[TIEMPOS] Censo JIT, memoria: %llu accesos (%.1f%% de las instrucciones); base:",
-	                       (unsigned long long)mem, c.ejec ? 100.0 * (double)mem / (double)c.ejec : 0.0);
-	for(i = 0; i < 5; i++) len += (size_t)snprintf(l + len, sizeof(l) - len, " %s %.1f%%", bn[i], mem ? 100.0 * (double)base[i] / (double)mem : 0.0);
+	                       (unsigned long long)ca.mem, c.ejec ? 100.0 * (double)ca.mem / (double)c.ejec : 0.0);
+	for(i = 0; i < 5; i++) len += (size_t)snprintf(l + len, sizeof(l) - len, " %s %.1f%%", bn[i], ca.mem ? 100.0 * (double)ca.base[i] / (double)ca.mem : 0.0);
 	len += (size_t)snprintf(l + len, sizeof(l) - len, "; misma base que otro acceso antes en el bloque %.1f%%; tamano:",
-	                        mem ? 100.0 * (double)repe / (double)mem : 0.0);
-	for(i = 0; i < 5; i++) len += (size_t)snprintf(l + len, sizeof(l) - len, " %s %.1f%%", tn[i], mem ? 100.0 * (double)tam[i] / (double)mem : 0.0);
+	                        ca.mem ? 100.0 * (double)ca.repe / (double)ca.mem : 0.0);
+	for(i = 0; i < 5; i++) len += (size_t)snprintf(l + len, sizeof(l) - len, " %s %.1f%%", tn[i], ca.mem ? 100.0 * (double)ca.tam[i] / (double)ca.mem : 0.0);
+	acc = 0;
+	for(i = 0; i < 16; i++) acc += cz.dir[i];
+	len += (size_t)snprintf(l + len, sizeof(l) - len, "; al ejecutarse (sin lv/sv de la VFPU ni lwl/lwr/swl/swr), %llu accesos por "
+	                        "los 4 bits altos de la direccion:", (unsigned long long)acc);
+	for(i = 0; i < 16; i++)
+		if(cz.dir[i]) len += (size_t)snprintf(l + len, sizeof(l) - len, " %X... %.2f%%", (unsigned)i, 100.0 * (double)cz.dir[i] / (double)acc);
+	len += (size_t)snprintf(l + len, sizeof(l) - len, ", desalineados %llu (%.3f%%)", (unsigned long long)cz.desal,
+	                        acc ? 100.0 * (double)cz.desal / (double)acc : 0.0);
 	acc = cz.lentas[0] + cz.lentas[1] + cz.lentas[2];
 	snprintf(l + len, sizeof(l) - len, "; memoria lenta %llu (scratchpad %llu, VRAM %llu, otra %llu)", (unsigned long long)acc,
 	         (unsigned long long)cz.lentas[0], (unsigned long long)cz.lentas[1], (unsigned long long)cz.lentas[2]);
 	hle_log("%s\n", l);
-	len = (size_t)snprintf(l, sizeof(l), "[TIEMPOS] Censo JIT, saltos: jr/jalr que no son jr ra %llu, al mismo destino que la vez anterior "
-	                       "%.1f%%; jr ra %llu, la pila de retornos (32) acierta %.1f%%; escrituras de la CPU en zonas con codigo %llu "
-	                       "(%llu sobre instrucciones de bloques), avisos de escritura en codigo en total %llu, bloques tirados %llu; "
-	                       "las que mas escriben sobre codigo:",
-	                       (unsigned long long)cz.jr_otros, cz.jr_otros ? 100.0 * (double)cz.jr_igual / (double)cz.jr_otros : 0.0,
-	                       (unsigned long long)(st.ras_jr - cz.ras_jr0),
-	                       st.ras_jr > cz.ras_jr0 ? 100.0 * (double)(st.ras_ok - cz.ras_ok0) / (double)(st.ras_jr - cz.ras_jr0) : 0.0,
-	                       (unsigned long long)cz.esc_cpu, (unsigned long long)cz.esc_instr,
-	                       (unsigned long long)(st.escrituras_en_codigo - cz.esc0), (unsigned long long)(st.bloques_tirados - cz.tirados0));
-	for(i = 0; i < 8; i++)
-		if(cz.esc_pc_n[i]) len += (size_t)snprintf(l + len, sizeof(l) - len, " %08X x%u", (unsigned)cz.esc_pc[i], (unsigned)cz.esc_pc_n[i]);
+	hle_log("[TIEMPOS] Censo JIT, saltos: jr/jalr que no son jr ra %llu, al mismo destino que la vez anterior %.1f%%; jr ra %llu, la pila "
+	        "de retornos (32) acierta %.1f%%\n",
+	        (unsigned long long)cz.jr_otros, cz.jr_otros ? 100.0 * (double)cz.jr_igual / (double)cz.jr_otros : 0.0,
+	        (unsigned long long)(st.ras_jr - cz.ras_jr0),
+	        st.ras_jr > cz.ras_jr0 ? 100.0 * (double)(st.ras_ok - cz.ras_ok0) / (double)(st.ras_jr - cz.ras_jr0) : 0.0);
+	len = (size_t)snprintf(l, sizeof(l), "[TIEMPOS] Censo JIT, escrituras en codigo: %llu avisos y %llu bloques tirados en la ventana; de la "
+	                       "CPU, %llu escrituras en zonas con codigo (%llu sobre instrucciones de bloques), que tiraron %llu bloques "
+	                       "(%llu sin tocar ninguna instruccion); las que mas tiran (pc: escrituras, sobre instrucciones, bloques, "
+	                       "ultima direccion):",
+	                       (unsigned long long)(st.escrituras_en_codigo - cz.esc0), (unsigned long long)(st.bloques_tirados - cz.tirados0),
+	                       (unsigned long long)cz.esc_cpu, (unsigned long long)cz.esc_instr, (unsigned long long)cz.tirados_cpu,
+	                       (unsigned long long)cz.tirados_sin_tocar);
+	for(k = 0; k < 8; k++){
+		u32 m = 8;
+		for(i = 0; i < 8; i++) if(cz.escr[i].esc && (m == 8 || cz.escr[i].tirados > cz.escr[m].tirados)) m = i;
+		if(m == 8) break;
+		len += (size_t)snprintf(l + len, sizeof(l) - len, " %08X: %u, %u, %u, %08X;", (unsigned)cz.escr[m].pc, (unsigned)cz.escr[m].esc,
+		                        (unsigned)cz.escr[m].sobre, (unsigned)cz.escr[m].tirados, (unsigned)cz.escr[m].ultima);
+		cz.escr[m].esc = 0;
+	}
+	len += (size_t)snprintf(l + len, sizeof(l) - len, " fuera de la CPU (HLE, DMA), %llu avisos que tiraron %llu bloques; por llamada "
+	                        "(avisos, bloques):", (unsigned long long)cz.avisos_fuera, (unsigned long long)cz.tirados_fuera);
+	for(k = 0; k < 8 && len + 60 < sizeof(l); k++){
+		u32 m = 8;
+		for(i = 0; i < 8; i++) if(cz.otros[i].avisos && (m == 8 || cz.otros[i].tirados > cz.otros[m].tirados)) m = i;
+		if(m == 8) break;
+		len += (size_t)snprintf(l + len, sizeof(l) - len, " %s %u, %u;", cz.otros[m].nom ? cz.otros[m].nom : "fuera del HLE",
+		                        (unsigned)cz.otros[m].avisos, (unsigned)cz.otros[m].tirados);
+		cz.otros[m].avisos = 0;
+	}
 	hle_log("%s\n", l);
 	for(i = 0; i < ntop; i++){
-		const Frio *f = FRIO(top[i]);
-		u32 cubre;
-		jit_tam_estimado(top[i]->pc, f->raw, top[i]->n, top[i]->branch, &cubre);
+		const CzPc *const e = &cz_tab[top[i]];
+		const Block *const vivo = lookup(e->pc);
+		const int de_ram = !(vivo && vivo->n == e->n);
+		u32 raw[BLOQUE_MAX + 2], o = (e->pc & PSP_ADDR_MASK) - PSP_RAM_BASE, nn = e->n, tg;
+		int salto;
+		Card cd;
+		if(!de_ram) memcpy(raw, FRIO(vivo)->raw, nn * 4);
+		else for(k = 0; k < nn; k++) raw[k] = o + 4 * k + 4 <= psp_mem.ram_size ? rd_le32(psp_mem.ram + o + 4 * k) : 0;
+		salto = !de_ram ? vivo->branch : nn >= 2 && decode(raw[nn - 2], e->pc + 4 * (nn - 2), &cd, &tg) == K_SALTO;
 		len = (size_t)snprintf(l, sizeof(l), "[TIEMPOS] Censo JIT, bloque caliente %u: %08X, %u instrucciones, %u veces (%.1f%%), "
-		                       "prototipo %u:", (unsigned)(i + 1), (unsigned)top[i]->pc, (unsigned)top[i]->n, (unsigned)f->veces,
-		                       c.ejec ? 100.0 * (double)topp[i] / (double)c.ejec : 0.0, (unsigned)cubre);
-		for(k = 0; k < top[i]->n && len + 12 < sizeof(l); k++) len += (size_t)snprintf(l + len, sizeof(l) - len, " %08X", (unsigned)f->raw[k]);
+		                       "prototipo %u%s:", (unsigned)(i + 1), (unsigned)e->pc, (unsigned)nn, (unsigned)e->veces,
+		                       ejec_tab ? 100.0 * (double)e->ejec / (double)ejec_tab : 0.0,
+		                       (unsigned)jit_prefijo(raw, nn, salto), de_ram ? " (ya no vive: de la RAM)" : "");
+		for(k = 0; k < nn && len + 12 < sizeof(l); k++) len += (size_t)snprintf(l + len, sizeof(l) - len, " %08X", (unsigned)raw[k]);
 		hle_log("%s\n", l);
 	}
+	c.tab_fuera = cz_tab_fuera;
 	cpu_predec_censo_reiniciar();
 	if(out) *out = c;
 }
@@ -1130,6 +1341,10 @@ void cpu_predec_censo_reiniciar(void){
 	for(i = 0; i < (1u << TABLA_BITS); i++)
 		for(b = tabla[i]; b; b = FRIO(b)->hnext) FRIO(b)->veces = 0;
 	memset(&cz, 0, sizeof(cz));
+	memset(&ca, 0, sizeof(ca));
+	if(cz_tab && cz_tab_usadas) memset(cz_tab, 0, CZ_TAB * sizeof(CzPc));
+	cz_tab_usadas = 0;
+	cz_tab_fuera = 0;
 	cz.ras_jr0 = st.ras_jr;
 	cz.ras_ok0 = st.ras_ok;
 	cz.esc0 = st.escrituras_en_codigo;

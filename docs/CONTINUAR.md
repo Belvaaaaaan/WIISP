@@ -3738,6 +3738,116 @@ instrucciones en nativo, salidas a tarjetas, % de muestras de la CPU en
 código nativo) y la velocidad contra `sin`; en `imagenes`, las capturas
 de siempre y `jit_verificar` sin diferencias (ninguna línea `[JIT]`).
 
+### Resultado de la 0.6.0 en el Wii (DBZ: sin / con / censo / imagenes)
+
+- `jit_proto` es correcto en el Wii: `jit_verificar` comparó ~180 M de
+  bloques nativos, todos iguales; las 12 capturas, las de siempre. Pero
+  es más lento: pelea 50,8 % → 41,8 % y el tiempo de CPU sube ~55 %
+  (bloques de ~4 instrucciones que entran y salen de C, recargan y
+  guardan los registros, y un 30 % sale a mitad a una tarjeta). La
+  microprueba lo predijo (llamadas 10 → 20,8 ciclos por instrucción).
+  La corrida "sin" queda como la 0.5.23.7 (~50 % en la pelea).
+- Microprobas (ciclos del Broadway, con PMC1):
+  - publicar: hacen falta `dcbst` e `icbi` (sin cualquiera de los dos
+    corre el código viejo); ~23 ciclos por línea de 32 bytes, 70 una sola;
+  - saltos: `b` 2 por salto, `lwzu`+`mtctr`+`bctr` (las tarjetas) 5,
+    `mtctr` pronto deja 3 instrucciones gratis y tarde cuesta 2 más,
+    `mtlr`+`blr` 5, `bl`+`blr` 4, `bctrl` a C 8, `bl` a C 5;
+  - `lwbrx` igual que `lwz` (latencia 2, uno por ciclo), `stwbrx` igual
+    que `stw`, `lhbrx`+`extsh` uno más que `lha`; un salto mal predicho, 2;
+  - código en línea recta: 1 ciclo por instrucción en la L1, 1,28 en la
+    L2 (128 KB), fuera de la caché 6,1 desde MEM1 y 18,6 desde MEM2;
+  - la CPU de la PSP en un bucle caliente: ~10 ciclos por instrucción
+    con tarjetas (en el juego son ~29: el resto son fallos de caché);
+  - DSI de ida y vuelta con el gancho: 247 ciclos (DAR bien);
+  - alias IBAT2 en 0x7FFC0000: funciona, con `bl` directo a C;
+  - fallaron dos: la latencia salió 0,0 (el compilador quitó la
+    persecución: la función no tiene efectos y su resultado no se usaba;
+    en qemu también salía 0,0 y se leyó mal) y DBAT6 no se probó (se
+    exigía la mitad baja a 0 y tiene basura, 041A0058, con la alta
+    inválida: está libre).
+- Censo (pelea, la ventana final, 100 % contado):
+  - código caliente: el 50 % en 2,3 mil instrucciones (360 bloques), el
+    75 % en 9,4 mil, el 90 % en 29 mil, el 99 % en 76 mil; ~118 mil
+    distintas vivas;
+  - la arena de 3 MB del predecodificado se vacía 1-2 veces cada 10 s en
+    la pelea (también en "sin"): se rehacen ~39 mil bloques por ventana;
+  - mezcla: ALU ~31 %, cargas 16 %, escrituras 8 %, saltos 13 %, FPU
+    11,6 %, VFPU 9,6 %, "likely" ~3,6 %; `jit_proto` cubriría el 58 %;
+  - registros: 16 cubren el ~92 % (a0-a3 y sp);
+  - memoria: el 34 % de las instrucciones; base sp 23 %; la mitad usa
+    una base ya usada antes en el bloque; casi nada de memoria lenta;
+  - `jr ra`: la pila de retornos acierta el 99,9 %; los demás `jr` van al
+    mismo destino el 77-88 %;
+  - escrituras en código: en la pelea, 0; en los menús, 744 escrituras
+    en zonas con código que no tocaban ninguna instrucción tiraron 8736
+    bloques (la zona de 1 KB);
+  - bloques calientes: una búsqueda de bytes (`lbu`+`bnel`, ~6 %), un
+    bucle de `cache` que vacía la caché de datos (~1 %), bloques de FPU
+    y VFPU.
+- Fallos del censo: perdía las cuentas de los bloques al vaciarse la
+  arena (en la ventana 4200-4800, con dos vaciados, solo contó el 3,7 %);
+  la línea del HLE contaba lo de dentro (el 40-44 % de
+  `sceGeListUpdateStallAddr` es el GE: el HLE de verdad es el ~2 %) y de
+  las escrituras en zonas con código solo apuntaba las que caían sobre
+  instrucciones.
+- Lo que dice para el IR: despachar no es el problema; lo es salir a C
+  en cada bloque. Los bloques nativos tienen que encadenarse entre sí
+  (con `b`), con los registros fijos entre bloques y el presupuesto en el
+  propio código; código compacto (2-3 palabras por instrucción); las
+  comprobaciones de memoria, compartidas o con DBAT y DSI; FPU, VFPU y
+  "likely" desde el principio. El techo: en la pelea el GE es ~41 % y la
+  CPU ~43 %.
+
+### v0.6.1: el censo completo (solo medidas)
+
+- Las cuentas ya no se pierden: al morir un bloque (una escritura en su
+  zona o un vaciado de la arena) lo que llevaba se suma en el momento a
+  la mezcla, los registros, la memoria y una tabla por pc (2^17
+  entradas, 2 MB; en el Wii, de la punta de MEM2 con
+  `cpu_predec_pedir_mem`). La curva y los bloques calientes salen de esa
+  tabla, que junta las veces de un mismo pc aunque el bloque se haya
+  rehecho. La primera línea dice cuánto de lo contado venía de bloques
+  que murieron en la ventana. Al reconfigurar las arenas se vacía antes
+  de liberarlas (si no, el censo leería memoria liberada).
+- HLE: cada llamada cuenta solo su tiempo en la cubeta del HLE (sin el GE
+  ni el juego que corra dentro, y sin las llamadas anidadas), y aparte lo
+  de dentro. También llamadas por 1000 instrucciones.
+- Escrituras en código: por pc de la CPU, las escrituras en zonas con
+  código, cuántas sobre instrucciones, cuántos bloques tiraron y la
+  última dirección; cuántos bloques se tiraron sin tocar ninguna
+  instrucción; los avisos de fuera de la CPU, por llamada del HLE
+  (`hle_llamada_actual`).
+- Memoria al ejecutarse: los 4 bits altos de cada dirección (0x0…, los
+  espejos 0x4… y 0x8…) y los accesos desalineados.
+- Además: las 25 instrucciones que más se ejecutan, las cuentas de la
+  FPU por operación y cuántos registros distintos usa cada bloque.
+  `cpu_predec_caida_nombre` da nombres a casi todas las instrucciones.
+- Microprobas: la latencia ya usa el resultado; DBAT6 está libre si la
+  mitad alta no es válida, y ahora mapea 32 MB en 0x08000000 con DBAT7
+  para los últimos 128 KB (la RAM de la PSP entera, a dirección + 0x800),
+  comprueba el principio, la mitad y la última palabra, escribe por el
+  alias y mide la latencia por el alias y por el puntero de siempre, y
+  deja las BAT como estaban. Dos formas de despachar más: `b` con el
+  presupuesto en el propio bloque (`addic.`+`blt`) y `jr` por una tabla
+  con etiqueta.
+
+Pruebas (sin la verificación final completa, que no se pidió): x86 con
+ASan 211.184 comprobaciones, 0 fallos; PowerPC bajo qemu 406.402 y
+devkitPPC bajo `qemu-ppc -cpu 750` 406.403, 0 fallos; pspautotests
+275/275; mutaciones (`mutaciones/0.6.1.txt`, `mutar.py --solo interp`):
+12 de 12 detectadas; A/B con el CLI de GX (555 programas): 0.6.0 contra
+0.6.1 y `prof_jit` 0/1, 0 distintos; las microprobas en qemu
+(`jit_banco.sh`): "todo bien", con la latencia ya distinta de 0;
+`wiisp.dol` sin avisos (la persecución de punteros está en el
+desensamblado: 2048 vueltas de 8 `lwz` encadenados).
+
+Autotest (3 registros y un `.capturas.txt`):
+- sin: como siempre, con `prueba_jit` antes de empezar;
+- censo: `prof_jit` con `prof_bloques` y `prof_cpu` (la CPU por dentro
+  por muestreo y las estadísticas de bloques; va más lento);
+- imagenes: las capturas, todo como siempre.
+
 ### Para el siguiente chat (empezar aquí)
 
 Metodología acordada (detalle en `docs/HOJA_DE_RUTA.md`): primero medir
@@ -3771,13 +3881,11 @@ Metodología acordada (detalle en `docs/HOJA_DE_RUTA.md`): primero medir
   devkitPPC, perfil por función, psq_l emulado, A/B) y para leer los
   registros del Wii (`ventanas.py`): `tools/banco/LEEME.md`. El entorno
   (devkitPPC, qemu, pspautotests, PPSSPP): `tools/setup_entorno.sh`.
-- **Siguiente:** leer los registros de la 0.6.0 (qué mirar, en su
-  sección de arriba): las microprobas del Broadway, el censo del código
-  de DBZ y lo que hace ya `jit_proto` (velocidad y `jit_verificar` a 0).
-  Con esos números, el diseño del IR propiamente dicho (qué despacho, qué
-  registros fijos, cómo se comprueba la memoria, DBAT/DSI o no, dónde va
-  el código). Lo de la 0.5.23.7 (ya leído): `ge_vdec_ps` −4/−5 % por
-  vértice, verificación a 0. Opcionales: la pantalla en pares (si `ps_div` y los merges
+- **Siguiente:** leer los registros de la 0.6.1 (el censo completo de la
+  pelea, el HLE sin lo de dentro, quién escribe en las zonas con código,
+  los espejos, la latencia de MEM1/MEM2 y DBAT6/7) y, con eso, el diseño
+  del IR propiamente dicho. Lo de la 0.6.0 (ya leído, ver su resultado):
+  `jit_proto` correcto pero más lento (salir a C en cada bloque). Opcionales: la pantalla en pares (si `ps_div` y los merges
   salen a 0 en la autoprueba), la caché de huesos (~2 %), los índices CI8
   por la GPU y la charola parcial de los menús. El limitador de
   velocidad, al final de todo.
