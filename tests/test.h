@@ -52,6 +52,7 @@ void test_gxemit(void);
 /* tests/test_vdec.c: el camino de los vértices del GE con y sin interruptor */
 void test_vdec(void);
 void test_censo(void);
+void test_efectos(void);   //Arreglo
 void test_bbox(void);   //Arreglo
 void test_listas(void);   //Arreglo
 void test_tirones(void);

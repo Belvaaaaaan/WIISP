@@ -1,0 +1,86 @@
+=== censo vfpu: la tarjeta que se rinde no cuenta como rendida
+@ src/cpu/predec_bucle.h
+<<<
+		CENSO_VFPU_DESPUES(1);   //Arreglo
+>>>
+		CENSO_VFPU_DESPUES(0);   //Arreglo
+===
+=== censo vfpu: el prefijo s mal mirado
+@ src/cpu/predec.c
+<<<
+	*pfx = (int)((vfpu.ctrl[VFPU_CTRL_SPREFIX] ^ 0xE4) | (vfpu.ctrl[VFPU_CTRL_TPREFIX] ^ 0xE4) | vfpu.ctrl[VFPU_CTRL_DPREFIX]) != 0;
+>>>
+	*pfx = (int)((vfpu.ctrl[VFPU_CTRL_SPREFIX] ^ 0xE5) | (vfpu.ctrl[VFPU_CTRL_TPREFIX] ^ 0xE4) | vfpu.ctrl[VFPU_CTRL_DPREFIX]) != 0;
+===
+=== censo vfpu: las tarjetas no se cuentan
+@ src/cpu/predec_bucle.h
+<<<
+#define CENSO_VT(vs) do { if(pj) czv.tarjetas[vs]++; } while(0)   //Arreglo
+>>>
+#define CENSO_VT(vs) do { if(pj) czv.tarjetas[0]++; } while(0)   //Arreglo
+===
+=== censo vfpu: vfpu_exec no dice la clase
+@ src/cpu/vfpu.c
+<<<
+#define VSTAT(x) (vfpu_stat_now[x]++, vfpu_clase = (x))   //Arreglo
+>>>
+#define VSTAT(x) (vfpu_stat_now[x]++)   //Arreglo
+===
+=== censo vfpu: el cuadre de mas
+@ src/cpu/predec.c
+<<<
+		c.vfpu_cuadra = n == contador;
+>>>
+		c.vfpu_cuadra = n + 1 == contador;
+===
+=== efectos: la clave de escritura no mira las operaciones
+@ src/gpu/ge_efectos.c
+<<<
+	k.sop = ge.cmd[GE_STENCILOP] & 0xFFFFFFu;
+	k.malpha
+>>>
+	k.sop = 0;
+	k.malpha
+===
+=== efectos: vuelca dos veces la misma textura
+@ src/gpu/ge_efectos.c
+<<<
+		if(i == vol_hechos){
+>>>
+		if(1){
+===
+=== efectos: indice sin la mascara
+@ src/gpu/ge_efectos.c
+<<<
+				const u32 v = texel(k->tex, k->bufw, bits, x, y), idx = (((v >> shift) & mask) | off) & 511;
+>>>
+				const u32 v = texel(k->tex, k->bufw, bits, x, y), idx = ((v >> shift) | off) & 511;
+===
+=== efectos: el alfa del volcado es el rojo
+@ src/gpu/ge_efectos.c
+<<<
+		for(y = 0; y < th; y++) for(x = 0; x < tw; x++) img[y * tw + x] = (texel(k->tex, k->bufw, 32, x, y) >> 24) * 0x010101u;
+>>>
+		for(y = 0; y < th; y++) for(x = 0; x < tw; x++) img[y * tw + x] = (texel(k->tex, k->bufw, 32, x, y) & 0xFF) * 0x010101u;
+===
+=== efectos: la VRAM no se reconoce
+@ src/gpu/ge_efectos.c
+<<<
+static int en_vram(u32 a){ return ((a & 0x0FFFFFFFu) - PSP_VRAM_BASE) < PSP_VRAM_SIZE; }
+>>>
+static int en_vram(u32 a){ return ((a & 0x0FFFFFFFu) - PSP_VRAM_BASE) > PSP_VRAM_SIZE; }
+===
+=== efectos: el cuadre de mas
+@ src/gpu/ge_efectos.c
+<<<
+	datos.cuadra = suma + escr_fuera == dibujos;
+>>>
+	datos.cuadra = suma + escr_fuera == dibujos + 1;
+===
+=== efectos: la paleta mal leida
+@ src/gpu/ge_efectos.c
+<<<
+	if(cfmt == GE_FMT_8888) return rd_le32(ge.clut + (i & 0x1FF) * 4) & 0xFFFFFFu;
+>>>
+	if(cfmt == GE_FMT_8888) return rd_le32(ge.clut + (i & 0x1FF) * 2) & 0xFFFFFFu;
+===

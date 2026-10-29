@@ -656,6 +656,11 @@ static int verif_ok(const Block *b){
 //arreglo
 /* La memoria lenta, contada y marcada para el muestreo */
 //Arreglo
+typedef char censo_vfpu_ok[VS_COUNT < CENSO_VFPU_CLASES ? 1 : -1];
+static struct {
+	u64 n[CENSO_VFPU_CLASES], t[CENSO_VFPU_CLASES], rendidas[CENSO_VFPU_CLASES], pfx[CENSO_VFPU_CLASES], tarjetas[CENSO_VFPU_CLASES];
+	u64 vfpu0;
+} czv;
 static struct {
 	u64 entradas, instr_ent, jr_otros, jr_igual, esc_cpu, esc_instr, lentas[3];
 	u64 dir[16], desal, tirados_cpu, tirados_sin_tocar, tirados_fuera, avisos_fuera, ejec_muertos;
@@ -664,6 +669,22 @@ static struct {
 	u32 esc_activa, esc_sobre;
 	u64 ras_jr0, ras_ok0, tirados0, esc0;
 } cz;
+
+//Arreglo
+static u64 censo_vfpu_antes(int *pfx){
+	*pfx = (int)((vfpu.ctrl[VFPU_CTRL_SPREFIX] ^ 0xE4) | (vfpu.ctrl[VFPU_CTRL_TPREFIX] ^ 0xE4) | vfpu.ctrl[VFPU_CTRL_DPREFIX]) != 0;
+	vfpu_clase = VS_COUNT;
+	return prof_clock ? prof_clock() : 0;
+}
+
+//Arreglo
+static void censo_vfpu_despues(u64 t0, int rendida, int pfx){
+	const int k = vfpu_clase >= 0 && vfpu_clase < VS_COUNT ? vfpu_clase : VS_COUNT;
+	czv.n[k]++;
+	if(prof_clock) czv.t[k] += prof_clock() - t0;
+	czv.rendidas[k] += (u64)rendida;
+	czv.pfx[k] += (u64)pfx;
+}
 
 //Arreglo
 static void censo_lenta(u32 addr){
@@ -1137,7 +1158,7 @@ static void censo_nombre_fpu(u32 k, char *buf, u32 size){
 }
 
 //Arreglo
-void cpu_predec_censo(CensoJit *out){
+void cpu_predec_censo(CensoJit *out, u64 ventana){
 	static const char *const cn[CENSO_N] = { "alu", "alu-imm", "lui", "mult/hilo", "div", "carga", "guarda", "lwl/lwr/swl/swr",
 	                                      "salto cond", "j/jal", "jr/jalr", "FPU", "VFPU", "syscall", "nop", "otras" };
 	static const char *const rn[34] = { "zero", "at", "v0", "v1", "a0", "a1", "a2", "a3", "t0", "t1", "t2", "t3", "t4", "t5",
@@ -1286,6 +1307,43 @@ void cpu_predec_censo(CensoJit *out){
 	        (unsigned long long)cz.jr_otros, cz.jr_otros ? 100.0 * (double)cz.jr_igual / (double)cz.jr_otros : 0.0,
 	        (unsigned long long)(st.ras_jr - cz.ras_jr0),
 	        st.ras_jr > cz.ras_jr0 ? 100.0 * (double)(st.ras_ok - cz.ras_ok0) / (double)(st.ras_jr - cz.ras_jr0) : 0.0);
+	{
+		u64 n = 0, t = 0, tj = 0, re = 0, pf = 0;
+		const u64 contador = st.vfpu - czv.vfpu0;
+		for(i = 0; i <= VS_COUNT; i++){ n += czv.n[i]; t += czv.t[i]; re += czv.rendidas[i]; pf += czv.pfx[i]; }
+		for(i = 0; i < VS_COUNT; i++) tj += czv.tarjetas[i];
+		for(i = 0; i < CENSO_VFPU_CLASES; i++){
+			c.vfpu_exec[i] = czv.n[i];
+			c.vfpu_tarjetas[i] = czv.tarjetas[i];
+			c.vfpu_rendidas[i] = czv.rendidas[i];
+			c.vfpu_pfx[i] = czv.pfx[i];
+		}
+		c.vfpu_cuadra = n == contador;
+		len = (size_t)snprintf(l, sizeof(l), "[TIEMPOS] Censo JIT, VFPU: %llu instrucciones (%.2f%% de las contadas): por tarjeta %llu, por "
+		                       "vfpu_exec %llu (%llu tarjetas que se rinden; %llu con prefijos); vfpu_exec %.1f ms en total (%.0f ns de "
+		                       "media, %.1f%% de la ventana); cuadra con el contador del predecodificado: %s; las que mas tardan en "
+		                       "vfpu_exec (veces, ns cada una, %% de su clase por tarjeta, %% con prefijos):",
+		                       (unsigned long long)(n + tj), c.ejec ? 100.0 * (double)(n + tj) / (double)c.ejec : 0.0,
+		                       (unsigned long long)tj, (unsigned long long)n, (unsigned long long)re, (unsigned long long)pf,
+		                       prof_hz ? 1000.0 * (double)t / (double)prof_hz : 0.0,
+		                       prof_hz && n ? 1e9 * (double)t / (double)prof_hz / (double)n : 0.0,
+		                       ventana ? 100.0 * (double)t / (double)ventana : 0.0,
+		                       c.vfpu_cuadra ? "si" : "NO");
+		if(!c.vfpu_cuadra) len += (size_t)snprintf(l + len, sizeof(l) - len, " (%llu contadas aqui, %llu el contador)",
+		                                         (unsigned long long)n, (unsigned long long)contador);
+		for(k = 0; k < 14 && len + 80 < sizeof(l); k++){
+			u32 m = VS_COUNT + 1;
+			for(i = 0; i <= VS_COUNT; i++) if(czv.n[i] && (m > VS_COUNT || czv.t[i] > czv.t[m])) m = i;
+			if(m > VS_COUNT) break;
+			len += (size_t)snprintf(l + len, sizeof(l) - len, " %s %llu, %.0f, %.0f%%, %.0f%%;", m < VS_COUNT ? vfpu_stat_name[m] : "?",
+			                        (unsigned long long)czv.n[m], prof_hz ? 1e9 * (double)czv.t[m] / (double)prof_hz / (double)czv.n[m] : 0.0,
+			                        m < VS_COUNT && czv.tarjetas[m] + czv.n[m] ? 100.0 * (double)czv.tarjetas[m] / (double)(czv.tarjetas[m] + czv.n[m]) : 0.0,
+			                        100.0 * (double)czv.pfx[m] / (double)czv.n[m]);
+			czv.t[m] = 0;
+			czv.n[m] = 0;
+		}
+		hle_log("%s\n", l);
+	}
 	len = (size_t)snprintf(l, sizeof(l), "[TIEMPOS] Censo JIT, escrituras en codigo: %llu avisos y %llu bloques tirados en la ventana; de la "
 	                       "CPU, %llu escrituras en zonas con codigo (%llu sobre instrucciones de bloques), que tiraron %llu bloques "
 	                       "(%llu sin tocar ninguna instruccion); las que mas tiran (pc: escrituras, sobre instrucciones, bloques, "
@@ -1342,6 +1400,8 @@ void cpu_predec_censo_reiniciar(void){
 		for(b = tabla[i]; b; b = FRIO(b)->hnext) FRIO(b)->veces = 0;
 	memset(&cz, 0, sizeof(cz));
 	memset(&ca, 0, sizeof(ca));
+	memset(&czv, 0, sizeof(czv));
+	czv.vfpu0 = st.vfpu;
 	if(cz_tab && cz_tab_usadas) memset(cz_tab, 0, CZ_TAB * sizeof(CzPc));
 	cz_tab_usadas = 0;
 	cz_tab_fuera = 0;

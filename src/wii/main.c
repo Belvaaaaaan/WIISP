@@ -75,6 +75,7 @@
 #include "core/prof.h"
 #include "cpu/predec.h"   //arreglo
 #include "cpu/jit.h"   //Arreglo
+#include "gpu/ge.h"   //Arreglo
 #ifdef WIISP_PROF
 extern unsigned long long ge_prof[8];
 #endif
@@ -520,6 +521,8 @@ static void autotest_output(const char *text, unsigned len){
 	if(autotest_file) fwrite(text, 1, len, autotest_file);
 }
 
+static int hasta_cuadros;   //Arreglo
+
 /* Una ejecución de la lista de pruebas. prefix es la ruta de las salidas
    (la del programa, más ".vN" si se repite). */
 static void autotest_run(const char *path, const char *prefix, int max_frames){
@@ -569,6 +572,10 @@ static void autotest_run(const char *path, const char *prefix, int max_frames){
 			hle_set_profile_hook(profile_hook);
 			sampler_start();
 			if(app_guion_fin()) max_frames = (int)app_guion_fin() + 1;
+			if(hasta_cuadros > 0 && hasta_cuadros < max_frames){   //Arreglo
+				max_frames = hasta_cuadros;   //Arreglo
+				hle_log("[GUION] se corta en el cuadro %d (hasta)\n", hasta_cuadros);   //Arreglo
+			}   //Arreglo
 		} else prof_set_clock(NULL, 0);   /* las pruebas miden con lo suyo */
 		gx_ge_profile(&ps, &pst, &pp, cnt);
 		hle_set_log_screen(0);   /* como al jugar: la consola no se ve */
@@ -645,6 +652,8 @@ static int autotest(const char *appdir){
 		if(!strncmp(line, "veces ", 6)){ times = atoi(line + 6); if(times < 1) times = 1; continue; }
 		if(!strncmp(line, "capturas ", 9)){ app_guion_capturas_cada((unsigned)atoi(line + 9)); continue; }
 		if(!strncmp(line, "ventana ", 8)){ hle_set_ventana_juego((u32)atoi(line + 8)); continue; }   //Arreglo
+		if(!strncmp(line, "volcado ", 8)){ app_guion_volcado((unsigned)atoi(line + 8)); continue; }   //Arreglo
+		if(!strncmp(line, "hasta ", 6)){ hasta_cuadros = atoi(line + 6); continue; }   //Arreglo
 		if(!strncmp(line, "sufijo", 6)){
 			/* Para correr el mismo juego con otras opciones sin pisar las salidas */
 			const char *v = line + 6;
@@ -740,6 +749,7 @@ int main(int argc, char **argv){
 	broadway_pmc_init();
 	jit_pedir_arena = arena_jit;   //Arreglo
 	cpu_predec_pedir_mem = mem2_censo;   //Arreglo
+	ge_efectos_sincronizar = gx_ge_sync_vram;   //Arreglo
 	/* Las capturas de los guiones necesitan la imagen en la VRAM emulada */
 	app_set_before_capture(gx_ge_sync_vram);
 	app_set_mode_text(mode_text);

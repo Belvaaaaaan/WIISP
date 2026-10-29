@@ -210,6 +210,11 @@ al repositorio), `gcc-powerpc-linux-gnu` y `qemu-user`. Las salidas van a
   ("fin: todo bien"). Probarlo antes de llevar al Wii una microprueba
   nueva: en la 0.6.0 encontró una cadena de `lwz` que empezaba en una
   palabra a 0 (en el Wii, una DSI).
+- Volcados de efectos (0.6.2): `wiisp-cli --opt prof_efectos=1 --volcado
+  N --salida PREFIJO programa` guarda en BMP cada textura leída de la VRAM
+  en el cuadro N (fuente, alfa, índices, resultado con la paleta), con su
+  histograma y su paleta en el registro; en el autotest del Wii, `volcado
+  N` (y `hasta N` para cortar una corrida con guion).
 - Mutaciones del JIT: `mutar.py mutaciones/0.6.0.txt --dkp --solo
   interp,jit` (en `qemu-ppc -cpu 750` el código nativo corre de verdad).
 - `cpu_grande.py` + `medir_cache.sh`: fallos de caché por instrucción de la

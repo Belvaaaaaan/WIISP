@@ -51,10 +51,11 @@ const char *const vfpu_stat_name[VS_COUNT] = {
 	"vmscl", "vcrsp/vqmul", "vmmov", "vmidt/vmzero/vmone", "vrot", "vflush", "vrnd",
 	"conversiones", "vsrt/vbfy/vocp/vfad/vavg/vsgn", "vwbn", "vsbn/vsbz/vlgb",
 };
-#define VSTAT(x) (vfpu_stat_now[x]++)
+#define VSTAT(x) (vfpu_stat_now[x]++, vfpu_clase = (x))   //Arreglo
 /* Contadores de 32 bits (un u64 son seis instrucciones en el Broadway); se
    pasan a vfpu_stat en cada frame con vfpu_stats_fold() */
 u32 vfpu_stat_now[VS_COUNT];   //Arreglo
+int vfpu_clase = VS_COUNT;   //Arreglo
 u32 vfpu_stat_bv;
 #define NOINLINE __attribute__((noinline))
 

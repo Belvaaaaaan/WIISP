@@ -66,6 +66,7 @@ extern const char *const vfpu_stat_name[VS_COUNT];
 void vfpu_stats_fold(void);   /* pasa los contadores rápidos a vfpu_stat */
 extern u32 vfpu_stat_bv;      /* bvf/bvt, los cuenta el intérprete */
 extern u32 vfpu_stat_now[VS_COUNT];   //Arreglo
+extern int vfpu_clase;   //Arreglo
 extern u16 vfpu_vidx[5][128][4];   //Arreglo
 
 //Arreglo

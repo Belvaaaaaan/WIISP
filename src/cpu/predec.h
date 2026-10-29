@@ -101,6 +101,7 @@ int cpu_predec_tarjetas_ok(void);
 void cpu_predec_caida_nombre(u32 k, char *buf, u32 size);   //Arreglo
 int cpu_predec_enlaces_ok(void);   //Arreglo
 //Arreglo
+#define CENSO_VFPU_CLASES 64
 enum { CENSO_ALU, CENSO_ALUI, CENSO_LUI, CENSO_HILO, CENSO_DIV, CENSO_CARGA, CENSO_GUARDA, CENSO_NOALIN, CENSO_SALTO,
        CENSO_J, CENSO_JR, CENSO_FPU, CENSO_VFPU, CENSO_SYSCALL, CENSO_NOP, CENSO_OTRA, CENSO_N };
 typedef struct {
@@ -109,8 +110,10 @@ typedef struct {
 	u32 top_pc, top_veces;
 	u64 ejec_muertos, dir[16], desal, tirados_cpu, tirados_sin_tocar, tirados_fuera, tab_fuera;
 	u32 escritor_pc;
+	u64 vfpu_exec[CENSO_VFPU_CLASES], vfpu_tarjetas[CENSO_VFPU_CLASES], vfpu_rendidas[CENSO_VFPU_CLASES], vfpu_pfx[CENSO_VFPU_CLASES];
+	int vfpu_cuadra;
 } CensoJit;
-void cpu_predec_censo(CensoJit *out);   //Arreglo
+void cpu_predec_censo(CensoJit *out, u64 ventana);   //Arreglo
 extern void *(*cpu_predec_pedir_mem)(u32 bytes);   //Arreglo
 void cpu_predec_censo_reiniciar(void);   //Arreglo
 

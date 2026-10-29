@@ -5,6 +5,35 @@ la 0.5.17.2; antes se marcaban con `//arreglo`). Aquí va, por versión, qué
 se arregló o cambió y una descripción breve. El detalle está en
 `docs/CONTINUAR.md`.
 
+## 0.6.2
+
+Solo medidas: el diagnóstico del aura, el censo de la VFPU y la latencia.
+
+- `wii/jit_banco.c`: `reloj()` con barrera de memoria y `perseguir` con
+  `noipa` (el compilador sacaba la persecución de entre las dos lecturas
+  del reloj y la latencia salía 0); `plausible()`: una medida por debajo
+  de lo posible sale como "MEDIDA NO VALIDA" y cuenta como fallo.
+- `cpu/predec.c`, `cpu/predec_bucle.h`, `cpu/predec.h`, `cpu/vfpu.c`,
+  `cpu/vfpu.h`: censo de la VFPU dentro de `prof_jit`: por clase, por
+  tarjeta, por `vfpu_exec` (sin tarjeta o tarjeta que se rinde), con
+  prefijos y el tiempo de `vfpu_exec`; `vfpu_clase` (la clase de la
+  última instrucción que hizo `vfpu_exec`); cuadre con el contador del
+  predecodificado. `cpu_predec_censo` recibe la duración de la ventana.
+- `gpu/ge_efectos.c` (nuevo), `gpu/ge.h`, `gpu/ge_vertex.c`: `prof_efectos`,
+  el censo de los estados de stencil y alfa de cada dibujo (con lo que
+  hace y no hace GX) y de las texturas leídas de la VRAM (paleta,
+  destino, mezcla), con cuadre; el volcado en BMP de cada textura leída
+  de la VRAM en un cuadro (fuente, alfa, índices, paleta) con el
+  histograma de índices y la paleta en el registro.
+- `frontend/app.c`, `frontend/app.h`: `app_guion_volcado`. `wii/main.c`:
+  `volcado N` y `hasta N` en el autotest; la sincronización de GX para el
+  volcado. `host/main.c`: `--volcado N` (con `--salida`). `hle/hle.c`: las
+  líneas `Efectos` cada ventana.
+- `core/opt.h`, `core/opt.c`: `prof_efectos`.
+- `tests/test_efectos.c` (nuevo) y `tests/test_interp.c` (el censo de la
+  VFPU con resultados conocidos). `mutaciones/0.6.2.txt`.
+- `hle/hle.h`, `dist/apps/wiisp/meta.xml`: versión 0.6.2.
+
 ## 0.6.1
 
 El censo completo para diseñar el IR (solo medidas; detalle en CONTINUAR).

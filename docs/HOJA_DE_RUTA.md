@@ -418,6 +418,17 @@ direcciones reales, las instrucciones y la FPU), la latencia, DBAT6/7 con
 la RAM de la PSP entera y dos formas más de despachar. Sigue: el diseño
 del IR.
 
+Resultado de la 0.6.1: el censo cuenta el 100 %; DBAT6/7 funciona; la
+latencia falló otra vez (el compilador movió la persecución). El usuario
+señaló el aura de los personajes pintada en toda la pantalla (suelo
+amarillo y fantasmas).
+
+Hecha (v0.6.2): solo medidas: el diagnóstico del aura (`prof_efectos`,
+los volcados de las texturas leídas de la VRAM y una corrida con el
+renderizador por software), el censo de la VFPU y la latencia con
+comprobación de que cada medida tiene sentido. Sigue: la 0.6.3 que
+corrija el aura, con su interruptor, y después el diseño del IR.
+
 Primera tanda acordada (todas "más barato", verificables en el PC):
 0.1 `prof_espera`, **skinning rápido** (`ge_skin_rapido`), **matrices al
 cambiar** (`ge_mtx_cache`), **color constante** (`ge_color_const`), 2.1

@@ -1061,7 +1061,7 @@ static void profile_report(const char *why, int forzar){   //Arreglo
 		}
 		if(opt_on[OPT_PROF_BLOQUES]) profile_bloques_lines(&p, b, instr);   //Arreglo
 		if(opt_on[OPT_JIT_PROTO]) jit_linea(&p, b, instr);   //Arreglo
-		if(opt_on[OPT_PROF_JIT]){ cpu_predec_censo(NULL); censo_hle_linea(total, instr); }   //Arreglo
+		if(opt_on[OPT_PROF_JIT]){ cpu_predec_censo(NULL, total); censo_hle_linea(total, instr); }   //Arreglo
 	}
 	if(opt_on[OPT_PROF_ES]){
 		IoCenso c;
@@ -1116,6 +1116,7 @@ static void profile_report(const char *why, int forzar){   //Arreglo
 	        (unsigned long long)(kernel_stat_guest_calls - prof_base.guest_calls));
 	profile_ge_lines(&ge, &prof_base.ge, prof_vblanks - prof_base.vblanks);
 	profile_pmc_lines(&ge, &prof_base.ge, cpu_executed - prof_base.instr);
+	if(opt_on[OPT_PROF_EFECTOS]) ge_efectos_informe();   //Arreglo
 	/* Lo del renderizador (una línea por cada \n) */
 	extra[0] = 0;
 	if(profile_hook) profile_hook(extra, sizeof(extra));

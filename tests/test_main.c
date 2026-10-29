@@ -582,6 +582,7 @@ int main(int argc, char **argv){
 	SUITE(test_skin);   //Arreglo
 	SUITE(test_vdec);   //Arreglo
 	SUITE(test_censo);   //Arreglo
+	SUITE(test_efectos);   //Arreglo
 	SUITE(test_bbox);   //Arreglo
 	SUITE(test_listas);   //Arreglo
 	SUITE(test_tirones);   //Arreglo

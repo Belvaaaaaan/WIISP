@@ -344,6 +344,7 @@ int main(int argc, char **argv){
 	int max_imports = 16, run = 0, frames = 1800, i, exited = 0, every = 0, veces = 1, vez;
 	const char *path = NULL, *imports = NULL, *screenshot = NULL;
 	const char *guion = NULL, *salida = NULL, *grabar = NULL, *partidas = NULL;
+	int volcado = 0;   //Arreglo
 	const char *opts[64];
 	int n_opts = 0;
 
@@ -365,6 +366,7 @@ int main(int argc, char **argv){
 		else if(!strcmp(argv[i], "--log") && i + 1 < argc) hle_set_log_file(argv[++i]);   /* como wiisp.log */
 		else if(!strcmp(argv[i], "--guion") && i + 1 < argc) guion = argv[++i];
 		else if(!strcmp(argv[i], "--salida") && i + 1 < argc) salida = argv[++i];
+		else if(!strcmp(argv[i], "--volcado") && i + 1 < argc){ app_guion_volcado((unsigned)atoi(argv[++i])); volcado = 1; }   //Arreglo
 		else if(!strcmp(argv[i], "--grabar") && i + 1 < argc) grabar = argv[++i];
 		else if(!strcmp(argv[i], "--partidas") && i + 1 < argc) partidas = argv[++i];
 		else if(!strcmp(argv[i], "--capturas-guion") && i + 1 < argc) app_guion_capturas_cada((unsigned)atoi(argv[++i]));
@@ -378,7 +380,7 @@ int main(int argc, char **argv){
 	if(!path){
 		fprintf(stderr, "uso: %s [--all] [--imports FILE] [--run] [--frames N] [--quiet]\n"
 		                "          [--screenshot FILE] [--capturas N] [--log FILE] [--osk TEXTO]\n"
-		                "          [--guion FILE] [--salida PREFIJO] [--grabar FILE] [--partidas DIR]\n"
+		                "          [--guion FILE] [--salida PREFIJO] [--grabar FILE] [--partidas DIR] [--volcado N]\n"
 		                "          [--opt NOMBRE=0|1]... [--capturas-guion N] [--veces N] [--ventana N]\n"   //Arreglo
 		                "          EBOOT.PBP|archivo.elf|archivo.prx|imagen.iso|imagen.cso\n", argv[0]);
 		return 2;
@@ -423,7 +425,10 @@ int main(int argc, char **argv){
 		} else if(grabar && vez == 1 && app_guion_grabar(grabar)){
 			fprintf(stderr, "[WIISP] no se puede escribir %s\n", grabar);
 			return 1;
-		}
+		} else if(volcado && salida){   //Arreglo
+			app_capturas_sin_guion(salida);   //Arreglo
+			app_guion_capturas_cada(0);   //Arreglo
+		}   //Arreglo
 		if(app_start()) return 1;
 		run_once(limit, every, &exited);
 		app_guion_parar();

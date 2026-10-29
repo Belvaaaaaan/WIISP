@@ -48,10 +48,18 @@ static u32 malos;
 static inline u32 reloj(void){
 	u32 t;
 #if defined(GEKKO)
-	if(con_pmc) return MFSPR(953);
+	if(con_pmc){ __asm__ volatile("mfspr %0, 953" : "=r"(t) : : "memory"); return t; }
 #endif
-	__asm__ volatile("mftb %0" : "=r"(t));
+	__asm__ volatile("mftb %0" : "=r"(t) : : "memory");
 	return t * 12;
+}
+
+//Arreglo
+static void plausible(const char *que, double v, double minimo){
+	if(v >= minimo) return;
+	malos++;
+	hle_log_quiet("[PRUEBA_JIT] MEDIDA NO VALIDA: %s da %.2f (menos de %.2f: lo medido no quedo entre las dos lecturas del reloj)\n",
+	              que, v, minimo);
 }
 
 //Arreglo
@@ -142,6 +150,7 @@ static void prueba_coste_publicar(u32 *buf, u32 bytes, const char *donde){
 			if(t1 - t0 < mejor) mejor = t1 - t0;
 		}
 		len += (size_t)snprintf(l + len, sizeof(l) - len, " %u B %.1f", (unsigned)tams[k], (double)mejor / (double)(tams[k] / 32));
+		plausible("publicar, ciclos por linea", (double)mejor / (double)(tams[k] / 32), 1.0);
 	}
 	hle_log_quiet("%s\n", l);
 }
@@ -303,8 +312,10 @@ static void prueba_saltos(u32 *buf, u32 bytes, const char *donde){
 		if(!f){ c[i] = 0; len += (size_t)snprintf(l + len, sizeof(l) - len, " %s -", nom[i]); continue; }
 		c[i] = medir(f, 0, i == D_TABLA ? (u32)(uintptr_t)t2 : (u32)(uintptr_t)tabla - 4, 0, &r);
 		comprobar(nom[i], r, bien);
-		if(i) len += (size_t)snprintf(l + len, sizeof(l) - len, " %s %.2f", nom[i], (double)((s32)(c[i] - c[0])) / K_SALTOS);
-		else len += (size_t)snprintf(l + len, sizeof(l) - len, " (vacio %u ciclos)", (unsigned)c[0]);
+		if(i){
+			len += (size_t)snprintf(l + len, sizeof(l) - len, " %s %.2f", nom[i], (double)((s32)(c[i] - c[0])) / K_SALTOS);
+			plausible(nom[i], (double)((s32)(c[i] - c[0])) / K_SALTOS, 0.5);
+		} else len += (size_t)snprintf(l + len, sizeof(l) - len, " (vacio %u ciclos)", (unsigned)c[0]);
 	}
 	hle_log_quiet("%s\n", l);
 	memset(t2, 0, 8 * 1024);
@@ -354,6 +365,7 @@ static void prueba_cargas(u32 *buf, u32 bytes, u8 *datos){
 		base = medir(f, a, 0, 0, &r);
 		if(k <= C_LHBRX) comprobar(nom[k], r, a);
 		len += (size_t)snprintf(l + len, sizeof(l) - len, " %s %.2f", nom[k], (double)base / n);
+		plausible(nom[k], (double)base / n, 1.0);
 	}
 	hle_log_quiet("%s\n", l);
 }
@@ -401,7 +413,7 @@ static void prueba_prediccion(u32 *buf, u32 bytes, u8 *datos){
 static volatile u32 sumidero;
 
 //Arreglo
-static u32 __attribute__((noinline)) perseguir(u32 *p, u32 n){
+static u32 __attribute__((noinline, noipa)) perseguir(u32 *p, u32 n){
 	u32 i;
 	for(i = 0; i < n; i += 8){
 		p = (u32 *)(uintptr_t)*p; p = (u32 *)(uintptr_t)*p; p = (u32 *)(uintptr_t)*p; p = (u32 *)(uintptr_t)*p;
@@ -435,6 +447,7 @@ static void prueba_latencia(u8 *zona, u32 bytes, const char *donde){
 			if(t1 - t0 < mejor) mejor = t1 - t0;
 		}
 		len += (size_t)snprintf(l + len, sizeof(l) - len, " %u KB %.1f", (unsigned)(tams[k] / 1024), (double)mejor / n);
+		plausible("latencia, ciclos por carga", (double)mejor / n, 1.0);
 	}
 	hle_log_quiet("%s\n", l);
 }
@@ -454,6 +467,7 @@ static void prueba_codigo(u32 *buf, u32 bytes, const char *donde){
 		c = medir((Fn)(uintptr_t)buf, 0, 0, 0, &r);
 		comprobar("linea recta", r, n);
 		len += (size_t)snprintf(l + len, sizeof(l) - len, " %u KB %.2f", (unsigned)(tams[k] / 1024), (double)c / n);
+		plausible("linea recta, ciclos por instruccion", (double)c / n, 0.5);
 	}
 	hle_log_quiet("%s\n", l);
 }
@@ -514,6 +528,8 @@ static void banco_cpu(void){
 			cpu_run(n);
 			t1 = reloj();
 			c[k] = t1 - t0;
+			plausible(k ? "CPU de la PSP con jit_proto, ciclos por instruccion" : "CPU de la PSP con tarjetas, ciclos por instruccion",
+			          (double)c[k] / n, 1.0);
 			fin[k] = cpu;
 		}
 		len += (size_t)snprintf(l + len, sizeof(l) - len, " %s %.1f / %.1f%s", nom[p], (double)c[0] / n, (double)c[1] / n,
@@ -581,6 +597,7 @@ static void prueba_dsi(u32 *buf){
 	              "cuesta %u ciclos con la DSI y %u sin ella: %u por DSI de ida y vuelta\n", (unsigned)r2, (unsigned)(g_dsi - d0),
 	              (unsigned)g_dar, (unsigned)g_dsisr, (unsigned)c_mal, (unsigned)c_bien, (unsigned)(c_mal - c_bien));
 	comprobar("lwz normal", r, 0x1234);
+	plausible("DSI de ida y vuelta, ciclos", (double)c_mal - (double)c_bien, 20.0);
 	if(g_dsi - d0 != 9) malos++;
 	hle_log_sync();
 }
@@ -645,6 +662,8 @@ static void prueba_dbat(void){
 	CON_IRQ(nivel);
 	c_bat = cadena(psp_mem.ram + (4u << 20), 1u << 20, 0x08000000u + desp + (4u << 20));
 	c_ram = cadena(psp_mem.ram + (4u << 20), 1u << 20, ram + (4u << 20));
+	plausible("latencia por el BAT, ciclos por carga", (double)c_bat / 16384.0, 1.0);
+	plausible("latencia por la RAM, ciclos por carga", (double)c_ram / 16384.0, 1.0);
 	SIN_IRQ(nivel);
 	__asm__ volatile("sync" ::: "memory");
 	MTSPR(572, 0);

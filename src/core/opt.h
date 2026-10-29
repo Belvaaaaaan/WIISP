@@ -50,6 +50,7 @@ enum {
 	OPT_PRUEBA_PS,   //Arreglo
 	OPT_PROF_JIT,   //Arreglo
 	OPT_PRUEBA_JIT,   //Arreglo
+	OPT_PROF_EFECTOS,   //Arreglo
 	/* Primera tanda del GE (resultado idéntico) */
 	OPT_GE_SKIN_RAPIDO,   /* skinning mezclando las matrices por peso */
 	OPT_GE_MTX_CACHE,     /* matrices combinadas solo cuando cambian */

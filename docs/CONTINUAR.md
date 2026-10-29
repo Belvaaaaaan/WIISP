@@ -3848,6 +3848,105 @@ Autotest (3 registros y un `.capturas.txt`):
   por muestreo y las estadísticas de bloques; va más lento);
 - imagenes: las capturas, todo como siempre.
 
+### Resultado de la 0.6.1 en el Wii (DBZ: sin / censo / imagenes)
+
+- El censo cuenta el 100 % en todas las ventanas (en la 4200-4800, 209,8
+  M de 217,9 M venían de bloques que murieron por vaciados): ya no pierde
+  nada. La tabla por pc no se llenó (20-26 mil bloques por ventana).
+- Pelea (ventana final): el 50/75/90/99 % de lo ejecutado está en 2,2 /
+  9,1 / 29,8 / 75 mil instrucciones; 5,7 instrucciones por bloque; por
+  bloque, el 97 % de lo ejecutado usa 12 registros o menos; los 16
+  registros más usados son el 92 % de los accesos.
+- Mezcla de la pelea: FPU 11,6 % (`lwc1`/`swc1` 5,6 %; `mul.s`, `add.s`,
+  `c.lt.s`, `sub.s`, `trunc.w.s`), VFPU 9,3 %, "likely" 3,9 %,
+  `lwl`/`lwr` 1,3 %.
+- Memoria al ejecutarse: 99,98 % por 0x0…, 0,02 % por el espejo 0x4…, 0
+  desalineados, memoria lenta casi 0.
+- HLE sin lo de dentro: 1,6-1,9 % en la pelea, hasta 7,9 % en los menús
+  (`sceKernelReceiveMbxCB` ~17 us cada una); 0,6-2 llamadas por 1000
+  instrucciones.
+- Escrituras en código: en la pelea, 0. En los menús, una variable en
+  0x0880444C escrita desde 08A82810 (559) y 08A83088 (185) tira 8385
+  bloques por ventana sin tocar ninguna instrucción (comparte la zona de
+  1 KB con código); `sceIoRead` tira 350-600 al cargar.
+- CPU por dentro (muestreo, pelea): la VFPU que va por `vfpu_exec` es el
+  10,7 % de la CPU (5,9 M llamadas, 262 ns cada una); la FPU, 3,4 %;
+  buscar y traducir, 1,9 %.
+- Microprobas: DBAT6/7 funciona (la RAM de la PSP entera en 0x08000000, a
+  dirección + 0x800; 0 palabras distintas; el alias escribe en la RAM; las
+  BAT vuelven como estaban). `b` con presupuesto 3 ciclos, `jr` por tabla
+  con etiqueta 10. La latencia salió 0,0 otra vez: el compilador movió la
+  persecución (una función "pura") antes de la primera lectura del reloj;
+  se vio en el desensamblado de la 0.6.1.
+- Gráficos (el usuario lo señaló con capturas): el aura de los personajes
+  (un posproceso que lee el alfa del cuadro como índice de una paleta,
+  pinta una máscara en 0x04158000 y la suma desplazada 1 píxel 4 veces)
+  sale en toda la pantalla: el suelo amarillo (el aura de Goku SSJ3) y
+  copias fantasma de los personajes. Hipótesis: el alfa del EFB tiene 6
+  bits y al pasar a 8 los bits bajos repiten los altos (0x80 vuelve
+  0x82, índice 2 con la máscara 7F), o el stencil que no imita GX
+  (solo `ZERO`/`REPLACE` y sin la prueba), o la copia de un cuadro
+  anterior.
+
+### v0.6.2: diagnóstico del aura, censo de la VFPU y la latencia (solo medidas)
+
+- Latencia: `reloj()` lleva una barrera de memoria (`"memory"`) y
+  `perseguir` es `noipa`; en el desensamblado del `.dol`, la llamada queda
+  entre las dos lecturas (con PMC y con la base de tiempo, en
+  `prueba_latencia` y en la de DBAT). Cada medida pasa por `plausible()`:
+  si da menos de lo posible (por ejemplo, menos de 1 ciclo por carga),
+  sale "MEDIDA NO VALIDA" y cuenta como fallo; ya no puede salir "todo
+  bien" con una medida rota.
+- Censo de la VFPU (con `prof_jit`, línea `Censo JIT, VFPU`): por clase de
+  instrucción, cuántas van por tarjeta, cuántas por `vfpu_exec` (sin
+  tarjeta o porque la tarjeta se rinde), cuántas con prefijos y el tiempo
+  de `vfpu_exec` (total, por llamada y % de la ventana); `vfpu_exec` dice
+  la clase de cada instrucción (`vfpu_clase`). Cuadra con el contador del
+  predecodificado (lo dice la línea).
+- `prof_efectos` (nuevo, en el GE común: vale igual con GX y con
+  software): por cada dibujo, el estado de stencil y de alfa (framebuffer,
+  borrado, función/ref/máscara, sfail/zfail/zpass, máscara del alfa, z,
+  mezcla) y lo que hace y no hace con eso el camino de GX; las texturas
+  leídas de la VRAM con su paleta, su destino y su mezcla. Cuadra: los
+  dibujos de la tabla suman el total.
+- `volcado N` (autotest; `--volcado N` con `--salida` en el CLI): en el
+  cuadro N, cada textura leída de la VRAM (hasta 6) se guarda en BMP: la
+  fuente, su alfa (si es de 32 bits), los índices de paleta y el
+  resultado con la paleta, y en el registro su histograma de índices y
+  las primeras entradas de la paleta. Con GX se sincroniza antes la VRAM
+  con la GPU (`ge_efectos_sincronizar`): se ve lo que tiene GX.
+- `hasta N` (autotest): corta una corrida con guion en el cuadro N.
+
+Pruebas: x86 con ASan 211.314 comprobaciones, 0 fallos; PowerPC bajo qemu
+406.532 y devkitPPC 406.533, 0 fallos; `test_efectos` y el censo de la
+VFPU (en `test_interp`) con resultados conocidos; pspautotests 275/275;
+mutaciones (`mutaciones/0.6.2.txt`, `mutar.py --solo interp,efectos`): 12
+de 12 (la que sobrevivía, "la clave de escritura no mira las
+operaciones", obligó a probar dos estados que solo difieren en la
+operación); A/B con el CLI de GX (555): 0.6.1 contra 0.6.2,
+`prof_efectos` 0/1 y `prof_jit` 0/1, 0 distintos; con el CLI del PC, el
+volcado de `gpu/rendertarget/depal` (dos lecturas de framebuffer como
+CLUT32, con su histograma y su paleta); las microprobas en qemu, "todo
+bien"; en el `.dol`, la persecución entre las dos lecturas del reloj.
+
+Autotest (3 registros y 2 `.capturas.txt`; aparte, los BMP de los
+volcados):
+- sin: como siempre, con `prueba_jit` (la latencia, ahora sí, y las
+  medidas que se comprueban solas);
+- censo: GX con `prof_jit` (y la VFPU), `prof_bloques`, `prof_cpu` y
+  `prof_efectos`, capturas cada 400 y `volcado 4000`;
+- soft: la misma escena con el renderizador por software hasta el cuadro
+  4100 (`hasta 4100`), con `prof_efectos`, capturas y `volcado 4000`.
+
+Qué mirar: si las capturas de "soft" salen como la PSP (sin suelo
+amarillo ni fantasmas: entonces el fallo está en GX) o igual de mal
+(entonces está en el GE común); los volcados `ef4000` de las dos
+corridas (el alfa del cuadro y la máscara de 0x04158000, y sus
+histogramas: ¿qué índices ve el efecto en GX y en software?); las líneas
+`Efectos` (qué stencil usa el juego y si GX lo hace); el censo de la
+VFPU (qué clases van por `vfpu_exec` y cuánto cuestan) y la latencia de
+MEM1/MEM2.
+
 ### Para el siguiente chat (empezar aquí)
 
 Metodología acordada (detalle en `docs/HOJA_DE_RUTA.md`): primero medir
@@ -3881,11 +3980,12 @@ Metodología acordada (detalle en `docs/HOJA_DE_RUTA.md`): primero medir
   devkitPPC, perfil por función, psq_l emulado, A/B) y para leer los
   registros del Wii (`ventanas.py`): `tools/banco/LEEME.md`. El entorno
   (devkitPPC, qemu, pspautotests, PPSSPP): `tools/setup_entorno.sh`.
-- **Siguiente:** leer los registros de la 0.6.1 (el censo completo de la
-  pelea, el HLE sin lo de dentro, quién escribe en las zonas con código,
-  los espejos, la latencia de MEM1/MEM2 y DBAT6/7) y, con eso, el diseño
-  del IR propiamente dicho. Lo de la 0.6.0 (ya leído, ver su resultado):
-  `jit_proto` correcto pero más lento (salir a C en cada bloque). Opcionales: la pantalla en pares (si `ps_div` y los merges
+- **Siguiente:** leer los registros de la 0.6.2: el diagnóstico del aura
+  (las líneas `Efectos` y los volcados `ef4000` de GX y de software:
+  ¿el software sale bien?, ¿qué alfa ve el efecto?), el censo de la VFPU
+  y la latencia. Después, la 0.6.3 que corrija el aura (con su
+  interruptor) y, después, el diseño del IR. Lo de la 0.6.1 (ya leído,
+  ver su resultado). Opcionales: la pantalla en pares (si `ps_div` y los merges
   salen a 0 en la autoprueba), la caché de huesos (~2 %), los índices CI8
   por la GPU y la charola parcial de los menús. El limitador de
   velocidad, al final de todo.

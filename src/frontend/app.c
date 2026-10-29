@@ -293,6 +293,7 @@ static AppOskFunc osk_func;
 static void (*before_capture)(void);
 static void (*mode_text)(char *buf, size_t size);
 static unsigned capturas_cada = 400;
+static unsigned volcado_cuadro;   //Arreglo
 
 #ifndef HUELLA_CADA
 #define HUELLA_CADA 60    /* cuadros entre huellas (-DHUELLA_CADA=1: cada cuadro) */
@@ -398,6 +399,7 @@ static void capturar(int pedida){
 
 void app_set_mode_text(void (*fn)(char *buf, size_t size)){ mode_text = fn; }
 void app_guion_capturas_cada(unsigned cuadros){ capturas_cada = cuadros; }
+void app_guion_volcado(unsigned cuadro){ volcado_cuadro = cuadro; }   //Arreglo
 
 void app_capturas_sin_guion(const char *prefijo){
 	if(gs.modo) return;
@@ -553,8 +555,10 @@ int app_run_frame(void){
 	if(gs.terminado) return 1;
 	if(gs.modo == G_REPRODUCIR && guion_paso()) return 1;
 	if((gs.modo || gs.prefijo[0]) && capturas_cada && frames_run && frames_run % capturas_cada == 0) capturar(0);
+	if(volcado_cuadro && frames_run + 1 == volcado_cuadro && gs.prefijo[0]) ge_efectos_volcado(gs.prefijo, volcado_cuadro);   //Arreglo
 	frames_run++;
 	r = hle_run_frame();
+	if(volcado_cuadro && frames_run == volcado_cuadro) ge_efectos_volcado(NULL, 0);   //Arreglo
 	if(gs.modo && r){
 		huella("termino", 1);
 		gs.termino = 1;

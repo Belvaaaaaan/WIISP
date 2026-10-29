@@ -3080,6 +3080,7 @@ void ge_draw_prim(u32 prim, u32 count){
 	int sucio = opt_on[OPT_GE_ESTADO_SUCIO], bbv = 0, bbs;   //Arreglo
 
 	if(count == 0) return;
+	if(opt_on[OPT_PROF_EFECTOS]) ge_efectos_dibujo(prim, count);   //Arreglo
 	if(sucio || opt_on[OPT_PROF_ESTADO]) estado_entorno();
 	if(opt_on[OPT_GE_CHAROLAS_GE]){   //Arreglo
 		if(!(sucio && es.f_ok && es.f_vt == vt)){   //Arreglo

@@ -30,6 +30,9 @@ PREDEC_ATRIB static u32 PREDEC_BUCLE(u32 max_cycles){   //arreglo
 #define RAS_PUSH() do { if(ra) ras_push(cblk->end); } while(0)   //Arreglo
 #define CENSO_ESC(o, size) do { if(pj) censo_escritura((o), (size), IPC()); } while(0)   //Arreglo
 #define CENSO_DIR(a, size) do { if(pj){ cz.dir[(a) >> 28]++; cz.desal += ((a) & ((size) - 1)) != 0; } } while(0)   //Arreglo
+#define CENSO_VFPU_ANTES() u64 vt0_ = 0; int vpf_ = 0; if(pj) vt0_ = censo_vfpu_antes(&vpf_)   //Arreglo
+#define CENSO_VFPU_DESPUES(r) do { if(pj) censo_vfpu_despues(vt0_, (r), vpf_); } while(0)   //Arreglo
+#define CENSO_VT(vs) do { if(pj) czv.tarjetas[vs]++; } while(0)   //Arreglo
 #else   //Arreglo
 #define FASE(f) ((void)0)   //Arreglo
 #define CAIDA(m) ((void)0)   //Arreglo
@@ -37,6 +40,9 @@ PREDEC_ATRIB static u32 PREDEC_BUCLE(u32 max_cycles){   //arreglo
 #define RAS_PUSH() ((void)0)   //Arreglo
 #define CENSO_ESC(o, size) ((void)0)   //Arreglo
 #define CENSO_DIR(a, size) ((void)0)   //Arreglo
+#define CENSO_VFPU_ANTES() ((void)0)   //Arreglo
+#define CENSO_VFPU_DESPUES(r) ((void)0)   //Arreglo
+#define CENSO_VT(vs) ((void)0)   //Arreglo
 #endif   //Arreglo
 	u32 pc, npc, left, seg, bt = 0;
 	const Card *c = NULL;
@@ -265,7 +271,11 @@ x_vfpu:   //Arreglo
 	SYNC_AT();   //Arreglo
 	CONTAR(st.vfpu++);   //Arreglo
 	FASE(CPF_VFPU);   //Arreglo
-	vfpu_exec(RAW(), IPC());   //Arreglo
+	{   //Arreglo
+		CENSO_VFPU_ANTES();   //Arreglo
+		vfpu_exec(RAW(), IPC());   //Arreglo
+		CENSO_VFPU_DESPUES(1);   //Arreglo
+	}   //Arreglo
 	FASE(CPF_TARJETAS);   //Arreglo
 	if(unlikely(cpu_stop_requested || !cblk->alive)) goto x_after;   //Arreglo
 	{ const void *n_ = c[1].h; c++; goto *n_; }   //Arreglo
@@ -430,7 +440,11 @@ ret:
 		SYNC_AT();
 		CONTAR(st.vfpu++);   //Arreglo
 		FASE(CPF_VFPU);   //Arreglo
-		vfpu_exec(compacto ? c->a.w : RAW(), IPC());   //arreglo
+		{   //Arreglo
+			CENSO_VFPU_ANTES();   //Arreglo
+			vfpu_exec(compacto ? c->a.w : RAW(), IPC());   //arreglo
+			CENSO_VFPU_DESPUES(0);   //Arreglo
+		}   //Arreglo
 		FASE(CPF_TARJETAS);   //Arreglo
 		if(unlikely(cpu_stop_requested || !cblk->alive)) goto x_after;
 	})
@@ -439,6 +453,7 @@ ret:
 		const int r_ = vfpu_tarjeta(OP_##name, c, r8, ram, lim4); \
 		if(unlikely(!r_)) goto x_vfpu; \
 		vfpu_stat_now[vs]++; \
+		CENSO_VT(vs); \
 		CONTAR(st.vfpu_tarjetas++); \
 		if(r_ == 2 && !cblk->alive) goto x_after; \
 		c++; \
@@ -611,4 +626,7 @@ ret:
 #undef RAS_PUSH   //Arreglo
 #undef CENSO_ESC   //Arreglo
 #undef CENSO_DIR   //Arreglo
+#undef CENSO_VFPU_ANTES   //Arreglo
+#undef CENSO_VFPU_DESPUES   //Arreglo
+#undef CENSO_VT   //Arreglo
 }

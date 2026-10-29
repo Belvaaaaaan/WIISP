@@ -419,7 +419,7 @@ static void one_program(int prog, int faults, Snap *init, Snap *ra, Snap *rb, Sn
 		run_chunks(rc, chunks, 2);
 		CHECK(same(ra, rc, prog));
 		CHECK(cpu_predec_enlaces_ok());   //Arreglo
-		if(opt_on[OPT_PROF_JIT] && prog % 23 == 4){ hle_set_log_screen(0); cpu_predec_censo(NULL); hle_set_log_screen(1); }   //Arreglo
+		if(opt_on[OPT_PROF_JIT] && prog % 23 == 4){ hle_set_log_screen(0); cpu_predec_censo(NULL, 0); hle_set_log_screen(1); }   //Arreglo
 	}
 	opt_on[OPT_PROF_JIT] = 0;   //Arreglo
 }
@@ -546,7 +546,7 @@ void test_interp(void){
 		opt_on[OPT_PROF_JIT] = 1;
 		hle_set_log_screen(0);
 		cpu_predec_flush();
-		cpu_predec_censo(NULL);
+		cpu_predec_censo(NULL, 0);
 		mem_write32(P, rtype(0, 2, 3, 2, 0, 0x21));
 		mem_write32(P + 4, itype(0x09, 4, 4, 1));
 		mem_write32(P + 8, itype(0x05, 4, 5, 0xFFFD));
@@ -560,7 +560,7 @@ void test_interp(void){
 		cpu.npc = P + 4;
 		cpu_stop_requested = 0;
 		cpu_run(42);
-		cpu_predec_censo(&c);
+		cpu_predec_censo(&c, 0);
 		CHECK_EQ(cpu.r[2], 50u);
 		CHECK_EQ(c.entradas, 11u);
 		CHECK_EQ(c.instr_entradas, 42u);
@@ -590,7 +590,7 @@ void test_interp(void){
 			cpu_run(42);
 			cpu_predec_flush();
 		}
-		cpu_predec_censo(&c);
+		cpu_predec_censo(&c, 0);
 		CHECK_EQ(c.ejec, 84u);
 		CHECK_EQ(c.ejec_muertos, 84u);
 		CHECK_EQ(c.bloques, 2u);
@@ -614,7 +614,7 @@ void test_interp(void){
 		cpu.pc = P2;
 		cpu.npc = P2 + 4;
 		cpu_run(90);
-		cpu_predec_censo(&c);
+		cpu_predec_censo(&c, 0);
 		CHECK_EQ(cpu.pc, P2);
 		CHECK_EQ(c.entradas, 20u);
 		CHECK_EQ(c.ejec, 90u);
@@ -640,7 +640,7 @@ void test_interp(void){
 		cpu.npc = P2 + 4;
 		cpu_run(9);
 		cpu_predec_store(P2 + 64 - PSP_RAM_BASE, 4);
-		cpu_predec_censo(&c);
+		cpu_predec_censo(&c, 0);
 		CHECK_EQ(c.tirados_fuera, 2u);
 		CHECK_EQ(c.tirados_cpu, 0u);
 		CHECK_EQ(c.ejec_muertos, 9u);
@@ -653,7 +653,7 @@ void test_interp(void){
 		cpu.pc = P3;
 		cpu.npc = P3 + 4;
 		cpu_run(4);
-		cpu_predec_censo(&c);
+		cpu_predec_censo(&c, 0);
 		CHECK_EQ(cpu.pc, P3 + 8);
 		CHECK_EQ(c.esc_cpu, 1u);
 		CHECK_EQ(c.esc_instr, 1u);
@@ -668,10 +668,41 @@ void test_interp(void){
 		cpu.pc = P3;
 		cpu.npc = P3 + 4;
 		cpu_run(4);
-		cpu_predec_censo(&c);
+		cpu_predec_censo(&c, 0);
 		CHECK_EQ(c.esc_instr, 0u);
 		CHECK_EQ(c.tirados_cpu, 1u);
 		CHECK_EQ(c.tirados_sin_tocar, 1u);
+		{
+			const u32 P5 = 0x08A01C00u;
+			opt_on[OPT_CPU_VFPU_TARJETAS] = 1;
+			opt_on[OPT_CPU_VFPU_ARIT] = 1;
+			opt_on[OPT_CPU_VFPU_VERIFICAR] = 0;
+			hle_vfpu_load();
+			mem_write32(P5, 0x48E40000u);
+			mem_write32(P5 + 4, 0xF3838080u);
+			mem_write32(P5 + 8, 0xDC0000E5u);
+			mem_write32(P5 + 12, 0x60000000u);
+			mem_write32(P5 + 16, (2u << 26) | ((P5 >> 2) & 0x03FFFFFFu));
+			mem_write32(P5 + 20, 0);
+			memset(&cpu, 0, sizeof(cpu));
+			cpu.r[4] = 0x3F800000u;
+			cpu.pc = P5;
+			cpu.npc = P5 + 4;
+			cpu_predec_censo(NULL, 0);
+			cpu_run(60);
+			cpu_predec_censo(&c, 0);
+			CHECK_EQ(cpu.pc, P5);
+			CHECK_EQ(c.vfpu_tarjetas[VS_MTV], 10u);
+			CHECK_EQ(c.vfpu_tarjetas[VS_VPFX], 10u);
+			CHECK_EQ(c.vfpu_exec[VS_VMINIT], 10u);
+			CHECK_EQ(c.vfpu_exec[VS_VADD], 10u);
+			CHECK_EQ(c.vfpu_rendidas[VS_VADD], 10u);
+			CHECK_EQ(c.vfpu_rendidas[VS_VMINIT], 0u);
+			CHECK_EQ(c.vfpu_pfx[VS_VADD], 10u);
+			CHECK_EQ(c.vfpu_pfx[VS_VMINIT], 0u);
+			CHECK_EQ(c.vfpu_exec[VS_COUNT], 0u);
+			CHECK(c.vfpu_cuadra);
+		}
 		hle_set_log_screen(1);
 		opt_on[OPT_PROF_JIT] = 0;
 	}

@@ -118,6 +118,7 @@ void app_set_before_capture(void (*fn)(void));
    juego. Ojo: guardar un BMP en la SD tarda, así que para medir velocidad
    conviene ponerlo a 0. */
 void app_guion_capturas_cada(unsigned cuadros);
+void app_guion_volcado(unsigned cuadro);   //Arreglo
 /* Las mismas capturas periódicas jugando sin guion: <prefijo>.c<cuadro>.bmp
    y <prefijo>.capturas.txt. Se llama después de app_load y antes de
    app_start; app_guion_parar las termina. */

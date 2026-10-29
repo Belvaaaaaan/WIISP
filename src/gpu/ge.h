@@ -138,6 +138,17 @@ extern u32 ge_sync_domain;
    mucho más rápido mientras la pantalla se queda quieta. */
 extern int ge_turbo;
 
+//Arreglo
+typedef struct {
+	u32 dibujos, n_escr, n_lect, escr_dibujos, escr_vertices, lect_dibujos, volcados, archivos, vol_top_idx, vol_top_n;
+	int cuadra;
+} EfectosDatos;
+void ge_efectos_dibujo(u32 prim, u32 count);   //Arreglo
+void ge_efectos_informe(void);   //Arreglo
+void ge_efectos_volcado(const char *prefijo, unsigned cuadro);   //Arreglo
+void ge_efectos_datos(EfectosDatos *d);   //Arreglo
+extern void (*ge_efectos_sincronizar)(void);   //Arreglo
+
 /* Reloj del anfitrión para medir el GE (perfilado); NULL = sin medir */
 extern unsigned long long (*ge_host_clock)(void);
 #ifdef WIISP_PROF

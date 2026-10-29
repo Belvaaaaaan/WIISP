@@ -31,6 +31,7 @@ const OptInfo opt_info[OPT_N] = {
 	[OPT_PRUEBA_PS]      = { "prueba_ps",      1, 0 },   //Arreglo
 	[OPT_PROF_JIT] = { "prof_jit", 1, 0 },   //Arreglo
 	[OPT_PRUEBA_JIT] = { "prueba_jit", 1, 0 },   //Arreglo
+	[OPT_PROF_EFECTOS] = { "prof_efectos", 1, 0 },   //Arreglo
 	[OPT_GE_SKIN_RAPIDO] = { "ge_skin_rapido", 1, 1 },
 	[OPT_GE_MTX_CACHE]   = { "ge_mtx_cache",   1, 1 },
 	[OPT_GE_COLOR_CONST] = { "ge_color_const", 0, 0 },
