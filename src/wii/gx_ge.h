@@ -20,6 +20,7 @@ int  gx_ge_enabled(void);
 
 /* Olvida todos los búferes y texturas (al empezar o acabar un programa) */
 void gx_ge_reset(void);
+void gx_ge_prueba(void);   //Arreglo
 
 /* Si el framebuffer que muestra la PSP está en la GPU, lo copia escalado
    al XFB y devuelve 1. Devuelve 0 si hay que convertirlo desde la VRAM. */

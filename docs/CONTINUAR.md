@@ -3947,6 +3947,117 @@ histogramas: ¿qué índices ve el efecto en GX y en software?); las líneas
 VFPU (qué clases van por `vfpu_exec` y cuánto cuestan) y la latencia de
 MEM1/MEM2.
 
+### Resultado de la 0.6.2 en el Wii (DBZ: sin / censo / soft)
+
+- La corrida por software (soft) sale bien (el usuario: sin suelo amarillo
+  ni fantasmas): el GE común emula bien el aura y el fallo está en la
+  traducción a GX. Las capturas de GX (censo) dan las huellas de siempre
+  (9E8BC705 … 8B0AF11D, E9392291). El software va al 1,3-5,2 % en la
+  pelea (contra ~50 % con GX): la CPU pinta cada píxel; era solo para el
+  diagnóstico.
+- `Efectos` (pelea): los personajes se dibujan con stencil ALWAYS y zpass
+  REPLACE, cada uno con su número (0x01, 0x05, 0x06, 0x08, 0x0D, 0x1C,
+  0x1F), en el alfa de 0x04000000/0x04088000; lo mismo en 0x04158000 4444
+  64x64 sin escribir el alfa (las sombras: se leen como CLUT16 >>0 y >>1
+  &01). El aura: (1) CLUT32 del cuadro por el alfa (>>24 &7F, paleta 565
+  en 0x04000780, el relleno de la primera fila) a 0x04158000 565 sin
+  mezcla; (2) lo mismo con la paleta de 0x08000780, desplazado (u = x +
+  0,75, v = y - 0,69, filtro lineal) y con la diferencia absoluta (mezcla
+  5); (3) CLUT16 de 0x04158000 (>>5 &FF, paleta 0x08AF0900) multiplicado
+  sobre el cuadro (src DSTCOLOR, dst FIX 0) en cuatro copias desplazadas.
+  En GX, el CLUT32 lee el alfa del EFB en RGBA6 (124 de 124 veces "alfa en
+  GPU"): 0x01 vuelve 0x00, 0x05 y 0x06 vuelven 0x04, 0x0D vuelve 0x0C, 0x1F
+  vuelve 0x1C; y la diferencia absoluta era la resta de GX (D - S).
+- Volcados: ninguno. El aura no se dibuja en todos los cuadros y en el
+  4000 no hubo ninguna lectura de la VRAM (fallo del diseño del volcado:
+  armado solo en ese cuadro). La tabla de escrituras se llenó (64 sitios,
+  15.338 dibujos sin sitio).
+- Latencia (por fin medida, con las comprobaciones): L1 2,0 ciclos, L2
+  11,5, MEM1 48,5, MEM2 148,7; por el alias de DBAT6, 148,8 (lo mismo).
+- VFPU (pelea): lo que va por `vfpu_exec` es el 6,8 % del tiempo de la
+  ventana (316 ns por instrucción); las clases que más pesan: `vmov` (casi
+  siempre con prefijos), `vtfm`/`vhtfm`, las conversiones, `vmmul`,
+  `vidt`/`vzero`/`vone`, `vdot` y `vcmp`. El censo cuadra con el contador.
+
+### v0.6.3: el aura en GX (`gx_stencil_exacto`, `gx_absdiff`)
+
+- `gx_stencil_exacto` (`wii/gx_stencil.h` y `gx_ge.c`): cada búfer de color
+  con el alfa en la GPU lleva una tabla de códigos. El EFB en RGBA6 guarda
+  6 bits de alfa; cada valor de stencil distinto que se escribe recibe su
+  propio código de 6 bits: el natural (`v >> 2`) si nadie lo usa, si no el
+  libre más cercano (los de DBZ: 0x00→0, 0x01→1, 0x05→2, 0x06→3, 0x08→4,
+  0x0D→5, 0x1C→7, 0x1F→8, según el orden en que lleguen). Se escribe con
+  su código: el stencil REPLACE/ZERO (`GX_SetDstAlpha`), los borrados por
+  rectángulo (también con `GX_SetDstAlpha`), el alfa uniforme al promover
+  el búfer a RGBA6, el alfa de la VRAM al promover (hasta 64 valores
+  distintos, en orden: `st_monotono`; con más, como antes) y las filas del
+  hueco. Se traduce de vuelta (`dec`, del alfa de 8 bits que da la copia
+  del EFB, con cualquiera de los 2 bits bajos) al bajar a la VRAM y en la
+  TLUT del CLUT32 que lee el alfa desde la GPU (`ge_rtt_gpu`): la TLUT se
+  arma ya permutada, sin coste por píxel. La tabla se vacía al promover
+  (todo el alfa del EFB se reescribe). Un borrado de triángulos en modo
+  clear (alfa del vértice, que no se controla) cierra la tabla: los
+  valores con código siguen exactos y los nuevos van como antes. Mientras
+  un valor tiene su código natural, GX recibe lo mismo que antes; con el
+  interruptor apagado, todo es lo de antes (A/B: 0 distintos en 555).
+  Lo que no arregla: una mezcla que lea el alfa del destino o una textura
+  que lea el alfa del búfer ven el código (el valor ± unos pocos); se
+  cuenta en la línea `gx_stencil_exacto` (con códigos que no son el alfa).
+  La prueba del stencil sigue sin hacerse en GX.
+- `gx_absdiff`: `|fuente - destino|` en el TEV. La copia del destino (la
+  del búfer, `efb_to_tex`) se muestrea en el píxel (TEXCOORD2 desde la
+  posición con TEXMTX1: 1/ancho, 1/alto y un cuarto de texel para no
+  depender de si GX muestrea en el centro o en la esquina, filtro NEAR,
+  TEXMAP3) y tres etapas: REG0 = S - D, PREV = D - S (las dos saturan en 0)
+  y PREV + REG0; mezcla NONE. Va después de la niebla y antes del
+  tramado, como en la PSP (la diferencia absoluta no usa los factores).
+  Cada primitiva marca su rectángulo; la copia se hace al empezar cada
+  llamada de dibujo y otra vez solo si una primitiva pisa lo ya dibujado
+  desde la última (las 15 tiras de 32 columnas del aura: una copia). Sin
+  charolas ni triángulos juntos mientras está puesta.
+- `prueba_gx` (antes de cargar el juego, líneas `[PRUEBA_GX]`): escribe los
+  256 alfas en RGBA6 por el TEV y por `GX_SetDstAlpha`, los lee con una
+  copia A8 y dice cuántos son `(v>>2)<<2` y cuántos con los 2 bits altos
+  repetidos (lo que se supuso), más unos ejemplos; si los 64 códigos y los
+  8 valores de DBZ (con la tabla) vuelven exactos; y la diferencia
+  absoluta del TEV contra la cuenta de la CPU, píxel a píxel (1024
+  primitivas de 1x1) y con un cuadro de 64x16 (la coordenada desde la
+  posición en una primitiva grande). "(MAL)" si algo falla.
+- Volcado: queda armado desde el cuadro pedido hasta volcar 8 lecturas
+  distintas (textura, formato, paleta y dirección de la paleta) o 1800
+  cuadros; los archivos llevan el cuadro en que se volcaron
+  (`.ef<cuadro>.<n>.*`) y al terminar sale `[EFECTOS] volcado terminado`.
+
+Pruebas: x86 con ASan 213.591 comprobaciones, 0 fallos; PowerPC bajo qemu
+408.809 y devkitPPC 408.810, 0 fallos; `test_gxstencil` (los valores de DBZ
+con las tres formas posibles de expandir 6 bits a 8, la tabla llena, el
+orden de `st_monotono`, cerrar, 3000 rondas al azar y la TLUT permutada)
+y `test_efectos` (el volcado entre cuadros, la clave con la dirección de
+la paleta, la espera máxima, la tabla de 512 y su vaciado); pspautotests
+275/275 (con el CLI recompilado: el de `build-pc` era de antes de la
+0.6.2); mutaciones (`mutaciones/0.6.3.txt`, `--solo gxstencil,efectos`):
+13 de 13 (la que sobrevivía, "la tabla de escrituras no se vacía", obligó
+a dibujar otra vez después del informe); A/B con el CLI de GX (555): 0.6.2
+contra 0.6.3 con los dos interruptores apagados, 0 distintos; con los de
+por defecto, 3 (`gpu/reflection/reflection` por `gx_stencil_exacto`: su
+stencil 1 recibe el código 1 en vez de quedarse en 0; `gpu/commands/blend`
+y `blend565` por `gx_absdiff`: sus `GU_ABS`); `prueba_gx` corre entera en
+qemu (`PRUEBA_GX=1`, sin GPU: sale "(MAL)", como debe); el volcado
+armado en el CLI del PC con `gpu/rendertarget/depal` (armado en el cuadro
+1, vuelca las dos lecturas del cuadro 2). Lo que solo se ve en el Wii (la
+GPU de verdad): `prueba_gx` y las capturas.
+
+Autotest (3 registros y 2 `.capturas.txt`; aparte, las capturas y los BMP
+de los volcados):
+- antes: GX como en la 0.6.2 (`gx_stencil_exacto 0`, `gx_absdiff 0`),
+  capturas cada 400 y, antes de cargar el juego, `prueba_gx`;
+- con: GX con el arreglo, capturas cada 400, `prof_efectos` y `volcado
+  4000`;
+- soft: la misma escena por software hasta el cuadro 4100 (`hasta 4100`),
+  solo para los volcados de referencia (lenta, cerca de una hora).
+
+Qué mirar: lo de **Siguiente** (abajo).
+
 ### Para el siguiente chat (empezar aquí)
 
 Metodología acordada (detalle en `docs/HOJA_DE_RUTA.md`): primero medir
@@ -3980,12 +4091,19 @@ Metodología acordada (detalle en `docs/HOJA_DE_RUTA.md`): primero medir
   devkitPPC, perfil por función, psq_l emulado, A/B) y para leer los
   registros del Wii (`ventanas.py`): `tools/banco/LEEME.md`. El entorno
   (devkitPPC, qemu, pspautotests, PPSSPP): `tools/setup_entorno.sh`.
-- **Siguiente:** leer los registros de la 0.6.2: el diagnóstico del aura
-  (las líneas `Efectos` y los volcados `ef4000` de GX y de software:
-  ¿el software sale bien?, ¿qué alfa ve el efecto?), el censo de la VFPU
-  y la latencia. Después, la 0.6.3 que corrija el aura (con su
-  interruptor) y, después, el diseño del IR. Lo de la 0.6.1 (ya leído,
-  ver su resultado). Opcionales: la pantalla en pares (si `ps_div` y los merges
+- **Siguiente:** leer los registros de la 0.6.3: las líneas `[PRUEBA_GX]`
+  de "antes" (cómo guarda GX el alfa de 6 bits; 64/64 códigos y 8/8 de
+  DBZ; la diferencia absoluta 1024 de 1024 en los dos casos), las
+  capturas de "con" junto a las de software de la 0.6.2 (mismos cuadros:
+  ¿el aura sale como por software?) y las de "antes" (tienen que dar las
+  huellas de la 0.6.2), los volcados de "con" y de "soft" (el histograma
+  del CLUT32 que lee el alfa: en GX tienen que salir los mismos valores
+  que por software, 01, 05, 06, 08, 0D, 1C, 1F; y la máscara de
+  0x04158000), la línea `gx_stencil_exacto` (sin sitio y borrados sin
+  controlar a 0; cuántas mezclas o texturas leen el alfa con códigos) y
+  `gx_absdiff` (copias por llamada), y la velocidad de "con" contra
+  "antes". Si sale bien, el diseño del IR; si no, con los volcados se ve
+  qué pasada falla. Lo de la 0.6.2 (ya leído, ver su resultado). Opcionales: la pantalla en pares (si `ps_div` y los merges
   salen a 0 en la autoprueba), la caché de huesos (~2 %), los índices CI8
   por la GPU y la charola parcial de los menús. El limitador de
   velocidad, al final de todo.

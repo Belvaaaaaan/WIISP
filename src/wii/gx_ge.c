@@ -68,6 +68,7 @@
 #include "wii/gx_ge.h"
 #include "wii/gx_tiles.h"
 #include "wii/gx_emit.h"
+#include "wii/gx_stencil.h"   //Arreglo
 
 #define EFB_W 640
 #define EFB_H 528
@@ -111,6 +112,7 @@ typedef struct {
 	/* Hueco (ge_fb_hueco): filas [hole0, hole0 + hole_n) en las que manda la
 	   VRAM porque otro búfer más pequeño se dibujó encima */
 	int hole0, hole_n;
+	StCod st;   //Arreglo
 } Surface;
 
 enum { CI_NONE, CI_A8, CI_565 };
@@ -170,6 +172,12 @@ static int tlut_pos, tlut_used, tlut_loaded = -1;
 static unsigned clut_gpu_uses[3], clut_gpu_fallbacks, clut_ci_builds, clut_tlut_loads;
 static u64 clut_ci_ticks, clut_ci_espera;   //Arreglo
 static unsigned ci8_verif, ci8_verif_mal;   //Arreglo
+static u8 st_ident[256];   //Arreglo
+static unsigned st_asignados, st_raros, st_perdidos, st_sin_control, st_rtt_alfa, st_mezcla_alfa, st_borrados;   //Arreglo
+static int st_en_borrado;   //Arreglo
+static int abs_quiere, abs_tev, abs_ok, abs_x0, abs_y0, abs_x1, abs_y1, texgens3;   //Arreglo
+static unsigned abs_prims, abs_copias, abs_llamadas;   //Arreglo
+static GXTexObj abs_obj;   //Arreglo
 static float pos_off;
 
 /* Perfilado (ticks del Wii) */
@@ -396,6 +404,17 @@ static int surface_pf(const Surface *s){
 	return has_alpha_fmt(s->fmt) && s->amode == A_GPU ? GX_PF_RGBA6_Z24 : GX_PF_RGB8_Z24;
 }
 
+static int st_activo(const Surface *s){ return opt_on[OPT_GX_STENCIL_EXACTO] && s->amode == A_GPU && has_alpha_fmt(s->fmt); }   //Arreglo
+
+static int st_escribir(Surface *s, int v){   //Arreglo
+	u64 usados = s->st.usados;
+	unsigned raros = s->st.raros;
+	int a = st_codigo(&s->st, v);
+	if(a < 0){ st_perdidos++; return v & 0xFF; }
+	if(s->st.usados != usados){ st_asignados++; st_raros += s->st.raros != raros; }
+	return a;
+}
+
 /* --- Rangos vigilados de la VRAM --------------------------------------------- */
 
 static int surf_bpp(int fmt){ return fmt == GE_FMT_8888 ? 4 : 2; }
@@ -471,6 +490,7 @@ static void tex_to_vram(const Surface *s){
 static void tex_to_vram_body(const Surface *s, int y0, int y1){
 	int x, y, w = visible_w(s), keep_a = s->amode == A_VRAM;
 	u32 ua = (u32)s->ualpha;
+	const u8 *dec = st_tabla(&s->st, st_ident);   //Arreglo
 	DCInvalidateRange(s->tex, (u32)(s->w * s->h * 4));
 	for(y = y0; y <= y1; y++){
 		const u8 *trow = s->tex + (u32)(((y >> 2) * (s->w >> 2)) << 6) + (u32)((y & 3) << 3);
@@ -488,7 +508,7 @@ static void tex_to_vram_body(const Surface *s, int y0, int y1){
 			/* La fila da la vuelta al final de la VRAM: píxel a píxel */
 			for(x = 0; x < w; x++){
 				const u8 *t = trow + ((x >> 2) << 6) + ((x & 3) << 1);
-				u32 a = s->amode == A_GPU ? t[0] : ua, r = t[1], g = t[32], b = t[33], v;
+				u32 a = s->amode == A_GPU ? dec[t[0]] : ua, r = t[1], g = t[32], b = t[33], v;   //Arreglo
 				u8 *p;
 				if(s->fmt == GE_FMT_8888){
 					p = vram_color(s, x, y, 4);
@@ -515,7 +535,7 @@ static void tex_to_vram_body(const Surface *s, int y0, int y1){
 				for(x = 0; x < w; x++, p += 4){
 					const u8 *t = trow + ((x >> 2) << 6) + ((x & 3) << 1);
 					p[0] = t[1]; p[1] = t[32]; p[2] = t[33];
-					if(!keep_a) p[3] = s->amode == A_GPU ? t[0] : (u8)ua;
+					if(!keep_a) p[3] = s->amode == A_GPU ? dec[t[0]] : (u8)ua;   //Arreglo
 				}
 				break;
 			case GE_FMT_565:
@@ -530,7 +550,7 @@ static void tex_to_vram_body(const Surface *s, int y0, int y1){
 				u32 k = is5551 ? 0x8000u : 0xF000u;
 				for(x = 0; x < w; x++, p += 2){
 					const u8 *t = trow + ((x >> 2) << 6) + ((x & 3) << 1);
-					u32 a = s->amode == A_GPU ? t[0] : ua, v;
+					u32 a = s->amode == A_GPU ? dec[t[0]] : ua, v;   //Arreglo
 					v = is5551 ? (u32)(t[1] >> 3) | ((u32)(t[32] >> 3) << 5) | ((u32)(t[33] >> 3) << 10) | ((a >> 7) << 15)
 					           : (u32)(t[1] >> 4) | ((u32)(t[32] >> 4) << 4) | ((u32)(t[33] >> 4) << 8) | ((a >> 4) << 12);
 					if(keep_a) v = (v & ~k) | ((p[0] | ((u32)p[1] << 8)) & k);
@@ -618,6 +638,7 @@ static void vram_to_tex_rows(Surface *s, int y0, int y1){
 	int x, y, w = visible_w(s), bpp = surf_bpp(s->fmt);
 	u32 lo = (u32)(((y0 >> 2) * (s->w >> 2)) << 6), hi = (u32)((((y1 >> 2) + 1) * (s->w >> 2)) << 6);
 	int old = prof_switch(PROF_FB);
+	const int sa = st_activo(s);   //Arreglo
 	/* Las demás filas de esos tiles las escribió la GPU: se leen de la
 	   memoria antes de cambiar estas */
 	wait_gpu();
@@ -628,7 +649,7 @@ static void vram_to_tex_rows(Surface *s, int y0, int y1){
 			u8 *t = tile_ptr(s->tex, s->w, x, y);
 			core_u32 c = bpp == 4 ? (core_u32)q[0] | ((core_u32)q[1] << 8) | ((core_u32)q[2] << 16) | ((core_u32)q[3] << 24)
 			                      : vram16_to_8888(s->fmt, (core_u32)q[0] | ((core_u32)q[1] << 8));
-			t[0] = (u8)(c >> 24); t[1] = (u8)c; t[32] = (u8)(c >> 8); t[33] = (u8)(c >> 16);
+			t[0] = (u8)(sa ? st_escribir(s, (int)(c >> 24)) : (int)(c >> 24)); t[1] = (u8)c; t[32] = (u8)(c >> 8); t[33] = (u8)(c >> 16);   //Arreglo
 		}
 	DCFlushRange(s->tex + lo, hi - lo);
 	GX_InvalidateTexAll();
@@ -1198,6 +1219,7 @@ static void set_mode(int m){
 	}
 	gx_dirty = 1;
 	charola = 0;   //Arreglo
+	texgens3 = 0;   //Arreglo
 }
 
 /* Dibuja una copia (color y/o profundidad) en (x0,y0)-(x1,y1) del EFB */
@@ -1349,9 +1371,12 @@ static void promote_alpha(void){
 	int const_alpha = s->ualpha;
 	if(s->amode == A_GPU || !has_alpha_fmt(s->fmt)) return;
 	efb_to_tex(s);
+	st_vaciar(&s->st);   //Arreglo
 	if(s->amode == A_VRAM){
 		/* El color del EFB con el alfa de la VRAM */
 		int x, y, w = visible_w(s);
+		static u8 hay[256];   //Arreglo
+		memset(hay, 0, sizeof(hay));   //Arreglo
 		wait_gpu();
 		DCInvalidateRange(s->tex, (u32)(s->w * s->h * 4));
 		for(y = 0; y < s->h; y++)
@@ -1361,7 +1386,17 @@ static void promote_alpha(void){
 				core_u32 raw = s->fmt == GE_FMT_8888 ? (core_u32)p[3] << 24 : (core_u32)p[0] | ((core_u32)p[1] << 8);
 				ge_decode_color((core_u32)s->fmt, raw, c);
 				tile_ptr(s->tex, s->w, x, y)[0] = c[3];
+				hay[c[3]] = 1;   //Arreglo
 			}
+		if(opt_on[OPT_GX_STENCIL_EXACTO] && st_monotono(&s->st, hay)){   //Arreglo
+			st_asignados += (unsigned)__builtin_popcountll(s->st.usados);   //Arreglo
+			st_raros += s->st.raros;   //Arreglo
+			for(y = 0; y < s->h; y++)   //Arreglo
+				for(x = 0; x < w; x++){   //Arreglo
+					u8 *a = tile_ptr(s->tex, s->w, x, y);   //Arreglo
+					*a = (u8)st_codigo(&s->st, *a);   //Arreglo
+				}   //Arreglo
+		}   //Arreglo
 		DCFlushRange(s->tex, (u32)(s->w * s->h * 4));
 		GX_InvalidateTexAll();
 		s->tex_gen++;
@@ -1370,6 +1405,7 @@ static void promote_alpha(void){
 	/* El EFB pasa a RGBA6: hasta la próxima copia no hay alfa copiado */
 	if(s->ci_kind == CI_A8) s->ci_valid = 0;
 	s->amode = A_GPU;
+	if(const_alpha >= 0 && st_activo(s)) const_alpha = st_escribir(s, const_alpha);   //Arreglo
 	set_pf(GX_PF_RGBA6_Z24);
 	blit(s, NULL, 1, 1, 0.0f, 0.0f, (float)s->w, (float)s->h, 1.0f, 1.0f, 0, const_alpha);
 	efb_c_newer = 1;
@@ -1759,6 +1795,7 @@ static int texture_from_surface(const GeRasterState *r){
 		return 0;
 	if(ts == cur_c && efb_c_newer){ efb_to_tex(ts); efb_c_newer = 0; }
 	if(!ts->has_tex) return 0;
+	if(r->use_tex_alpha && ts->amode == A_GPU && ts->st.raros) st_rtt_alfa++;   //Arreglo
 	GX_InitTexObj(&rtt_obj, ts->tex, (u16)ts->w, (u16)ts->h, GX_TF_RGBA8, GX_CLAMP, GX_CLAMP, GX_FALSE);
 	tex_su = (float)(1 << r->width0_shift) / (float)ts->w;
 	tex_sv = (float)(1 << r->height0_shift) / (float)ts->h;
@@ -1832,6 +1869,7 @@ static int build_ci565(Surface *ts, u32 shift, u32 mask){
 static int clut_from_surface(const GeRasterState *r){
 	core_u32 addr = r->texaddr[0] & PSP_ADDR_MASK, shift, mask, offset;
 	const u32 *pal;
+	const u8 *dec;   //Arreglo
 	Surface *ts;
 	u16 tl[256];
 	int tw = 1 << r->width0_shift, th = 1 << r->height0_shift, i, kind;
@@ -1855,7 +1893,8 @@ static int clut_from_surface(const GeRasterState *r){
 		   próxima vez */
 		if(!ts->a8_want){ ts->a8_want = 1; return 0; }
 		if(ts->ci_kind != CI_A8 || !ts->ci_valid) return 0;
-		for(i = 0; i < 256; i++) tl[i] = gx_tlut565(pal[((((u32)i << 24) >> shift) & mask) | offset]);
+		dec = st_tabla(&ts->st, st_ident);   //Arreglo
+		for(i = 0; i < 256; i++) tl[i] = gx_tlut565(pal[((((u32)dec[i] << 24) >> shift) & mask) | offset]);   //Arreglo
 	} else {
 		if(!(ts->ci_kind == CI_565 && ts->ci_valid && ts->ci_gen == ts->tex_gen && ts->ci_key == (shift | (mask << 8))) &&
 		   !build_ci565(ts, shift, mask))
@@ -2053,6 +2092,7 @@ static void setup_targets(void){
 		reads_dst_alpha = sf == BF_DSTALPHA || sf == BF_INVDSTALPHA || sf == BF_DOUBLEDSTALPHA || sf == BF_DOUBLEINVDSTALPHA ||
 		                  df == BF_DSTALPHA || df == BF_INVDSTALPHA || df == BF_DOUBLEDSTALPHA || df == BF_DOUBLEINVDSTALPHA;
 	}
+	abs_quiere = opt_on[OPT_GX_ABSDIFF] && !r->clear_mode && r->alpha_blend && !r->apply_logic_op && r->blend_eq == BEQ_ABSDIFF;   //Arreglo
 	if(r->apply_depth_range && r->minz > r->maxz) return;
 	if(r->sc_x2 < r->sc_x1 || r->sc_y2 < r->sc_y1) return;
 
@@ -2134,6 +2174,47 @@ static void tev_stage(u8 tc, u32 map, u8 chan, u8 a, u8 b, u8 c, u8 d, u8 cscale
 	GX_SetTevAlphaOp(st, GX_TEV_ADD, GX_TB_ZERO, GX_CS_SCALE_1, GX_TRUE, GX_TEVPREV);
 	GX_SetTevKColorSel(st, ksel);
 	GX_SetTevKAlphaSel(st, kasel);
+}
+
+static void abs_etapas(void){   //Arreglo
+	u8 st = (u8)(GX_TEVSTAGE0 + nst++);
+	GX_SetTevOrder(st, GX_TEXCOORD2, GX_TEXMAP3, GX_COLORNULL);
+	GX_SetTevColorIn(st, GX_CC_TEXC, GX_CC_ZERO, GX_CC_ZERO, GX_CC_CPREV);
+	GX_SetTevColorOp(st, GX_TEV_SUB, GX_TB_ZERO, GX_CS_SCALE_1, GX_TRUE, GX_TEVREG0);
+	GX_SetTevAlphaIn(st, GX_CA_ZERO, GX_CA_ZERO, GX_CA_ZERO, GX_CA_APREV);
+	GX_SetTevAlphaOp(st, GX_TEV_ADD, GX_TB_ZERO, GX_CS_SCALE_1, GX_TRUE, GX_TEVREG0);
+	GX_SetTevKColorSel(st, GX_TEV_KCSEL_K0);
+	GX_SetTevKAlphaSel(st, GX_TEV_KASEL_K0_A);
+	st = (u8)(GX_TEVSTAGE0 + nst++);
+	GX_SetTevOrder(st, GX_TEXCOORD2, GX_TEXMAP3, GX_COLORNULL);
+	GX_SetTevColorIn(st, GX_CC_CPREV, GX_CC_ZERO, GX_CC_ZERO, GX_CC_TEXC);
+	GX_SetTevColorOp(st, GX_TEV_SUB, GX_TB_ZERO, GX_CS_SCALE_1, GX_TRUE, GX_TEVPREV);
+	GX_SetTevAlphaIn(st, GX_CA_ZERO, GX_CA_ZERO, GX_CA_ZERO, GX_CA_APREV);
+	GX_SetTevAlphaOp(st, GX_TEV_ADD, GX_TB_ZERO, GX_CS_SCALE_1, GX_TRUE, GX_TEVPREV);
+	GX_SetTevKColorSel(st, GX_TEV_KCSEL_K0);
+	GX_SetTevKAlphaSel(st, GX_TEV_KASEL_K0_A);
+	st = (u8)(GX_TEVSTAGE0 + nst++);
+	GX_SetTevOrder(st, GX_TEXCOORDNULL, GX_TEXMAP_NULL, GX_COLORNULL);
+	GX_SetTevColorIn(st, GX_CC_C0, GX_CC_ZERO, GX_CC_ZERO, GX_CC_CPREV);
+	GX_SetTevColorOp(st, GX_TEV_ADD, GX_TB_ZERO, GX_CS_SCALE_1, GX_TRUE, GX_TEVPREV);
+	GX_SetTevAlphaIn(st, GX_CA_ZERO, GX_CA_ZERO, GX_CA_ZERO, GX_CA_APREV);
+	GX_SetTevAlphaOp(st, GX_TEV_ADD, GX_TB_ZERO, GX_CS_SCALE_1, GX_TRUE, GX_TEVPREV);
+	GX_SetTevKColorSel(st, GX_TEV_KCSEL_K0);
+	GX_SetTevKAlphaSel(st, GX_TEV_KASEL_K0_A);
+}
+
+static void abs_texgen(u8 *tex, int w, int h){   //Arreglo
+	Mtx m;
+	guMtxScale(m, 1.0f / (float)w, 1.0f / (float)h, 1.0f);
+	m[0][3] = 0.25f / (float)w;
+	m[1][3] = 0.25f / (float)h;
+	GX_LoadTexMtxImm(m, GX_TEXMTX1, GX_MTX2x4);
+	GX_SetTexCoordGen(GX_TEXCOORD2, GX_TG_MTX2x4, GX_TG_POS, GX_TEXMTX1);
+	GX_SetNumTexGens(3);
+	texgens3 = 1;
+	GX_InitTexObj(&abs_obj, tex, (u16)w, (u16)h, GX_TF_RGBA8, GX_CLAMP, GX_CLAMP, GX_FALSE);
+	GX_InitTexObjFilterMode(&abs_obj, GX_NEAR, GX_NEAR);
+	GX_LoadTexObj(&abs_obj, GX_TEXMAP3);
 }
 
 static GXColor rgb_color(core_u32 c, u8 a){
@@ -2224,6 +2305,7 @@ static void apply_gx(void){
 
 	set_mode(MODE_EMU);
 	load_pixel_projection((float)minz, (float)maxz);
+	abs_tev = 0;   //Arreglo
 
 	x1 = r->sc_x1 / 16; y1 = r->sc_y1 / 16;
 	x2 = r->sc_x2 / 16; y2 = r->sc_y2 / 16;
@@ -2236,6 +2318,7 @@ static void apply_gx(void){
 	if(r->clear_mode){
 		cw = r->color_test && mrgb != 0xFFFFFF;
 		aw = r->stencil_test && has_alpha && ma != 0xFF;
+		if(aw && !st_en_borrado && st_activo(cur_c)){ st_cerrar(&cur_c->st); st_sin_control++; }   //Arreglo
 	} else {
 		cw = mrgb != 0xFFFFFF;
 		aw = 0;
@@ -2244,6 +2327,7 @@ static void apply_gx(void){
 			if(r->zpass == SOP_ZERO){ aw = 1; dsta = 0; }
 			else if(r->zpass == SOP_REPLACE){ aw = 1; dsta = replace & 0xFF; }
 		}
+		if(aw && st_activo(cur_c)) dsta = st_escribir(cur_c, dsta);   //Arreglo
 	}
 	GX_SetColorUpdate(cw ? GX_TRUE : GX_FALSE);
 	GX_SetAlphaUpdate(aw ? GX_TRUE : GX_FALSE);
@@ -2256,6 +2340,7 @@ static void apply_gx(void){
 		int sf = r->blend_src, df = r->blend_dst;
 		core_u32 fa = r->blend_fix_a, fb = r->blend_fix_b;
 		int dst_a = !has_alpha ? 0 : cur_c->amode == A_UNIFORM ? cur_c->ualpha : -1;
+		if(reads_dst_alpha && cur_c->amode == A_GPU && cur_c->st.raros) st_mezcla_alfa++;   //Arreglo
 		if(dst_a >= 0){
 			sf = const_alpha_factor(sf, dst_a, &fa);
 			df = const_alpha_factor(df, dst_a, &fb);
@@ -2295,7 +2380,8 @@ static void apply_gx(void){
 			btype = GX_BM_BLEND; bsrc = GX_BL_ONE; bdst = GX_BL_ONE;
 			break;
 		case BEQ_ABSDIFF:
-			btype = GX_BM_SUBTRACT;
+			if(abs_quiere){ btype = GX_BM_NONE; abs_tev = 1; }   //Arreglo
+			else btype = GX_BM_SUBTRACT;   //Arreglo
 			break;
 		default:
 			break;
@@ -2380,6 +2466,7 @@ static void apply_gx(void){
 		tev_stage(GX_TEXCOORDNULL, GX_TEXMAP_NULL, GX_COLOR1A1, GX_CC_KONST, GX_CC_CPREV, GX_CC_RASA, GX_CC_ZERO, GX_CS_SCALE_1,
 		          GX_CA_ZERO, GX_CA_ZERO, GX_CA_ZERO, GX_CA_APREV, GX_TEV_KCSEL_K1, GX_TEV_KASEL_K0_A);
 	}
+	if(abs_tev) abs_etapas();   //Arreglo
 	if(pre || alpha_k >= 0){
 		u8 ca = GX_CC_ZERO, cb = GX_CC_ZERO, cc = GX_CC_ZERO, cd = GX_CC_CPREV;
 		GX_SetTevKColor(GX_KCOLOR2, rgb_color(blend_fix_a, (u8)(alpha_k >= 0 ? alpha_k : 255)));
@@ -2398,6 +2485,8 @@ static void apply_gx(void){
 		          GX_CA_ZERO, GX_CA_ZERO, GX_CA_ZERO, GX_CA_APREV, GX_TEV_KCSEL_K0, GX_TEV_KASEL_K0_A);
 	}
 	GX_SetNumTevStages((u8)nst);
+	if(abs_tev){ abs_texgen(cur_c->tex, cur_c->w, cur_c->h); abs_ok = 0; abs_llamadas++; }   //Arreglo
+	else if(texgens3){ GX_SetNumTexGens(2); texgens3 = 0; }   //Arreglo
 
 	/* Tests */
 	alpha_test = !r->clear_mode && r->alpha_test_func != CMP_ALWAYS && alpha_k < 0;
@@ -2470,7 +2559,7 @@ static void charola_apuntar(void){   //Arreglo
 	const GeRasterState *r = ge_raster_state();
 	charola = 0;
 	if(!(ch_tri || ch_spr) || !opt_on[OPT_GE_CHAROLAS] || !opt_on[OPT_GE_ESTADO_SUCIO] || opt_on[OPT_PROF_ESTADO]) return;
-	if(skip_draws || use_rtt || use_clut_gpu || rtt_cur) return;
+	if(skip_draws || use_rtt || use_clut_gpu || rtt_cur || abs_quiere) return;   //Arreglo
 	ch.tex = -1;
 	if(tex_on && r->texvalid[0]){
 		const TcEntry *e;
@@ -2573,6 +2662,7 @@ typedef struct {
 	int fmt, amode, ualpha, w, h, through, tex_on, use_rtt, use_clut, levels, mode;
 	GXTexObj obj;
 	core_u32 mrgb, ma, lmode;
+	int dsta, abs;   //Arreglo
 } GxKey;
 typedef char gx_key_words[sizeof(GxKey) % 4 == 0 ? 1 : -1];
 
@@ -2589,6 +2679,8 @@ static void gx_key(GxKey *k){
 	else if(use_clut_gpu) memcpy(&k->obj, &clut_obj, sizeof(k->obj));
 	else if(cur_tex){ memcpy(&k->obj, &cur_tex->obj, sizeof(k->obj)); k->levels = cur_tex->levels; }
 	k->mrgb = ge.cmd[GE_MASKRGB]; k->ma = ge.cmd[GE_MASKALPHA]; k->lmode = ge.cmd[GE_LIGHTMODE];
+	if(cur_c && stencil_val >= 0 && cur_c->st.usados) k->dsta = cur_c->st.cod[stencil_val & 0xFF];   //Arreglo
+	k->abs = abs_quiere;   //Arreglo
 }
 
 /* ge_verificar: el estado interno de libogc (__gxregs, 0x598 bytes; su
@@ -2774,6 +2866,40 @@ static inline void put_vertex(const GeVertex *v, const GeVertex *cv, float k){
 	    cv->color0, (cv->color1 & 0xFFFFFF) | ((core_u32)gx_fog_byte(v->fogdepth) << 24));
 }
 
+static void abs_antes(int x0, int y0, int x1, int y1){   //Arreglo
+	abs_prims++;
+	if(!abs_ok || (x0 <= abs_x1 && abs_x0 <= x1 && y0 <= abs_y1 && abs_y0 <= y1)){
+		efb_to_tex(cur_c);
+		abs_copias++;
+		abs_ok = 1;
+		abs_x0 = abs_y0 = 1 << 20;
+		abs_x1 = abs_y1 = -(1 << 20);
+	}
+	if(x0 < abs_x0) abs_x0 = x0;
+	if(y0 < abs_y0) abs_y0 = y0;
+	if(x1 > abs_x1) abs_x1 = x1;
+	if(y1 > abs_y1) abs_y1 = y1;
+}
+
+static void abs_sprite(const GeVertex *v0, const GeVertex *v1){   //Arreglo
+	int xl = v0->x < v1->x ? v0->x : v1->x, xr = v0->x < v1->x ? v1->x : v0->x;
+	int yt = v0->y < v1->y ? v0->y : v1->y, yb = v0->y < v1->y ? v1->y : v0->y;
+	abs_antes((xl + 7) >> 4, (yt + 7) >> 4, ((xr + 7) >> 4) - 1, ((yb + 7) >> 4) - 1);
+}
+
+static void abs_vertices(const GeVertex *a, const GeVertex *b, const GeVertex *c){   //Arreglo
+	int x0 = a->x, x1 = a->x, y0 = a->y, y1 = a->y;
+	if(b->x < x0) x0 = b->x;
+	if(b->x > x1) x1 = b->x;
+	if(b->y < y0) y0 = b->y;
+	if(b->y > y1) y1 = b->y;
+	if(c->x < x0) x0 = c->x;
+	if(c->x > x1) x1 = c->x;
+	if(c->y < y0) y0 = c->y;
+	if(c->y > y1) y1 = c->y;
+	abs_antes((x0 >> 4) - 1, (y0 >> 4) - 1, (x1 >> 4) + 1, (y1 >> 4) + 1);
+}
+
 /* --- Censo: qué parte de una textura sobre un framebuffer se lee ----------- */
 
 /* Coordenada de textura en texels */
@@ -2924,6 +3050,7 @@ static void __attribute__((noinline)) gx_triangle_ref_path(const GeVertex *v0, c
 		}
 	}
 	if(rtt_cur && tex_on) rtt_note_triangle(v0, v1, v2);
+	if(abs_tev) abs_vertices(v0, v1, v2);   //Arreglo
 	c = flat ? v2 : NULL;
 	k = tex_on && !through && tex_norm ? gx_tex_scale3(v0, v1, v2) : 1.0f;
 	GX_Begin(GX_TRIANGLES, GX_VTXFMT0, 3);
@@ -2978,6 +3105,7 @@ static void gx_triangle(const GeVertex *v0, const GeVertex *v1, const GeVertex *
 		}
 	}
 	if(rtt_cur && tex_on) rtt_note_triangle(v0, v1, v2);
+	if(abs_tev) abs_vertices(v0, v1, v2);   //Arreglo
 	/* Antes de cargar el estado: así no se guarda en la pila para la llamada */
 	GX_Begin(GX_TRIANGLES, GX_VTXFMT0, 3);
 	l.tex_on = tex_on; l.through = through; l.tex_proj = tex_proj;
@@ -3003,7 +3131,7 @@ static void gx_triangles(const GeTriCharola *t, int n){   //Arreglo
 	while(i < n){
 		const GeTriCharola *x = &t[i];
 		if(!ch_pend && tri_listo && opt_on[OPT_GE_ESTADO_SUCIO] && opt_on[OPT_GX_ENVIO] && !opt_on[OPT_PROF_ESTADO] &&
-		   !(tex_on && (use_clut_gpu || rtt_cur)) && !(opt_on[OPT_GE_VERIF] && !estado_listo()))
+		   !(tex_on && (use_clut_gpu || rtt_cur)) && !(opt_on[OPT_GE_VERIF] && !estado_listo()) && !abs_tev)   //Arreglo
 			break;
 		if(x->col == x->v[2]) gx_triangle(x->v[0], x->v[1], x->v[2]);
 		else {
@@ -3095,6 +3223,7 @@ static void gx_rect(const GeVertex *v0, const GeVertex *v1){
 		prepare_state();
 	}
 	if(rtt_cur && tex_on) rtt_note_sprite(v0, v1);
+	if(abs_tev) abs_sprite(v0, v1);   //Arreglo
 	draw_sprite(v0, v1);
 	drawn();
 }
@@ -3143,7 +3272,22 @@ static void gx_clear_rect(const GeVertex *v0, const GeVertex *v1){
 		if(covers && ma == 0){ cur_c->amode = A_UNIFORM; cur_c->ualpha = aval; }
 		else if(cur_c->amode != A_UNIFORM || aval != cur_c->ualpha) want_promote = 1;
 	}
+	st_en_borrado = 1;   //Arreglo
 	prepare_state();
+	st_en_borrado = 0;   //Arreglo
+	if(alpha_w && st_activo(cur_c)){   //Arreglo
+		int a = st_escribir(cur_c, aval);   //Arreglo
+		st_borrados++;   //Arreglo
+		if(a != aval) GX_SetDstAlpha(GX_TRUE, (u8)a);   //Arreglo
+		draw_sprite(v0, v1);   //Arreglo
+		drawn();   //Arreglo
+		if(a != aval) GX_SetDstAlpha(GX_FALSE, 0);   //Arreglo
+		gx_dirty = 1;   //Arreglo
+		gx_tocado = 1;   //Arreglo
+		tri_listo = 0;   //Arreglo
+		charola = 0;   //Arreglo
+		return;   //Arreglo
+	}   //Arreglo
 	draw_sprite(v0, v1);
 	drawn();
 }
@@ -3157,6 +3301,7 @@ static void gx_line(const GeVertex *v0, const GeVertex *v1){
 	if(ch_pend){ ch_pend = 0; targets_dirty = 1; }   //Arreglo
 	if(!prepare(0)) return;
 	if(use_clut_gpu && tex_on){ clut_gpu_fallback(); prepare_state(); }   /* sin comprobación de límites */
+	if(abs_tev) abs_vertices(v0, v1, v1);   //Arreglo
 	pos_off = 0.5f;
 	GX_Begin(GX_LINES, GX_VTXFMT0, 2);
 	put_vertex(v0, flat ? v1 : v0, 1.0f);
@@ -3173,6 +3318,7 @@ static void gx_point(const GeVertex *v0){
 	if(ch_pend){ ch_pend = 0; targets_dirty = 1; }   //Arreglo
 	if(!prepare(0)) return;
 	if(use_clut_gpu && tex_on){ clut_gpu_fallback(); prepare_state(); }
+	if(abs_tev) abs_vertices(v0, v0, v0);   //Arreglo
 	pos_off = 0.5f;
 	GX_Begin(GX_POINTS, GX_VTXFMT0, 1);
 	put_vertex(v0, v0, 1.0f);
@@ -3369,6 +3515,13 @@ void gx_ge_rtt_report(char *buf, size_t size){
 		        clut_gpu_uses[CI_A8], clut_gpu_uses[CI_565], clut_gpu_fallbacks, clut_ci_builds, tk_ms(clut_ci_ticks), tk_ms(clut_ci_espera), ci8_verif, ci8_verif_mal,
 		        clut_tlut_loads, rtt_pad_skips, hole_made, hole_filled, hole_skips, hole_rows_dl, hole_rows_up,
 		        tk_ms(hole_ticks));
+	if(len < size)   //Arreglo
+		len += (size_t)snprintf(buf + len, size - len,   //Arreglo
+		        "gx_stencil_exacto: %u valores de stencil con codigo de 6 bits (%u no caben en su codigo natural), %u sin sitio, "
+		        "%u borrados con codigo, %u borrados sin controlar; con codigos que no son el alfa: %u texturas y %u mezclas leen el alfa | "
+		        "gx_absdiff: %u llamadas, %u primitivas, %u copias del destino\n",
+		        st_asignados, st_raros, st_perdidos, st_borrados, st_sin_control, st_rtt_alfa, st_mezcla_alfa,
+		        abs_llamadas, abs_prims, abs_copias);   //Arreglo
 	/* Cargas de paleta dentro de búferes dibujados */
 	for(i = 0; i < rtt_nclut && len < size; i++){
 		const RttClut *c = &rtt_clut[i];
@@ -3501,6 +3654,8 @@ void gx_ge_rtt_report(char *buf, size_t size){
 	clut_gpu_fallbacks = clut_ci_builds = clut_tlut_loads = 0;
 	clut_ci_ticks = clut_ci_espera = 0;   //Arreglo
 	ci8_verif = ci8_verif_mal = 0;   //Arreglo
+	st_asignados = st_raros = st_perdidos = st_sin_control = st_rtt_alfa = st_mezcla_alfa = st_borrados = 0;   //Arreglo
+	abs_llamadas = abs_prims = abs_copias = 0;   //Arreglo
 	rtt_pad_skips = 0;
 	hole_made = hole_filled = hole_skips = hole_rows_dl = hole_rows_up = 0;
 	hole_ticks = 0;
@@ -3623,6 +3778,132 @@ void gx_ge_sync_vram(void){
 	recompute_watch();
 }
 
+//Arreglo
+#define PG_W 64
+#define PG_H 16
+
+static void pg_cuadro(int x, int y, int w, int h, core_u32 c){
+	GX_Begin(GX_QUADS, GX_VTXFMT0, 4);
+	put((float)x, (float)y, 32768.0f, 0.0f, 0.0f, 1.0f, c, 0);
+	put((float)(x + w), (float)y, 32768.0f, 0.0f, 0.0f, 1.0f, c, 0);
+	put((float)(x + w), (float)(y + h), 32768.0f, 0.0f, 0.0f, 1.0f, c, 0);
+	put((float)x, (float)(y + h), 32768.0f, 0.0f, 0.0f, 1.0f, c, 0);
+	GX_End();
+}
+
+static void pg_copiar(void *dst, u8 fmt){
+	GX_SetTexCopySrc(0, 0, PG_W, PG_H);
+	GX_SetTexCopyDst(PG_W, PG_H, fmt, GX_FALSE);
+	GX_CopyTex(dst, GX_FALSE);
+	GX_PixModeSync();
+	GX_InvalidateTexAll();
+	wait_gpu();
+	DCInvalidateRange(dst, fmt == GX_CTF_A8 ? PG_W * PG_H : PG_W * PG_H * 4);
+}
+
+static void pg_estado(int pf, int alfa){
+	set_pf(pf);
+	set_mode(MODE_EMU);
+	load_pixel_projection(0.0f, 65535.0f);
+	GX_SetScissor(0, 0, EFB_W, EFB_H);
+	GX_SetBlendMode(GX_BM_NONE, GX_BL_ONE, GX_BL_ZERO, GX_LO_COPY);
+	GX_SetAlphaCompare(GX_ALWAYS, 0, GX_AOP_AND, GX_ALWAYS, 0);
+	GX_SetZMode(GX_FALSE, GX_ALWAYS, GX_FALSE);
+	GX_SetColorUpdate(GX_TRUE);
+	GX_SetAlphaUpdate(alfa ? GX_TRUE : GX_FALSE);
+	GX_SetDstAlpha(GX_FALSE, 0);
+	GX_SetDither(GX_FALSE);
+	nst = 0;
+	next_bias = GX_TB_ZERO;
+	tev_stage(GX_TEXCOORDNULL, GX_TEXMAP_NULL, GX_COLOR0A0, GX_CC_ZERO, GX_CC_ZERO, GX_CC_ZERO, GX_CC_RASC, GX_CS_SCALE_1,
+	          GX_CA_ZERO, GX_CA_ZERO, GX_CA_ZERO, GX_CA_RASA, GX_TEV_KCSEL_K0, GX_TEV_KASEL_K0_A);
+}
+
+static int pg_a8(const u8 *t, int x, int y){ return t[((y >> 2) * (PG_W >> 3) + (x >> 3)) * 32 + (y & 3) * 8 + (x & 7)]; }
+
+static int pg_esperado(int a, int forma){ int c = a >> 2; return forma ? (c << 2) | (c >> 4) : c << 2; }
+
+void gx_ge_prueba(void){
+	static const int ids[8] = { 0x00, 0x01, 0x05, 0x06, 0x08, 0x0D, 0x1C, 0x1F };
+	static const int ej[8] = { 0x01, 0x05, 0x06, 0x0D, 0x1F, 0x80, 0xFE, 0xFF };
+	static StCod t;
+	u8 *a8 = memalign(32, PG_W * PG_H), *d = memalign(32, PG_W * PG_H * 4), *res = memalign(32, PG_W * PG_H * 4);
+	int leido[2][256], v, m, x, y, k, rep[2][2], codigos = 0, dbz = 0, malos[2] = { 0, 0 }, mx = -1, my = -1;
+	char l[900];
+	size_t len;
+	if(!a8 || !d || !res){ free(a8); free(d); free(res); hle_log_quiet("[PRUEBA_GX] sin memoria\n"); return; }
+	wait_gpu();
+	for(m = 0; m < 2; m++){
+		pg_estado(GX_PF_RGBA6_Z24, 1);
+		for(v = 0; v < 256; v++){
+			if(m) GX_SetDstAlpha(GX_TRUE, (u8)v);
+			pg_cuadro((v & 31) * 2, (v >> 5) * 2, 2, 2, m ? 0x00808080u : ((core_u32)v << 24) | 0x808080u);
+		}
+		GX_SetDstAlpha(GX_FALSE, 0);
+		pg_copiar(a8, GX_CTF_A8);
+		for(v = 0; v < 256; v++) leido[m][v] = pg_a8(a8, (v & 31) * 2, (v >> 5) * 2);
+		rep[m][0] = rep[m][1] = 0;
+		for(v = 0; v < 256; v++){ rep[m][0] += leido[m][v] == pg_esperado(v, 0); rep[m][1] += leido[m][v] == pg_esperado(v, 1); }
+	}
+	pg_estado(GX_PF_RGBA6_Z24, 1);
+	for(v = 0; v < 64; v++){
+		GX_SetDstAlpha(GX_TRUE, st_enc(v));
+		pg_cuadro((v & 31) * 2, (v >> 5) * 2, 2, 2, 0x00808080u);
+	}
+	st_vaciar(&t);
+	for(k = 0; k < 8; k++){
+		int a = st_codigo(&t, ids[k]);
+		GX_SetDstAlpha(GX_TRUE, (u8)(a < 0 ? ids[k] : a));
+		pg_cuadro(k * 2, 8, 2, 2, 0x00808080u);
+	}
+	GX_SetDstAlpha(GX_FALSE, 0);
+	pg_copiar(a8, GX_CTF_A8);
+	for(v = 0; v < 64; v++) codigos += pg_a8(a8, (v & 31) * 2, (v >> 5) * 2) >> 2 == v;
+	for(k = 0; k < 8; k++) dbz += st_tabla(&t, st_ident)[pg_a8(a8, k * 2, 8)] == ids[k];
+	len = (size_t)snprintf(l, sizeof(l), "[PRUEBA_GX] alfa del EFB en RGBA6, leido con una copia A8: escrito por el TEV %d/256 = (v>>2)<<2 y %d/256 "
+	                       "con los 2 bits altos repetidos; con GX_SetDstAlpha %d/256 y %d/256; ejemplos (TEV/DstAlpha):",
+	                       rep[0][0], rep[0][1], rep[1][0], rep[1][1]);
+	for(k = 0; k < 8; k++) len += (size_t)snprintf(l + len, sizeof(l) - len, " %02X->%02X/%02X", ej[k], leido[0][ej[k]], leido[1][ej[k]]);
+	snprintf(l + len, sizeof(l) - len, "; codigos de 6 bits que vuelven %d/64; valores de stencil de DBZ que vuelven exactos con la tabla %d/8\n", codigos, dbz);
+	hle_log_quiet("%s", l);
+	for(k = 0; k < 2; k++){
+		pg_estado(GX_PF_RGB8_Z24, 0);
+		for(y = 0; y < PG_H; y++)
+			for(x = 0; x < PG_W; x++) pg_cuadro(x, y, 1, 1, (core_u32)((x * 37 + y * 101) & 0xFF) | ((core_u32)((x * 13 + y * 7 + 40) & 0xFF) << 8) |
+			                                          ((core_u32)((x * 3 + y * 59 + 200) & 0xFF) << 16) | 0xFF000000u);
+		pg_copiar(d, GX_TF_RGBA8);
+		pg_estado(GX_PF_RGB8_Z24, 0);
+		abs_etapas();
+		GX_SetNumTevStages((u8)nst);
+		abs_texgen(d, PG_W, PG_H);
+		if(k == 0){
+			for(y = 0; y < PG_H; y++)
+				for(x = 0; x < PG_W; x++) pg_cuadro(x, y, 1, 1, (core_u32)((x * 11 + y * 5) & 0xFF) | ((core_u32)((x * 71 + 3) & 0xFF) << 8) |
+				                                          ((core_u32)((y * 17 + 90) & 0xFF) << 16) | 0xFF000000u);
+		} else pg_cuadro(0, 0, PG_W, PG_H, 0xFF60A0C0u);
+		pg_copiar(res, GX_TF_RGBA8);
+		for(y = 0; y < PG_H; y++)
+			for(x = 0; x < PG_W; x++){
+				const u8 *pd = tile_ptr(d, PG_W, x, y), *pr = tile_ptr(res, PG_W, x, y);
+				int s0 = k ? 0xC0 : (x * 11 + y * 5) & 0xFF, s1 = k ? 0xA0 : (x * 71 + 3) & 0xFF, s2 = k ? 0x60 : (y * 17 + 90) & 0xFF;
+				if((pr[1] != abs(s0 - pd[1]) || pr[32] != abs(s1 - pd[32]) || pr[33] != abs(s2 - pd[33])) && !malos[k]++){ mx = x; my = y; }
+			}
+		if(malos[k]){
+			const u8 *pd = tile_ptr(d, PG_W, mx, my), *pr = tile_ptr(res, PG_W, mx, my);
+			hle_log_quiet("[PRUEBA_GX] gx_absdiff %s: primer pixel distinto (%d,%d): destino %02X%02X%02X, resultado %02X%02X%02X\n",
+			              k ? "un cuadro" : "pixel a pixel", mx, my, pd[1], pd[32], pd[33], pr[1], pr[32], pr[33]);
+		}
+	}
+	hle_log_quiet("[PRUEBA_GX] gx_absdiff (|fuente - destino| en el TEV con la copia del destino): pixel a pixel %d de %d bien, "
+	              "con un cuadro grande %d de %d bien%s\n", PG_W * PG_H - malos[0], PG_W * PG_H, PG_W * PG_H - malos[1], PG_W * PG_H,
+	              malos[0] || malos[1] ? " (MAL)" : "");
+	free(a8);
+	free(d);
+	free(res);
+	mode = MODE_NONE;
+	gx_ge_reset();
+}
+
 void gx_ge_reset(void){
 	int i;
 	tri_listo = 0;
@@ -3651,6 +3932,8 @@ void gx_ge_reset(void){
 
 void gx_ge_init(void){
 	Mtx id;
+	int i;   //Arreglo
+	for(i = 0; i < 256; i++) st_ident[i] = (u8)i;   //Arreglo
 	tri_listo = 0;
 	charola = 0;   //Arreglo
 	gx_tocado = 1;

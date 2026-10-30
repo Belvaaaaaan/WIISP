@@ -146,6 +146,7 @@ typedef struct {
 void ge_efectos_dibujo(u32 prim, u32 count);   //Arreglo
 void ge_efectos_informe(void);   //Arreglo
 void ge_efectos_volcado(const char *prefijo, unsigned cuadro);   //Arreglo
+void ge_efectos_cuadro_fin(unsigned siguiente);   //Arreglo
 void ge_efectos_datos(EfectosDatos *d);   //Arreglo
 extern void (*ge_efectos_sincronizar)(void);   //Arreglo
 

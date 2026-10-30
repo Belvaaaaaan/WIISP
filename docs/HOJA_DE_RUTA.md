@@ -429,6 +429,20 @@ renderizador por software), el censo de la VFPU y la latencia con
 comprobación de que cada medida tiene sentido. Sigue: la 0.6.3 que
 corrija el aura, con su interruptor, y después el diseño del IR.
 
+Resultado de la 0.6.2: por software el aura sale bien, así que el fallo
+está en GX: el alfa del EFB en RGBA6 pierde los 2 bits bajos de los
+números de stencil de cada personaje (0x01 vuelve 0x00, 0x05 y 0x06 se
+juntan en 0x04...) y la diferencia absoluta era una resta. Latencia: L1
+2, L2 11,5, MEM1 48,5, MEM2 149 ciclos. La VFPU por `vfpu_exec`: 6,8 % de
+la pelea.
+
+Hecha (v0.6.3): `gx_stencil_exacto` (un código de 6 bits por cada valor de
+stencil, traducido de vuelta al leerlo) y `gx_absdiff` (`|S - D|` en el
+TEV con una copia del destino), cada uno con su interruptor; `prueba_gx`
+comprueba en el Wii cómo guarda GX el alfa y la diferencia absoluta; el
+volcado queda armado hasta encontrar el efecto. Sigue: ver en el Wii si
+el aura sale como por software y, después, el diseño del IR.
+
 Primera tanda acordada (todas "más barato", verificables en el PC):
 0.1 `prof_espera`, **skinning rápido** (`ge_skin_rapido`), **matrices al
 cambiar** (`ge_mtx_cache`), **color constante** (`ge_color_const`), 2.1

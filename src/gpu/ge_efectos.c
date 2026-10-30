@@ -12,9 +12,10 @@
 #include "core/opt.h"
 #include "hle/hle.h"
 
-#define EF_ESCR 64
+#define EF_ESCR 512
 #define EF_LECT 32
-#define EF_VOLCADOS 6
+#define EF_VOLCADOS 8
+#define EF_ESPERA 1800
 
 typedef struct {
 	u32 fb, fmt, borrado, sten, stest, sop, malpha, ztest, mezcla;
@@ -32,7 +33,9 @@ static u32 n_escr, n_lect, dibujos, escr_fuera, lect_fuera;
 static int volcar;
 static unsigned vol_cuadro;
 static char vol_prefijo[480];
-static u32 vol_hechos, vol_archivos, vol_clave[EF_VOLCADOS][3];
+static u32 vol_hechos, vol_archivos, vol_clave[EF_VOLCADOS][4];
+static unsigned vol_desde;
+static u16 escr_ind[EF_ESCR];
 static EfectosDatos datos;
 void (*ge_efectos_sincronizar)(void);
 
@@ -54,11 +57,21 @@ static void anotar_escritura(u32 count){
 	k.malpha = ge.cmd[GE_MASKALPHA] & 0xFF;
 	k.ztest = (ge.cmd[GE_ZTESTENABLE] & 1) | ((ge.cmd[GE_ZTEST] & 7) << 1);
 	k.mezcla = ge.cmd[GE_ALPHABLENDENABLE] & 1;
-	for(i = 0; i < n_escr; i++)
-		if(!memcmp(&escr[i], &k, offsetof(EfEscr, dibujos))) break;
-	if(i == n_escr){
-		if(n_escr == EF_ESCR){ escr_fuera++; return; }
-		escr[n_escr++] = k;
+	{
+		u32 h = 2166136261u, j;
+		const u32 *w = (const u32 *)(const void *)&k;
+		for(j = 0; j < offsetof(EfEscr, dibujos) / 4; j++) h = (h ^ w[j]) * 16777619u;
+		for(j = 0; j < EF_ESCR; j++){
+			const u32 c = (h + j) & (EF_ESCR - 1);
+			if(!escr_ind[c]){
+				if(n_escr == EF_ESCR - 1){ escr_fuera++; return; }
+				escr[n_escr] = k;
+				escr_ind[c] = (u16)++n_escr;
+			}
+			i = escr_ind[c] - 1u;
+			if(!memcmp(&escr[i], &k, offsetof(EfEscr, dibujos))) break;
+		}
+		if(j == EF_ESCR){ escr_fuera++; return; }
 	}
 	escr[i].dibujos++;
 	escr[i].vertices += count;
@@ -218,9 +231,9 @@ static void anotar_lectura(u32 count){
 	k.stest = ge.cmd[GE_STENCILTEST] & 0xFFFFFFu;
 	if(volcar && vol_hechos < EF_VOLCADOS){
 		for(i = 0; i < vol_hechos; i++)
-			if(vol_clave[i][0] == k.tex && vol_clave[i][1] == k.tfmt && vol_clave[i][2] == k.clutfmt) break;
+			if(vol_clave[i][0] == k.tex && vol_clave[i][1] == k.tfmt && vol_clave[i][2] == k.clutfmt && vol_clave[i][3] == k.clutaddr) break;
 		if(i == vol_hechos){
-			vol_clave[i][0] = k.tex; vol_clave[i][1] = k.tfmt; vol_clave[i][2] = k.clutfmt;
+			vol_clave[i][0] = k.tex; vol_clave[i][1] = k.tfmt; vol_clave[i][2] = k.clutfmt; vol_clave[i][3] = k.clutaddr;
 			if(ge_efectos_sincronizar) ge_efectos_sincronizar();
 			volcar_lectura(&k);
 		}
@@ -248,8 +261,21 @@ void ge_efectos_volcado(const char *prefijo, unsigned cuadro){
 	if(!prefijo){ volcar = 0; return; }
 	snprintf(vol_prefijo, sizeof(vol_prefijo), "%s", prefijo);
 	vol_cuadro = cuadro;
+	vol_desde = cuadro;
 	vol_hechos = 0;
 	volcar = 1;
+}
+
+//Arreglo
+void ge_efectos_cuadro_fin(unsigned siguiente){
+	if(!volcar) return;
+	if(vol_hechos >= EF_VOLCADOS || siguiente - vol_desde >= EF_ESPERA){
+		volcar = 0;
+		hle_log("[EFECTOS] volcado terminado: %u texturas leidas de la VRAM volcadas entre los cuadros %u y %u\n", (unsigned)vol_hechos,
+		        vol_desde, siguiente - 1);
+		return;
+	}
+	vol_cuadro = siguiente;
 }
 
 //Arreglo
@@ -319,6 +345,7 @@ void ge_efectos_informe(void){
 	hle_log("%s\n", l);
 	n_escr = n_lect = 0;
 	dibujos = escr_fuera = lect_fuera = 0;
+	memset(escr_ind, 0, sizeof(escr_ind));
 }
 
 //Arreglo

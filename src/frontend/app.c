@@ -558,7 +558,7 @@ int app_run_frame(void){
 	if(volcado_cuadro && frames_run + 1 == volcado_cuadro && gs.prefijo[0]) ge_efectos_volcado(gs.prefijo, volcado_cuadro);   //Arreglo
 	frames_run++;
 	r = hle_run_frame();
-	if(volcado_cuadro && frames_run == volcado_cuadro) ge_efectos_volcado(NULL, 0);   //Arreglo
+	if(volcado_cuadro && frames_run >= volcado_cuadro) ge_efectos_cuadro_fin(frames_run + 1);   //Arreglo
 	if(gs.modo && r){
 		huella("termino", 1);
 		gs.termino = 1;

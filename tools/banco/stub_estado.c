@@ -210,8 +210,10 @@ static void report(void){
 	       fifo_tris, fifo_prims, fifo_malos, fifo_h);
 	fflush(stdout);
 }
+void gx_ge_prueba(void);
 void host_renderer_hook(void){
 	gx_ge_init();
+	if(getenv("PRUEBA_GX")) gx_ge_prueba();
 	gx_ge_enable(1);
 	atexit(report);
 }

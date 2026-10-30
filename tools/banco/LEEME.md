@@ -215,8 +215,19 @@ al repositorio), `gcc-powerpc-linux-gnu` y `qemu-user`. Las salidas van a
   en el cuadro N (fuente, alfa, índices, resultado con la paleta), con su
   histograma y su paleta en el registro; en el autotest del Wii, `volcado
   N` (y `hasta N` para cortar una corrida con guion).
+  Desde la 0.6.3 el volcado queda armado desde el cuadro N hasta volcar
+  8 lecturas distintas o pasar 1800 cuadros.
+- `prueba_gx` (0.6.3, `gx_ge_prueba` en `gx_ge.c`): con `PRUEBA_GX=1`, el
+  CLI de GX (`build_cli_gx.sh`) la corre al empezar sobre la libogc de
+  mentira: los números no valen (no pinta nada) y sale "(MAL)", pero se
+  ve que el código corre entero. En el Wii, si GX guarda el alfa como se
+  supuso: TEV y `GX_SetDstAlpha` 64/256 y 256/256 (los 64 primeros dan lo
+  mismo de las dos formas), códigos 64/64, DBZ 8/8 y la diferencia
+  absoluta 1024 de 1024 en los dos casos.
 - Mutaciones del JIT: `mutar.py mutaciones/0.6.0.txt --dkp --solo
   interp,jit` (en `qemu-ppc -cpu 750` el código nativo corre de verdad).
+  Las de la 0.6.3: `mutar.py mutaciones/0.6.3.txt --solo
+  gxstencil,efectos`.
 - `cpu_grande.py` + `medir_cache.sh`: fallos de caché por instrucción de la
   PSP con cachegrind (valgrind) sobre el CLI del PC, en programas de N
   funciones con bucles, cargas, escrituras, ramas y llamadas en orden

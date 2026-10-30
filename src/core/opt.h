@@ -51,6 +51,7 @@ enum {
 	OPT_PROF_JIT,   //Arreglo
 	OPT_PRUEBA_JIT,   //Arreglo
 	OPT_PROF_EFECTOS,   //Arreglo
+	OPT_PRUEBA_GX,   //Arreglo
 	/* Primera tanda del GE (resultado idéntico) */
 	OPT_GE_SKIN_RAPIDO,   /* skinning mezclando las matrices por peso */
 	OPT_GE_MTX_CACHE,     /* matrices combinadas solo cuando cambian */
@@ -102,6 +103,8 @@ enum {
 	OPT_GE_ESTADO_CLAVE,   //Arreglo
 	OPT_GE_CI8_RAPIDO,   //Arreglo
 	OPT_GE_VDEC_PS,   //Arreglo
+	OPT_GX_STENCIL_EXACTO,   //Arreglo
+	OPT_GX_ABSDIFF,   //Arreglo
 	/* Fase 2: intérprete cacheado */
 	OPT_CPU_SIN_EXTRA,    /* 2.1 sin costo por instrucción */
 	OPT_CPU_PREDEC,       /* 2.2 predecodificación (cpu/predec.h) */

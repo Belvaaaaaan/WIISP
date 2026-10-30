@@ -53,6 +53,7 @@ void test_gxemit(void);
 void test_vdec(void);
 void test_censo(void);
 void test_efectos(void);   //Arreglo
+void test_gxstencil(void);   //Arreglo
 void test_bbox(void);   //Arreglo
 void test_listas(void);   //Arreglo
 void test_tirones(void);

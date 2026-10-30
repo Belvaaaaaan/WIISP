@@ -105,10 +105,51 @@ void test_efectos(void){
 		snprintf(ruta, sizeof(ruta), "ef_prueba.ef7.1.%s.bmp", sufijos[i]);
 		remove(ruta);
 	}
+	archivos0 = d.archivos;
+	ge_efectos_volcado("ef_prueba", 20);
+	ge_efectos_cuadro_fin(21);
+	ge_efectos_cuadro_fin(22);
+	ge_efectos_datos(&d);
+	CHECK_EQ(d.volcados, 0u);
+	ge_efectos_dibujo(GE_PRIM_RECTANGLES, 2);
+	ge.cmd[GE_CLUTADDR] = 0x000780;
+	ge_efectos_dibujo(GE_PRIM_RECTANGLES, 2);
+	ge_efectos_dibujo(GE_PRIM_RECTANGLES, 2);
+	ge_efectos_cuadro_fin(23);
+	ge_efectos_datos(&d);
+	CHECK_EQ(d.volcados, 2u);
+	CHECK_EQ(d.archivos - archivos0, 8u);
+	CHECK_EQ(tam_archivo("ef_prueba.ef22.1.fuente.bmp"), 54 + 8 * 24);
+	CHECK_EQ(tam_archivo("ef_prueba.ef22.2.paleta.bmp"), 54 + 8 * 24);
+	CHECK_EQ(tam_archivo("ef_prueba.ef23.3.paleta.bmp"), -1);
+	ge_efectos_cuadro_fin(20 + 1800);
+	ge.cmd[GE_CLUTADDR] = 0x000800;
+	ge_efectos_dibujo(GE_PRIM_RECTANGLES, 2);
+	ge_efectos_datos(&d);
+	CHECK_EQ(d.volcados, 2u);
+	CHECK_EQ(d.archivos - archivos0, 8u);
+	for(i = 0; i < 8; i++){
+		snprintf(ruta, sizeof(ruta), "ef_prueba.ef22.%u.%s.bmp", (unsigned)(1 + i / 4), sufijos[i % 4]);
+		remove(ruta);
+	}
+	for(i = 0; i < 600; i++){
+		ge.cmd[GE_STENCILTEST] = CMP_ALWAYS | ((i & 0xFFu) << 8) | (0xFFu << 16);
+		ge.cmd[GE_ZTEST] = i >> 8;
+		ge_efectos_dibujo(GE_PRIM_TRIANGLES, 3);
+	}
+	ge_efectos_datos(&d);
+	CHECK_EQ(d.n_escr, 512u - 1u);
 	ge_efectos_informe();
 	ge_efectos_datos(&d);
 	CHECK(d.cuadra);
 	CHECK_EQ(d.dibujos, 0u);
+	ge.cmd[GE_STENCILTEST] = CMP_ALWAYS | (0xFFu << 16);
+	ge.cmd[GE_ZTEST] = 0;
+	ge_efectos_dibujo(GE_PRIM_TRIANGLES, 3);
+	ge_efectos_datos(&d);
+	CHECK_EQ(d.n_escr, 1u);
+	CHECK_EQ(d.escr_dibujos, 1u);
+	ge_efectos_informe();
 	memcpy(ge.cmd, cmd0, sizeof(cmd0));
 	memcpy(ge.clut, clut0, sizeof(clut0));
 	memcpy(psp_mem.vram, vram0, sizeof(vram0));

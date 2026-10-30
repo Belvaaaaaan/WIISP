@@ -1,0 +1,96 @@
+=== gx_stencil: el codigo natural no escribe el valor de siempre
+@ src/wii/gx_stencil.h
+<<<
+	st_poner(t, c, v);
+	return c == n ? v : st_enc(c);
+>>>
+	st_poner(t, c, v);
+	return st_enc(c);
+===
+=== gx_stencil: el codigo libre solo se busca hacia arriba
+@ src/wii/gx_stencil.h
+<<<
+		else if(n - d >= 0 && !((t->usados >> (n - d)) & 1)) c = n - d;
+>>>
+		else if(0 && n - d >= 0 && !((t->usados >> (n - d)) & 1)) c = n - d;
+===
+=== gx_stencil: la tabla de vuelta no cubre los 2 bits bajos
+@ src/wii/gx_stencil.h
+<<<
+	for(i = 0; i < 4; i++) t->dec[(c << 2) | i] = (uint8_t)v;
+>>>
+	for(i = 0; i < 3; i++) t->dec[(c << 2) | i] = (uint8_t)v;
+===
+=== gx_stencil: un valor repetido pide otro codigo
+@ src/wii/gx_stencil.h
+<<<
+	if(t->usados && t->cod[v]){
+>>>
+	if(0 && t->usados && t->cod[v]){
+===
+=== gx_stencil: el orden de st_monotono sin dejar sitio a los que faltan
+@ src/wii/gx_stencil.h
+<<<
+		if(c > 64 - (total - k)) c = 64 - (total - k);
+>>>
+		if(c > 63) c = 63;
+===
+=== gx_stencil: st_monotono no sigue el orden
+@ src/wii/gx_stencil.h
+<<<
+		if(c <= prev) c = prev + 1;
+>>>
+		if(c < prev) c = prev + 1;
+===
+=== gx_stencil: cerrar una tabla vacia sin empezarla
+@ src/wii/gx_stencil.h
+<<<
+	if(!t->usados) st_empezar(t);
+	t->usados = ~(uint64_t)0;
+>>>
+	t->usados = ~(uint64_t)0;
+===
+=== gx_stencil: con 64 codigos ocupados se pisa uno
+@ src/wii/gx_stencil.h
+<<<
+	if(c < 0){ t->perdidos++; return -1; }
+>>>
+	if(c < 0){ t->perdidos++; c = n; }
+===
+=== efectos: el volcado no sigue al cuadro
+@ src/gpu/ge_efectos.c
+<<<
+	vol_cuadro = siguiente;
+}
+>>>
+}
+===
+=== efectos: la clave del volcado sin la direccion de la paleta
+@ src/gpu/ge_efectos.c
+<<<
+			if(vol_clave[i][0] == k.tex && vol_clave[i][1] == k.tfmt && vol_clave[i][2] == k.clutfmt && vol_clave[i][3] == k.clutaddr) break;
+>>>
+			if(vol_clave[i][0] == k.tex && vol_clave[i][1] == k.tfmt && vol_clave[i][2] == k.clutfmt) break;
+===
+=== efectos: el volcado no se para a tiempo
+@ src/gpu/ge_efectos.c
+<<<
+	if(vol_hechos >= EF_VOLCADOS || siguiente - vol_desde >= EF_ESPERA){
+>>>
+	if(vol_hechos >= EF_VOLCADOS || siguiente - vol_desde > 2 * EF_ESPERA){
+===
+=== efectos: la tabla de escrituras se llena de mas
+@ src/gpu/ge_efectos.c
+<<<
+				if(n_escr == EF_ESCR - 1){ escr_fuera++; return; }
+>>>
+				if(n_escr == EF_ESCR){ escr_fuera++; return; }
+===
+=== efectos: la tabla de escrituras no se vacia
+@ src/gpu/ge_efectos.c
+<<<
+	memset(escr_ind, 0, sizeof(escr_ind));
+}
+>>>
+}
+===

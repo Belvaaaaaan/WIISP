@@ -5,6 +5,47 @@ la 0.5.17.2; antes se marcaban con `//arreglo`). Aquí va, por versión, qué
 se arregló o cambió y una descripción breve. El detalle está en
 `docs/CONTINUAR.md`.
 
+## 0.6.3
+
+El aura de DBZ en GX: el stencil sin perder bits y la diferencia absoluta
+exacta (cada uno con su interruptor).
+
+- `wii/gx_stencil.h` (nuevo): la tabla de códigos de cada búfer. El alfa
+  del EFB en RGBA6 tiene 6 bits: cada valor de stencil distinto recibe su
+  propio código de 6 bits (el natural, `v >> 2`, si está libre; si no, el
+  libre más cercano); `dec` traduce el alfa leído de una copia del EFB al
+  valor de verdad. `st_monotono` (los alfas que suben de la VRAM, hasta
+  64 distintos, en orden), `st_cerrar` (sin códigos nuevos tras una
+  escritura que no se controla) y `st_lleno`.
+- `wii/gx_ge.c`, `gx_stencil_exacto`: el stencil REPLACE/ZERO, los borrados
+  por rectángulo, el alfa uniforme al promover, el de la VRAM y el de las
+  filas del hueco se escriben con su código; las bajadas a la VRAM y la
+  TLUT del CLUT32 que lee el alfa (`ge_rtt_gpu`) los traducen de vuelta.
+  Con el interruptor apagado, o mientras un valor tiene su código natural,
+  escribe lo mismo que antes. Censo en la línea `gx_stencil_exacto` de
+  `[TIEMPOS]`.
+- `wii/gx_ge.c`, `gx_absdiff`: la diferencia absoluta (`|fuente - destino|`)
+  en el TEV con una copia del destino (`(S - D) + (D - S)` con saturación,
+  tres etapas; la copia se muestrea en el píxel con una coordenada de
+  textura sacada de la posición) en vez de la resta de GX (`D - S`). La
+  copia se hace al empezar cada llamada y otra vez solo si una primitiva
+  pisa lo ya dibujado desde la última.
+- `gx_ge_prueba` (`prueba_gx`): microprueba del Wii antes de cargar el
+  juego: cómo guarda GX el alfa de 6 bits (por el TEV y por
+  `GX_SetDstAlpha`), si los 64 códigos y los valores de DBZ vuelven
+  exactos, y si la diferencia absoluta del TEV da lo mismo que la cuenta
+  en la CPU, píxel a píxel y con un cuadro grande.
+- `gpu/ge_efectos.c`: el volcado queda armado desde el cuadro pedido hasta
+  volcar 8 lecturas distintas (la dirección de la paleta entra en la
+  clave) o pasar 1800 cuadros (`ge_efectos_cuadro_fin`, desde
+  `frontend/app.c`); la tabla de escrituras con 512 sitios y búsqueda por
+  hash.
+- `core/opt.h`, `core/opt.c`: `gx_stencil_exacto`, `gx_absdiff` (los dos
+  encendidos) y `prueba_gx`. `wii/main.c`: `prueba_gx` en el autotest.
+- `tests/test_gxstencil.c` (nuevo), `tests/test_efectos.c` (el volcado entre
+  cuadros y la tabla llena). `mutaciones/0.6.3.txt`.
+- `hle/hle.h`, `dist/apps/wiisp/meta.xml`: versión 0.6.3.
+
 ## 0.6.2
 
 Solo medidas: el diagnóstico del aura, el censo de la VFPU y la latencia.

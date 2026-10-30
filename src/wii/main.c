@@ -548,6 +548,7 @@ static void autotest_run(const char *path, const char *prefix, int max_frames){
 		if(bad) hle_log("[GUION] no se pudieron preparar %s: se usan las partidas normales\n", partidas);
 		if(opt_on[OPT_PRUEBA_PS]) broadway_prueba_ps(1u << 23);   //Arreglo
 		if(opt_on[OPT_PRUEBA_JIT]) jit_banco();   //Arreglo
+		if(opt_on[OPT_PRUEBA_GX]) gx_ge_prueba();   //Arreglo
 	}
 	if(app_load(path, 8, NULL) == 0){
 		char err[160];
