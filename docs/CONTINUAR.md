@@ -4360,6 +4360,33 @@ Qué mirar: `python3 tools/banco/Census_comparación.py gx.dibujos.bin
 exacto.dibujos.bin`: el primer dibujo y los que más hacen crecer la
 diferencia en la pantalla, con su estado y sus UV.
 
+### Investigación aparte (otro chat, tras la 0.6.5): texturas proyectivas en GX
+
+Resumen de lo que trajo el usuario (con `verify_projclip.py`; fuentes en
+Dolphin, libogc, YAGCD y PPSSPP):
+- GX divide por q en cada píxel también con q < 0, y eso refleja la
+  textura detrás del proyector (candidato a los fantasmas). La PSP, con
+  q <= 0, muestrea el último texel en u y v (`GE_NONPOSITIVE_Q_UV` de
+  PPSSPP; pspautotests `gpu/texmtx/negq`); PPSSPP lo arregló en sus
+  backends por hardware en el commit 763bcde73.
+- La coordenada por píxel de GX es s17.7: ±65.536 texeles. Las UV de DBZ
+  (±3170 normalizadas, ×64) serían ~202.880 texeles: se desbordan (Dolphin
+  las envuelve a 24 bits; en el hardware no está confirmado). Candidato al
+  suelo brillante.
+- Ni subdividir ni desplazar las UV lo arreglan con clamp; sí recortar
+  cada triángulo en la CPU en (S, T, Q) = (s/w, t/w, q/w) contra q = 0 y
+  contra el cuadrado de la textura (las piezas fuera, con la UV del borde
+  constante; con q <= 0, el último texel): 0 discrepancias con la regla de
+  la PSP en 120.000 muestras y las UV de cada pieza quedan en [0, 1].
+- Comprobado en el código: `put_vertex` (gx_ge.c) ya manda s/w, t/w, q/w
+  (con q = v->q en modo proyección). El software (`tex_coords_ge` en
+  ge_raster.c), con q <= 0 usa s = t = 0 (el primer texel), no el último
+  como la PSP: diferencia que anotar (en DBZ quizá no se ve si los dos
+  texeles de la esquina son transparentes).
+- El cotejo de la 0.6.6 ya registra el modo de mapeo (`GE_TEXMAPMODE`) y el
+  rango de s, t y q de cada dibujo: dirá cuál de las dos causas aplica
+  (q mínima <= 0, |s|·64 o |t|·64 por encima de 65.536).
+
 ### Para el siguiente chat (empezar aquí)
 
 Metodología acordada (detalle en `docs/HOJA_DE_RUTA.md`): primero medir
