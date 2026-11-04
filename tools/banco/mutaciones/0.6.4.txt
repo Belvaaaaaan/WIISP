@@ -1,0 +1,127 @@
+=== rastreo_fb: el rango vigilado no incluye su ultimo byte
+@ src/gpu/ge_rastreo_fb.c
+<<<
+	return off < r_off + r_len && r_off < off + len;
+>>>
+	return off < r_off + r_len - 1 && r_off < off + len;
+===
+=== rastreo_fb: la mascara RGB no entra en la clave de escritura
+@ src/gpu/ge_rastreo_fb.c
+<<<
+	k.mrgb = ge.cmd[GE_MASKRGB] & 0xFFFFFFu;
+>>>
+	k.mrgb = 0;
+===
+=== rastreo_fb: la operacion logica no entra en la clave
+@ src/gpu/ge_rastreo_fb.c
+<<<
+	k.logica = (ge.cmd[GE_LOGICOPENABLE] & 1) | ((ge.cmd[GE_LOGICOP] & 0xF) << 4);
+>>>
+	k.logica = ge.cmd[GE_LOGICOPENABLE] & 1;
+===
+=== rastreo_fb: el alto del bufer no cuenta la ultima fila de la tijera
+@ src/gpu/ge_rastreo_fb.c
+<<<
+	alto = ((ge.cmd[GE_SCISSOR2] >> 10) & 0x3FF) + 1;
+>>>
+	alto = (ge.cmd[GE_SCISSOR2] >> 10) & 0x3FF;
+===
+=== rastreo_fb: el contenido cuenta un bit de menos
+@ src/gpu/ge_rastreo_fb.c
+<<<
+			for(i = 0; i < bits; i++) cuenta[i] += (v >> i) & 1;
+>>>
+			for(i = 1; i < bits; i++) cuenta[i] += (v >> i) & 1;
+===
+=== rastreo_fb: el mapa no limita los mapas por cuadro
+@ src/gpu/ge_rastreo_fb.c
+<<<
+	mapa = traza() && mapas < RF_MAPAS;
+>>>
+	mapa = traza();
+===
+=== rastreo_fb: la traza dura un solo cuadro
+@ src/gpu/ge_rastreo_fb.c
+<<<
+static int traza(void){ return traza_desde && cuadro >= traza_desde && cuadro <= traza_desde + 1; }
+>>>
+static int traza(void){ return traza_desde && cuadro == traza_desde; }
+===
+=== rastreo_fb: las lineas iguales no se juntan
+@ src/gpu/ge_rastreo_fb.c
+<<<
+	if(ult_n && !strcmp(ult, t)){ ult_n++; return; }
+>>>
+	if(0 && ult_n && !strcmp(ult, t)){ ult_n++; return; }
+===
+=== rastreo_fb: la bajada de una lectura cuenta sin lectura
+@ src/gpu/ge_rastreo_fb.c
+<<<
+		if(lect_pend >= 0) bajadas_con++;
+		else bajada_pend = 1;
+>>>
+		bajada_pend = 1;
+===
+=== rastreo_fb: el camino de GX no cierra la lectura
+@ src/gpu/ge_rastreo_fb.c
+<<<
+void ge_rastreo_fb_camino(int camino){ cerrar_lectura(camino); }
+>>>
+void ge_rastreo_fb_camino(int camino){ (void)camino; }
+===
+=== rastreo_fb: el contenido de GX se cuenta sin lectura pendiente
+@ src/gpu/ge_rastreo_fb.c
+<<<
+	if(!ge_rastreo_fb_activo() || lect_pend < 0) return;
+	anotar_contenido(&lect[lect_pend], origen);
+>>>
+	if(!ge_rastreo_fb_activo() || !n_lect) return;
+	anotar_contenido(&lect[0], origen);
+===
+=== rastreo_fb: con la tabla llena se sigue anotando
+@ src/gpu/ge_rastreo_fb.c
+<<<
+		if(n_escr == RF_ESCR){ escr_fuera++; return; }
+>>>
+		if(n_escr == RF_ESCR){ escr_fuera++; i = 0; }
+		else
+===
+=== rastreo_fb: los colores de los vertices sin indices leen siempre el primero
+@ src/gpu/ge_vertex.c
+<<<
+		p = mem_ptr_r(vaddr + n * f->size + f->off_col, 4);
+>>>
+		p = mem_ptr_r(vaddr + f->off_col, 4);
+===
+=== rastreo_fb: el color del material no se usa sin color en el vertice
+@ src/gpu/ge_vertex.c
+<<<
+		y = o = material_ambient_rgba();
+>>>
+		y = o = 0;
+===
+=== rastreo_fb: el informe no vacia las tablas
+@ src/gpu/ge_rastreo_fb.c
+<<<
+	lect_pend = -1;
+}
+
+//Arreglo
+void ge_rastreo_fb_datos(RfDatos *d){
+>>>
+	n_escr = 1;
+	lect_pend = -1;
+}
+
+//Arreglo
+void ge_rastreo_fb_datos(RfDatos *d){
+===
+=== rastreo_fb: el color de un estado es el del ultimo dibujo
+@ src/gpu/ge_rastreo_fb.c
+<<<
+		escr[i].col_y &= k.col_y;
+		escr[i].col_o |= k.col_o;
+>>>
+		escr[i].col_y = k.col_y;
+		escr[i].col_o = k.col_o;
+===

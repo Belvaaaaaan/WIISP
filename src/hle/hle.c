@@ -1117,6 +1117,7 @@ static void profile_report(const char *why, int forzar){   //Arreglo
 	profile_ge_lines(&ge, &prof_base.ge, prof_vblanks - prof_base.vblanks);
 	profile_pmc_lines(&ge, &prof_base.ge, cpu_executed - prof_base.instr);
 	if(opt_on[OPT_PROF_EFECTOS]) ge_efectos_informe();   //Arreglo
+	if(opt_on[OPT_PROF_RASTREO_FB]) ge_rastreo_fb_informe();   //Arreglo
 	/* Lo del renderizador (una línea por cada \n) */
 	extra[0] = 0;
 	if(profile_hook) profile_hook(extra, sizeof(extra));

@@ -47,6 +47,7 @@
 #include "frontend/app.h"
 #include "hle/hle.h"
 #include "core/prof.h"
+#include "gpu/ge.h"   //Arreglo
 #ifdef _WIN32
 #include <windows.h>
 #else
@@ -367,6 +368,12 @@ int main(int argc, char **argv){
 		else if(!strcmp(argv[i], "--guion") && i + 1 < argc) guion = argv[++i];
 		else if(!strcmp(argv[i], "--salida") && i + 1 < argc) salida = argv[++i];
 		else if(!strcmp(argv[i], "--volcado") && i + 1 < argc){ app_guion_volcado((unsigned)atoi(argv[++i])); volcado = 1; }   //Arreglo
+		else if(!strcmp(argv[i], "--rastreo-fb") && i + 1 < argc){   //Arreglo
+			char *fin;   //Arreglo
+			unsigned long dir = strtoul(argv[++i], &fin, 16), largo = *fin == ':' ? strtoul(fin + 1, NULL, 16) : 0;   //Arreglo
+			ge_rastreo_fb_fijar((u32)dir, (u32)largo);   //Arreglo
+		}   //Arreglo
+		else if(!strcmp(argv[i], "--rastreo-traza") && i + 1 < argc) ge_rastreo_fb_traza((unsigned)atoi(argv[++i]));   //Arreglo
 		else if(!strcmp(argv[i], "--grabar") && i + 1 < argc) grabar = argv[++i];
 		else if(!strcmp(argv[i], "--partidas") && i + 1 < argc) partidas = argv[++i];
 		else if(!strcmp(argv[i], "--capturas-guion") && i + 1 < argc) app_guion_capturas_cada((unsigned)atoi(argv[++i]));
@@ -382,6 +389,7 @@ int main(int argc, char **argv){
 		                "          [--screenshot FILE] [--capturas N] [--log FILE] [--osk TEXTO]\n"
 		                "          [--guion FILE] [--salida PREFIJO] [--grabar FILE] [--partidas DIR] [--volcado N]\n"
 		                "          [--opt NOMBRE=0|1]... [--capturas-guion N] [--veces N] [--ventana N]\n"   //Arreglo
+		                "          [--rastreo-fb DIRECCION[:LARGO]] [--rastreo-traza N]\n"   //Arreglo
 		                "          EBOOT.PBP|archivo.elf|archivo.prx|imagen.iso|imagen.cso\n", argv[0]);
 		return 2;
 	}

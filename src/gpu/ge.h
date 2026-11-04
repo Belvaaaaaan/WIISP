@@ -149,6 +149,29 @@ void ge_efectos_volcado(const char *prefijo, unsigned cuadro);   //Arreglo
 void ge_efectos_cuadro_fin(unsigned siguiente);   //Arreglo
 void ge_efectos_datos(EfectosDatos *d);   //Arreglo
 extern void (*ge_efectos_sincronizar)(void);   //Arreglo
+enum { RF_SIN_ELEGIR, RF_COPIA_GPU, RF_PALETA_GPU, RF_DECODIFICADA, RF_CACHE, RF_NO_DIBUJA, RF_SOFT, RF_CAMINOS };   //Arreglo
+enum { RG_CREAR, RG_SOLTAR, RG_BAJAR, RG_BAJAR_FILAS, RG_SUBIR, RG_SUBIR_FILAS, RG_COPIA_EFB, RG_PROMOVER, RG_HUECO, RG_CPU, RG_N };   //Arreglo
+typedef struct {   //Arreglo
+	u32 escrituras, lecturas, n_escr, n_lect, transferencias, bajadas_con, bajadas_sin;
+	u32 lect_muestras, lect_bit0, lect_bit1, lect_soft, escr_mrgb, escr_col_y, escr_col_o;
+	int cuadra;
+} RfDatos;
+int ge_rastreo_fb_activo(void);   //Arreglo
+void ge_rastreo_fb_fijar(u32 addr, u32 len);   //Arreglo
+void ge_rastreo_fb_traza(unsigned desde);   //Arreglo
+void ge_rastreo_fb_cuadro(unsigned cuadro);   //Arreglo
+int ge_rastreo_fb_toca(u32 off, u32 len);   //Arreglo
+int ge_rastreo_fb_interesa(void);   //Arreglo
+void ge_rastreo_fb_dibujo(u32 prim, u32 count, int interesa, u32 col_y, u32 col_o, int col_ok);   //Arreglo
+void ge_rastreo_fb_camino(int camino);   //Arreglo
+void ge_rastreo_fb_contenido(const char *origen);   //Arreglo
+void ge_rastreo_fb_transferencia(u32 src, u32 dst, u32 w, u32 h, u32 bpp);   //Arreglo
+void ge_rastreo_fb_gx(int evento, int motivo, const char *desc);   //Arreglo
+void ge_rastreo_fb_informe(void);   //Arreglo
+u32 ge_rastreo_fb_largo(void);   //Arreglo
+void ge_rastreo_fb_datos(RfDatos *d);   //Arreglo
+void ge_rastreo_fb_reiniciar(void);   //Arreglo
+extern u32 (*ge_rastreo_fb_donde)(u32 off, u32 len, char *texto, size_t n);   //Arreglo
 
 /* Reloj del anfitrión para medir el GE (perfilado); NULL = sin medir */
 extern unsigned long long (*ge_host_clock)(void);

@@ -115,6 +115,10 @@ sd:/ISO/SFA3.iso
   `[TIEMPOS]` sale cada N vblanks de juego (600 por defecto, ~10 s) en vez
   de cada 30 s reales; así todas las corridas cortan en los mismos puntos
   del juego.
+- `rastreo_fb DIRECCION [LARGO]` y `rastreo_traza N` (0.6.4): con `opt
+  prof_rastreo_fb 1`, el censo de las escrituras y lecturas de ese rango de
+  la VRAM (hexadecimal; largo por defecto 2000) y la traza en orden de los
+  cuadros N y N+1 (ver `docs/CONTINUAR.md`, v0.6.4).
 
 **Al terminar, borra o renombra `autotest.txt`**: mientras exista, WIISP
 corre las pruebas en cada arranque y apaga el Wii sin llegar al menú.

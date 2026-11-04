@@ -441,6 +441,63 @@ static void surf_range(const Surface *s, core_u32 *lo, core_u32 *hi){
 	*hi = e;
 }
 
+//Arreglo
+static int rastreo_desc(const Surface *s, char *b, size_t n){
+	static const char *const nf[5] = { "565", "5551", "4444", "8888", "Z" };
+	static const char *const ne[3] = { "igual", "GPU", "VRAM" };
+	static const char *const na[3] = { "uniforme", "VRAM", "GPU" };
+	return snprintf(b, n, "%s ancho %u %dx%d en %06X, %s, alfa %s %d%s%s%s", nf[s->fmt == SURF_Z ? 4 : (s->fmt & 3)], (unsigned)s->stride,
+	                s->w, s->h, (unsigned)s->addr, ne[s->state % 3], na[s->amode % 3], s->ualpha, s->hole_n ? ", hueco" : "",
+	                s == cur_c || s == cur_z ? ", en el EFB" : "", (s == cur_c && efb_c_newer) || (s == cur_z && efb_z_newer) ? " (EFB mas nuevo)" : "");
+}
+
+//Arreglo
+static const char *rastreo_motivo(int dx){
+	static const char *const n[11] = { "textura", "arrastre", "CPU", "pantalla", "solape", "crece", "expulsa", "transferencia", "paleta", "GE", "sincronizar" };
+	return dx >= 0 && dx < 11 ? n[dx] : NULL;
+}
+
+//Arreglo
+static void rastreo_ev(int ev, const Surface *s, int motivo, const char *extra){
+	core_u32 a, e;
+	char d[260];
+	int len;
+	if(!opt_on[OPT_PROF_RASTREO_FB] || !s->used) return;
+	surf_range(s, &a, &e);
+	if(!ge_rastreo_fb_toca(a, e - a)) return;
+	len = rastreo_desc(s, d, sizeof(d));
+	if(extra && len > 0 && len < (int)sizeof(d)) snprintf(d + len, sizeof(d) - (size_t)len, "; %s", extra);
+	ge_rastreo_fb_gx(ev, motivo, d);
+}
+
+//Arreglo
+static core_u32 rastreo_donde(core_u32 off, core_u32 len, char *texto, size_t n){
+	core_u32 r = 0, a, e;
+	int i, k = 0, pase;
+	size_t l = 0;
+	if(!enabled) return 0xFFFFFFFFu;
+	if(texto && n) texto[0] = 0;
+	for(pase = 0; pase < 2; pase++)
+		for(i = 0; i < MAX_SURF; i++){
+			const Surface *s = &surf[i];
+			core_u32 c;
+			if(!s->used || (pase == 0) != (s->addr == off)) continue;
+			surf_range(s, &a, &e);
+			if(!(off < e && a < off + len)) continue;
+			c = (core_u32)(s->fmt == SURF_Z ? 4 : (s->fmt & 3)) | ((core_u32)(s->state & 3) << 3) | ((core_u32)(s->amode & 3) << 5) |
+			    (s->hole_n ? 0x80u : 0) | (s->addr == off ? 0x100u : 0) | (s == cur_c || s == cur_z ? 0x200u : 0) |
+			    ((s == cur_c && efb_c_newer) || (s == cur_z && efb_z_newer) ? 0x400u : 0);
+			if(k < 2) r |= c << (4 + 12 * k);
+			k++;
+			if(texto && l + 4 < n){
+				if(l) l += (size_t)snprintf(texto + l, n - l, "; ");
+				if(l < n) l += (size_t)rastreo_desc(s, texto + l, n - l);
+			}
+		}
+	if(texto && n && !l) snprintf(texto, n, "ningun bufer de GX");
+	return r | (core_u32)(k > 3 ? 3 : k);
+}
+
 static void recompute_watch(void){
 	core_u32 lo[2] = { 0xFFFFFFFFu, 0xFFFFFFFFu }, hi[2] = { 0, 0 }, a, e;
 	int i, w;
@@ -589,6 +646,7 @@ static void vram_to_tex(Surface *s){
 
 static void vram_to_tex_body(Surface *s){
 	int x, y, w = visible_w(s), first_a = -1, uniform = 1, bpp = surf_bpp(s->fmt);
+	rastreo_ev(RG_SUBIR, s, -1, NULL);   //Arreglo
 	prof_uploads++;
 	memset(s->tex, 0, (size_t)(s->w * s->h * 4));
 	for(y = 0; y < s->h; y++){
@@ -639,6 +697,11 @@ static void vram_to_tex_rows(Surface *s, int y0, int y1){
 	u32 lo = (u32)(((y0 >> 2) * (s->w >> 2)) << 6), hi = (u32)((((y1 >> 2) + 1) * (s->w >> 2)) << 6);
 	int old = prof_switch(PROF_FB);
 	const int sa = st_activo(s);   //Arreglo
+	if(opt_on[OPT_PROF_RASTREO_FB]){   //Arreglo
+		char x[40];   //Arreglo
+		snprintf(x, sizeof(x), "filas %d-%d", y0, y1);   //Arreglo
+		rastreo_ev(RG_SUBIR_FILAS, s, -1, x);   //Arreglo
+	}   //Arreglo
 	/* Las demás filas de esos tiles las escribió la GPU: se leen de la
 	   memoria antes de cambiar estas */
 	wait_gpu();
@@ -691,6 +754,7 @@ static int ensure_ci(Surface *s){
 }
 
 static void efb_to_tex_body(Surface *s){
+	rastreo_ev(RG_COPIA_EFB, s, -1, NULL);   //Arreglo
 	copy_filter_none();
 	GX_SetTexCopySrc(0, 0, (u16)s->w, (u16)s->h);
 	GX_SetTexCopyDst((u16)s->w, (u16)s->h, s->fmt == SURF_Z ? GX_TF_Z24X8 : GX_TF_RGBA8, GX_FALSE);
@@ -903,6 +967,7 @@ static void download(Surface *s){
 		t1 = gettime();
 		tex_to_vram(s);
 		prof_downloads++;
+		rastreo_ev(RG_BAJAR, s, dx, rastreo_motivo(dx));   //Arreglo
 		rtt_dl[why]++;
 		rtt_dl_ticks[why] += gettime() - t0;
 		rtt_dx[dx]++;
@@ -928,6 +993,7 @@ static void download(Surface *s){
 }
 
 static void drop_surface(Surface *s){
+	rastreo_ev(RG_SOLTAR, s, dl_force, rastreo_motivo(dl_force));   //Arreglo
 	if(s->state == GPU_NEWER) download(s);
 	if(s == cur_c){ cur_c = NULL; efb_c_newer = 0; restored_c = 0; }
 	if(s == cur_z){ cur_z = NULL; efb_z_newer = 0; restored_z = 0; }
@@ -1004,6 +1070,7 @@ static void vram_hook(core_u32 off, core_u32 len, int write){
 		if(!write && ge.cur_cmd == GE_LOADCLUT && prof_cur != PROF_TEXTURAS && s->fmt != SURF_Z) clut_s = s;
 		if(write){
 			RttTarget *t = rtt_surface(s);
+			rastreo_ev(RG_CPU, s, -1, NULL);   //Arreglo
 			if(t) t->vram_writes++;
 			s->state = VRAM_NEWER;
 			s->hole_n = 0;
@@ -1057,6 +1124,11 @@ static void download_rows(Surface *s, int y0, int y1){
 	old = prof_switch(PROF_FB);
 	tex_to_vram_body(s, y0, y1);
 	prof_switch(old);
+	if(opt_on[OPT_PROF_RASTREO_FB]){   //Arreglo
+		char x[40];   //Arreglo
+		snprintf(x, sizeof(x), "filas %d-%d", y0, y1);   //Arreglo
+		rastreo_ev(RG_BAJAR_FILAS, s, -1, x);   //Arreglo
+	}   //Arreglo
 	mem_note_write(PSP_VRAM_BASE + s->addr + (core_u32)y0 * rowb, (core_u32)(y1 - y0 + 1) * rowb);
 	ge_sync_domain++;
 	hole_rows_dl += (unsigned)(y1 - y0 + 1);
@@ -1085,6 +1157,11 @@ static int keep_with_hole(Surface *o, int fmt, core_u32 a, core_u32 e){
 	if(o->state == GPU_NEWER) download_rows(o, h0, h1);
 	o->hole0 = h0;
 	o->hole_n = h1 - h0 + 1;
+	if(opt_on[OPT_PROF_RASTREO_FB]){   //Arreglo
+		char x[60];   //Arreglo
+		snprintf(x, sizeof(x), "filas %d-%d, por un %s nuevo", h0, h1, fmt == GE_FMT_4444 ? "4444" : fmt == GE_FMT_565 ? "565" : fmt == GE_FMT_5551 ? "5551" : "8888");   //Arreglo
+		rastreo_ev(RG_HUECO, o, -1, x);   //Arreglo
+	}   //Arreglo
 	if(o == clut_src){ clut_src = NULL; use_clut_gpu = 0; }
 	hole_made++;
 	hole_ticks += gettime() - t0;
@@ -1178,6 +1255,7 @@ static Surface *get_surface(core_u32 addr, core_u32 stride, int fmt, int need_w,
 	slot->h = h;
 	slot->has_tex = 0;
 	slot->state = VRAM_NEWER;
+	rastreo_ev(RG_CREAR, slot, -1, NULL);   //Arreglo
 	return slot;
 }
 
@@ -1370,6 +1448,7 @@ static void promote_alpha(void){
 	Surface *s = cur_c;
 	int const_alpha = s->ualpha;
 	if(s->amode == A_GPU || !has_alpha_fmt(s->fmt)) return;
+	rastreo_ev(RG_PROMOVER, s, -1, NULL);   //Arreglo
 	efb_to_tex(s);
 	st_vaciar(&s->st);   //Arreglo
 	if(s->amode == A_VRAM){
@@ -1699,6 +1778,12 @@ static int decode_slot(TexCache *tc, void *ctx, int idx){
 			}
 		}
 		if(!decode_texture(e, want_tex.r)){ memset(e, 0, sizeof(*e)); return 0; }
+		if(opt_on[OPT_PROF_RASTREO_FB]){   //Arreglo
+			char o[300];   //Arreglo
+			int l = snprintf(o, sizeof(o), "GX, al decodificar; ");   //Arreglo
+			rastreo_donde(addr & (PSP_VRAM_SIZE - 1), ge_rastreo_fb_largo(), o + l, sizeof(o) - (size_t)l);   //Arreglo
+			ge_rastreo_fb_contenido(o);   //Arreglo
+		}   //Arreglo
 		if(dt) dt->dec_ticks += gettime() - t0;
 		rtt_dec[from]++;
 		rtt_dec_ticks[from] += gettime() - t0;
@@ -2147,7 +2232,11 @@ static void setup_targets(void){
 		use_rtt = r->texvalid[0] && texture_from_surface(r);
 		if(!use_rtt && r->texvalid[0]) use_clut_gpu = clut_from_surface(r);
 		if(r->texvalid[0]) rtt_note_texture(r, use_rtt ? 1 : use_clut_gpu ? 2 : 0);
+		unsigned dec0 = prof_decodes;   //Arreglo
 		if(!use_rtt && !use_clut_gpu) cur_tex = r->texvalid[0] ? lookup_texture(r) : NULL;
+		if(opt_on[OPT_PROF_RASTREO_FB])   //Arreglo
+			ge_rastreo_fb_camino(!r->texvalid[0] ? RF_NO_DIBUJA : use_rtt ? RF_COPIA_GPU : use_clut_gpu ? RF_PALETA_GPU : !cur_tex ? RF_NO_DIBUJA :   //Arreglo
+			                     prof_decodes != dec0 ? RF_DECODIFICADA : RF_CACHE);   //Arreglo
 		if(rtt_cur){
 			rtt_cur->linear += r->mag_filt || r->min_filt;
 			rtt_cur->clamp_s += r->clamp_s != 0;
@@ -3973,6 +4062,7 @@ void gx_ge_init(void){
 
 void gx_ge_enable(int on){
 	gx_ge_reset();
+	ge_rastreo_fb_donde = rastreo_donde;   //Arreglo
 	enabled = on;
 	ge_hw = on ? &gx_renderer : NULL;
 	ge_fast_math = on;

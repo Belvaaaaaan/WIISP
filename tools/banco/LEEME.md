@@ -236,3 +236,9 @@ al repositorio), `gcc-powerpc-linux-gnu` y `qemu-user`. Las salidas van a
   tarjetas miden el doble). Con `ANOTAR=1`, las líneas que más fallan en la
   L1 de datos. qemu cuenta instrucciones pero no la caché: esto es lo que
   el Wii vio y qemu no (0.5.17).
+- `rastreo_comparar.py A.log B.log [--cuadro N] [--todo]` (0.6.4): la
+  traza de `prof_rastreo_fb` de dos registros del mismo guion (GX contra
+  software): los eventos comunes de cada cuadro, los mapas de los bits 0-3
+  texel a texel, el contenido y el % por bit de cada forma de lectura. En
+  el CLI: `--opt prof_rastreo_fb=1 --rastreo-fb DIRECCION[:LARGO]
+  --rastreo-traza N`.

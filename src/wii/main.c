@@ -655,6 +655,13 @@ static int autotest(const char *appdir){
 		if(!strncmp(line, "ventana ", 8)){ hle_set_ventana_juego((u32)atoi(line + 8)); continue; }   //Arreglo
 		if(!strncmp(line, "volcado ", 8)){ app_guion_volcado((unsigned)atoi(line + 8)); continue; }   //Arreglo
 		if(!strncmp(line, "hasta ", 6)){ hasta_cuadros = atoi(line + 6); continue; }   //Arreglo
+		if(!strncmp(line, "rastreo_fb ", 11)){   //Arreglo
+			char *fin;   //Arreglo
+			unsigned long dir = strtoul(line + 11, &fin, 16), largo = strtoul(fin, NULL, 16);   //Arreglo
+			ge_rastreo_fb_fijar((u32)dir, (u32)largo);   //Arreglo
+			continue;   //Arreglo
+		}   //Arreglo
+		if(!strncmp(line, "rastreo_traza ", 14)){ ge_rastreo_fb_traza((unsigned)atoi(line + 14)); continue; }   //Arreglo
 		if(!strncmp(line, "sufijo", 6)){
 			/* Para correr el mismo juego con otras opciones sin pisar las salidas */
 			const char *v = line + 6;

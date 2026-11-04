@@ -5,6 +5,35 @@ la 0.5.17.2; antes se marcaban con `//arreglo`). Aquí va, por versión, qué
 se arregló o cambió y una descripción breve. El detalle está en
 `docs/CONTINUAR.md`.
 
+## 0.6.4
+
+Solo medidas: el rastreo de un búfer (`prof_rastreo_fb`), para el 4444 de
+64x64 en 0x04158000 de DBZ (suelo amarillo y fantasmas en GX).
+
+- `gpu/ge_rastreo_fb.c` (nuevo): censo de las escrituras al rango vigilado
+  (máscaras RGB y de alfa, operación lógica, mezcla, pruebas, textura,
+  color de los vértices con AND/OR por estado) y de sus lecturas (forma,
+  destino, dónde estaba en GX al empezar el dibujo, camino de GX y
+  contenido por bit); eventos de GX sobre el rango; bajadas con y sin
+  lectura después; transferencias; traza en orden de dos cuadros con
+  líneas juntas y mapas de los bits 0-3 en texto. Informe en `[TIEMPOS]`.
+- `gpu/ge.h`: su interfaz (`RF_*`, `RG_*`, `RfDatos`).
+- `gpu/ge_vertex.c`: el AND/OR del color de los vértices (con índices) o
+  el del material, solo para los dibujos que tocan el rango.
+- `gpu/ge.c`: las transferencias de bloque que tocan el rango.
+- `wii/gx_ge.c`: `rastreo_donde` (los búferes de GX que pisan el rango),
+  los eventos (crear, soltar, bajar, bajar filas, subir, subir filas,
+  copia del EFB, promover el alfa, hueco, escritura de la CPU), el camino
+  de la textura en `setup_targets` y el contenido al decodificar.
+- `frontend/app.c`: el número de cuadro y el reinicio de cada corrida.
+  `hle/hle.c`: el informe. `wii/main.c`: `rastreo_fb` y `rastreo_traza`
+  en el autotest. `host/main.c`: `--rastreo-fb` y `--rastreo-traza`.
+- `core/opt.h`, `core/opt.c`: `prof_rastreo_fb` (apagado).
+- `tools/banco/rastreo_comparar.py` (nuevo): compara la traza de dos
+  registros (GX contra software).
+- `tests/test_rastreo_fb.c` (nuevo). `mutaciones/0.6.4.txt`.
+- `hle/hle.h`, `dist/apps/wiisp/meta.xml`: versión 0.6.4.
+
 ## 0.6.3
 
 El aura de DBZ en GX: el stencil sin perder bits y la diferencia absoluta

@@ -540,6 +540,7 @@ int app_start(void){
 	hle_set_output(forward_output);
 	hle_set_screenshot(on_screenshot);
 	frames_run = 0;
+	ge_rastreo_fb_reiniciar();   //Arreglo
 	executed_at_start = cpu_executed;
 	gs.pos = 0;
 	gs.terminado = 0;
@@ -557,6 +558,7 @@ int app_run_frame(void){
 	if((gs.modo || gs.prefijo[0]) && capturas_cada && frames_run && frames_run % capturas_cada == 0) capturar(0);
 	if(volcado_cuadro && frames_run + 1 == volcado_cuadro && gs.prefijo[0]) ge_efectos_volcado(gs.prefijo, volcado_cuadro);   //Arreglo
 	frames_run++;
+	if(opt_on[OPT_PROF_RASTREO_FB]) ge_rastreo_fb_cuadro(frames_run);   //Arreglo
 	r = hle_run_frame();
 	if(volcado_cuadro && frames_run >= volcado_cuadro) ge_efectos_cuadro_fin(frames_run + 1);   //Arreglo
 	if(gs.modo && r){

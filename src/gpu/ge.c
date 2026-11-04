@@ -721,6 +721,8 @@ static void do_transfer(u32 arg){
 	src_wraps = is_vram(src_base) && !src_ok;
 	dst_wraps = is_vram(dst_base) && !dst_ok;
 	cycles_executed += (u64)w * h * bpp * 16 / 10;
+	if(opt_on[OPT_PROF_RASTREO_FB] && ((is_vram(dst_base) && ge_rastreo_fb_toca(dst & (PSP_VRAM_SIZE - 1), dst_size)) || (is_vram(src_base) && ge_rastreo_fb_toca(src & (PSP_VRAM_SIZE - 1), src_size))))   //Arreglo
+		ge_rastreo_fb_transferencia(src, dst, w, h, bpp);   //Arreglo
 
 	if((overlap || src_wraps || dst_wraps) && (src_ok || src_wraps) && (dst_ok || dst_wraps)){
 		for(y = 0; y < h; y++){

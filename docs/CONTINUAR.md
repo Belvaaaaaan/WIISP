@@ -4092,6 +4092,96 @@ Qué mirar: lo de **Siguiente** (abajo).
   la corrida siguiente; en `.capturas.txt` la lista de opciones se corta.
   Idea de velocidad: CLUT16 sobre 565 con C14X2 en la GPU (~4 %).
 
+### v0.6.4: rastreo del búfer 4444 de 0x04158000 (`prof_rastreo_fb`, solo mide)
+
+Objetivo: saber por qué en GX los bits 0 y 1 del 4444 de 64x64 en
+0x04158000 salen iguales (el suelo amarillo y los fantasmas de DBZ) sin
+cambiar nada de lo que se dibuja. Código en `gpu/ge_rastreo_fb.c` (común a
+GX y software) y unos ganchos en `wii/gx_ge.c`, `gpu/ge_vertex.c`,
+`gpu/ge.c` y `frontend/app.c`.
+
+- `prof_rastreo_fb` (apagado por defecto) y `rastreo_fb DIRECCION [LARGO]`
+  en el autotest (hexadecimal; largo por defecto 2000 = 8 KB, el 4444 de
+  64x64); en el CLI, `--rastreo-fb DIRECCION[:LARGO]`. Sin dirección no
+  mide nada (lo dice en `[TIEMPOS]`).
+- Escrituras: cada dibujo cuyo búfer (dirección, ancho, formato y alto
+  hasta la última fila de la tijera) pisa el rango. Clave: formato y ancho
+  del búfer, primitiva, borrado (con sus bits), `GE_MASKRGB`,
+  `GE_MASKALPHA`, operación lógica (activa y cuál), mezcla (activa,
+  src/dst/eq y fix A/B), prueba de alfa (función, ref, máscara), prueba de
+  color, stencil (prueba y operaciones), z (prueba, función y si escribe),
+  tramado, textura (dirección, formato, función), formato del color del
+  vértice, through, luces y color del material. El color de los vértices
+  (crudo, como viene en la memoria, o el del material si no traen) va
+  aparte: AND y OR de todos los dibujos del estado (qué bits pone siempre
+  y cuáles alguna vez); con luces, el color final es otro (lo dice
+  "luces si"). Con morph se lee el primer objetivo. Nota de GX: "ignora la
+  máscara parcial" (máscara RGB distinta de 0 y de FFFFFF) y "operación
+  lógica sobre el EFB". Las curvas (bezier/spline) no pasan por aquí.
+- Lecturas: cada dibujo con textura cuyo rango (ancho de fila x alto x
+  bits) pisa el vigilado. Forma (dirección, formato, tamaño, ancho,
+  swizzle, paleta con desplazamiento/máscara/offset/dirección), destino,
+  mezcla, función de textura, through y, en GX, dónde estaba al empezar el
+  dibujo: los búferes de GX que pisan el rango (formato, estado igual / más
+  nuevo en la GPU / más nuevo en la VRAM, modo del alfa, hueco, misma
+  dirección, en el EFB, EFB más nuevo que su copia). Después, el camino que
+  tomó GX: copia en la GPU (`texture_from_surface`), paleta en la GPU
+  (`clut_from_surface`), decodificada de la VRAM, de la caché de texturas
+  (sin decodificar) o GX no dibuja; "sin elegir" = GX no rehízo el estado
+  para ese dibujo (charola o estado sin cambios: usa la textura de antes)
+  o no llegó a dibujar. Por software, "software".
+- Contenido: cuando la lectura lee los texeles de verdad (en GX al
+  decodificar, después de la bajada que haga falta; por software en cada
+  lectura), cuántos texeles del rango tienen cada bit. En `[TIEMPOS]`, el %
+  por bit de cada forma de lectura en toda la ventana.
+- GX: crear, soltar (con su motivo), bajar (con su motivo: textura,
+  arrastre, CPU, pantalla, solape, crece, expulsa, transferencia, paleta,
+  GE, sincronizar), bajar filas, subir, subir filas, copia del EFB,
+  promover el alfa, hueco y escritura de la CPU, de cada búfer de GX que
+  pisa el rango. Bajadas "con lectura después" (la lectura que la provocó,
+  o una antes de la siguiente escritura) y "sin lectura".
+- Transferencias de bloque del GE desde o hacia el rango.
+- Traza (`rastreo_traza N`, `--rastreo-traza N`): en los cuadros N y N+1,
+  cada evento en orden en una línea `[RASTREO] cN` (E escritura, L
+  lectura con su camino, T transferencia, G evento de GX); las líneas
+  iguales seguidas se juntan con "(xN)". Hasta 4 mapas por cuadro (los
+  bits 0-3 de cada texel en hexadecimal, 64 filas x 64 columnas: en el
+  4444, el rojo) y 24 líneas de contenido.
+- `tools/banco/rastreo_comparar.py A.log B.log`: los eventos comunes de
+  cada cuadro de la traza (sin lo que solo dice GX), los mapas texel a
+  texel (distintos por bit), el contenido y el % por bit de cada forma de
+  lectura en las dos corridas.
+
+Pruebas: x86 con ASan PENDIENTE; PowerPC bajo qemu PENDIENTE; devkitPPC
+PENDIENTE; `test_rastreo_fb` (el rango y sus bordes, el alto del búfer
+por la tijera, la clave con la máscara y la operación lógica, el AND/OR
+del color con y sin índices y el del material, por un `ge_draw_prim`
+de verdad; el contenido por bit; la lectura pendiente de GX, el camino y
+el contenido de GX; las bajadas con y sin lectura; la traza en el
+registro: ventana de dos cuadros, líneas juntas, mapas, límite de mapas,
+el informe que cuadra y vacía; la tabla llena); pspautotests PENDIENTE;
+mutaciones (`mutaciones/0.6.4.txt`, `mutar.py --solo rastreo_fb`): 16 de
+16 (la que sobrevivía, "la operación lógica no entra en la clave",
+obligó a probar dos dibujos que solo cambian de operación); A/B con el
+CLI de GX en las 555, `prof_rastreo_fb` 0 contra 1 vigilando toda la
+VRAM con traza desde el cuadro 1: PENDIENTE.
+
+Autotest (2 registros y 2 `.capturas.txt`):
+- gx: GX como en la 0.6.3, con `prof_rastreo_fb`, `rastreo_fb 04158000
+  2000`, `rastreo_traza 4000`, `prof_efectos`, capturas cada 400 y `hasta
+  4100`. Las huellas hasta el cuadro 4000 deben ser las de "con" de la
+  0.6.3 (9E8BC705 ... DECEB80E): el rastreo no toca la imagen.
+- soft: la misma escena por software hasta el cuadro 4100 (cerca de una
+  hora), con lo mismo y sin `prof_pmc`.
+
+Qué mirar: `rastreo_comparar.py gx.log soft.log`; en `[TIEMPOS] Rastreo,
+escritura`, la máscara RGB y la operación lógica de los dibujos de cada
+personaje al 4444 y sus colores; en `Rastreo, lectura`, dónde estaba el
+4444 al leerse y el camino, y el % de texeles con el bit 0 y el bit 1 en
+GX y en software; en la traza, el orden de escrituras, bajadas y
+lecturas del cuadro 4000 y si el 565 de 512 de la misma dirección (el del
+aura) se cruza con el 4444 (crear, soltar, hueco).
+
 ### Para el siguiente chat (empezar aquí)
 
 Metodología acordada (detalle en `docs/HOJA_DE_RUTA.md`): primero medir
@@ -4125,11 +4215,8 @@ Metodología acordada (detalle en `docs/HOJA_DE_RUTA.md`): primero medir
   devkitPPC, perfil por función, psq_l emulado, A/B) y para leer los
   registros del Wii (`ventanas.py`): `tools/banco/LEEME.md`. El entorno
   (devkitPPC, qemu, pspautotests, PPSSPP): `tools/setup_entorno.sh`.
-- **Siguiente:** 0.6.4, solo medir el suelo amarillo y los fantasmas:
-  censo de los dibujos a 0x04158000 4444 64x64 y de sus lecturas
-  (GE_MASKRGB, GE_MASKALPHA, operación lógica, mezcla, color, textura,
-  dónde estaba el 4444 al leerse: GPU o VRAM y si estaba bajado), y
-  comparar los volcados 4 y 5 (`.ef4001.4/.5.*.bmp`) de "con" y "soft".
+- **Siguiente:** leer el resultado de la 0.6.4 en el Wii (el rastreo de
+  0x04158000, ver "Qué mirar" en su sección) y decidir el arreglo.
   Después, el arreglo con su interruptor (máscara por bit con dos pasadas
   de operación lógica AND/OR, o pintar ese búfer pequeño por software), y
   vaciar la tabla de códigos en los borrados completos. Lo de la 0.6.3

@@ -3072,6 +3072,33 @@ static void __attribute__((noinline)) censo_repetidos(const VFormat *f, u32 vadd
 	rep_pon(rep_datos, 3, hd);
 }
 
+//Arreglo
+static void rastreo_fb_dibujo(const VFormat *f, u32 prim, u32 count, u32 vaddr, u32 iaddr){
+	const int interesa = ge_rastreo_fb_interesa();
+	u32 y = 0xFFFFFFFFu, o = 0, i;
+	int ok = 1;
+	if(!interesa) return;
+	if(!f->col){
+		y = o = material_ambient_rgba();
+	} else for(i = 0; i < count; i++){
+		u32 n = i, c;
+		const u8 *p;
+		if(f->idx){
+			const u32 isz = idx_size[f->idx];
+			const u8 *q = mem_ptr_r(iaddr + i * isz, isz);
+			if(!q){ ok = 0; break; }
+			n = isz == 1 ? q[0] : isz == 2 ? rd_le16(q) : rd_le32(q);
+		}
+		p = mem_ptr_r(vaddr + n * f->size + f->off_col, 4);
+		if(!p){ ok = 0; break; }
+		c = color_to_8888(f->col, p);
+		y &= c;
+		o |= c;
+	}
+	if(!ok || !count){ y = 0; o = 0; ok = 0; }
+	ge_rastreo_fb_dibujo(prim, count, interesa, y, o, ok);
+}
+
 void ge_draw_prim(u32 prim, u32 count){
 	VFormat fl;   //Arreglo
 	const VFormat *fp = &fl;   //Arreglo
@@ -3098,6 +3125,7 @@ void ge_draw_prim(u32 prim, u32 count){
 	}
 	if(!mem_valid(vaddr, 1)) return;
 	if(fp->idx && !mem_valid(iaddr, 1)) return;   //Arreglo
+	if(opt_on[OPT_PROF_RASTREO_FB]) rastreo_fb_dibujo(fp, prim, count, vaddr, iaddr);   //Arreglo
 
 	/* Sin formato de posición (o en turbo) no se dibuja, pero se avanza */
 	if(fp->pos && !ge_turbo){   //Arreglo
