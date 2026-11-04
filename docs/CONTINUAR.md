@@ -4250,7 +4250,7 @@ aura) se cruza con el 4444 (crear, soltar, hueco).
   que da la PSP.
 
 Pruebas: x86 con ASan 213.886 comprobaciones, 0 fallos; PowerPC bajo qemu
-PENDIENTE y devkitPPC PENDIENTE; `test_gxmascara` (lo escribible de cada formato, los casos de
+409.104 y devkitPPC 409.105, 0 fallos; `test_gxmascara` (lo escribible de cada formato, los casos de
 DBZ, cada motivo para no arreglar y 400.000 casos al azar: los 4 formatos,
 RGB8 y RGBA6, la operación de GX sobre un EFB con bits bajos al azar,
 contra la fórmula de la PSP del renderizador por software); mutaciones
@@ -4339,7 +4339,7 @@ script `tools/banco/Census_comparación.py`.
   dónde pintó) y el mapa de bloques de los primeros.
 
 Pruebas: x86 con ASan 214.039 comprobaciones, 0 fallos; PowerPC bajo qemu
-PENDIENTE y devkitPPC PENDIENTE; `test_brightcensus` (la ventana de
+409.257 y devkitPPC 409.258, 0 fallos; `test_brightcensus` (la ventana de
 cuatro cuadros, el interruptor, la cabecera, los campos, el rango de las
 coordenadas, la media de un bloque, solo los bloques que cambian, el
 número de dibujo por cuadro, nada fuera de la ventana); mutaciones
