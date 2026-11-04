@@ -172,6 +172,12 @@ u32 ge_rastreo_fb_largo(void);   //Arreglo
 void ge_rastreo_fb_datos(RfDatos *d);   //Arreglo
 void ge_rastreo_fb_reiniciar(void);   //Arreglo
 extern u32 (*ge_rastreo_fb_donde)(u32 off, u32 len, char *texto, size_t n);   //Arreglo
+extern int ge_bc_on;   //Arreglo
+void ge_brightcensus_fijar(unsigned desde);   //Arreglo
+void ge_brightcensus_cuadro(unsigned cuadro, const char *prefijo);   //Arreglo
+void ge_brightcensus_cerrar(void);   //Arreglo
+void ge_brightcensus_dibujo_fin(u32 prim);   //Arreglo
+extern int (*ge_brightcensus_pixeles)(u32 off, int fmt, u32 stride, int w, int h, u32 *raw);   //Arreglo
 
 /* Reloj del anfitrión para medir el GE (perfilado); NULL = sin medir */
 extern unsigned long long (*ge_host_clock)(void);

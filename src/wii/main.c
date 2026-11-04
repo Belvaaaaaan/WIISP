@@ -522,6 +522,16 @@ static void autotest_output(const char *text, unsigned len){
 }
 
 static int hasta_cuadros;   //Arreglo
+static int exacto_pasado;   //Arreglo
+
+//Arreglo
+static void pasar_a_exacto(unsigned cuadro){
+	if(!gx_ge_enabled()) return;
+	gx_ge_sync_vram();
+	gx_ge_enable(0);
+	exacto_pasado = 1;
+	hle_log("[COTEJO] desde el cuadro %u, renderizador por software (exacto)\n", cuadro);
+}
 
 /* Una ejecución de la lista de pruebas. prefix es la ruta de las salidas
    (la del programa, más ".vN" si se repite). */
@@ -618,6 +628,7 @@ static void autotest_run(const char *path, const char *prefix, int max_frames){
 	app_guion_parar();
 	if(autotest_file) fclose(autotest_file);
 	autotest_file = NULL;
+	if(exacto_pasado){ gx_ge_enable(1); exacto_pasado = 0; }   //Arreglo
 	gx_ge_reset();
 	if(scripted){
 		app_set_savedata_dir(savedata_normal);
@@ -662,6 +673,8 @@ static int autotest(const char *appdir){
 			continue;   //Arreglo
 		}   //Arreglo
 		if(!strncmp(line, "rastreo_traza ", 14)){ ge_rastreo_fb_traza((unsigned)atoi(line + 14)); continue; }   //Arreglo
+		if(!strncmp(line, "Exactodesde ", 12)){ app_guion_exactodesde((unsigned)atoi(line + 12)); continue; }   //Arreglo
+		if(!strncmp(line, "Cotejo ", 7)){ app_guion_cotejo((unsigned)atoi(line + 7)); continue; }   //Arreglo
 		if(!strncmp(line, "sufijo", 6)){
 			/* Para correr el mismo juego con otras opciones sin pisar las salidas */
 			const char *v = line + 6;
@@ -758,6 +771,7 @@ int main(int argc, char **argv){
 	jit_pedir_arena = arena_jit;   //Arreglo
 	cpu_predec_pedir_mem = mem2_censo;   //Arreglo
 	ge_efectos_sincronizar = gx_ge_sync_vram;   //Arreglo
+	app_pasar_a_exacto = pasar_a_exacto;   //Arreglo
 	/* Las capturas de los guiones necesitan la imagen en la VRAM emulada */
 	app_set_before_capture(gx_ge_sync_vram);
 	app_set_mode_text(mode_text);

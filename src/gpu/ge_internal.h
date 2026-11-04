@@ -391,6 +391,7 @@ static inline void ge_tri_col(GeVertex *o, const GeVertex *c, const GeVertex *co
 }
 
 extern const GeHwRenderer *ge_hw;
+void ge_brightcensus_prim(const GeVertex *const *v, int n);   //Arreglo
 
 void ge_load_clut(u32 blocks);
 /* Convierte un color de 16/32 bits de la PSP a RGBA de 8 bits */

@@ -3899,6 +3899,39 @@ static int present_body(void *xfb, GXRModeObj *rm, int widescreen){
 
 /* --- Control ---------------------------------------------------------------------- */
 
+//Arreglo
+static int bc_pixeles(core_u32 off, int fmt, core_u32 stride, int w, int h, core_u32 *raw){
+	Surface *s;
+	const u8 *dec;
+	int x, y, bpp = surf_bpp(fmt);
+	if(!enabled) return 0;
+	s = find_surface(off, stride, fmt);
+	if(!s || s->state == VRAM_NEWER) return 0;
+	if(s == cur_c && efb_c_newer){ efb_to_tex(s); efb_c_newer = 0; }
+	if(!s->has_tex) return 0;
+	wait_gpu();
+	DCInvalidateRange(s->tex, (u32)(s->w * s->h * 4));
+	dec = st_tabla(&s->st, st_ident);
+	for(y = 0; y < h; y++)
+		for(x = 0; x < w; x++){
+			const u8 *q = psp_mem.vram + ((off + ((core_u32)y * stride + (core_u32)x) * (core_u32)bpp) & (PSP_VRAM_SIZE - 1));
+			const core_u32 vr = bpp == 4 ? (core_u32)q[0] | ((core_u32)q[1] << 8) | ((core_u32)q[2] << 16) | ((core_u32)q[3] << 24)
+			                             : (core_u32)q[0] | ((core_u32)q[1] << 8);
+			core_u32 v, r, g, b, a;
+			const u8 *t;
+			if(x >= s->w || y >= s->h || in_hole_row(s, y)){ raw[y * w + x] = vr; continue; }
+			t = tile_ptr(s->tex, s->w, x, y);
+			r = t[1]; g = t[32]; b = t[33];
+			a = s->amode == A_GPU ? dec[t[0]] : (core_u32)s->ualpha;
+			if(fmt == GE_FMT_8888) v = r | (g << 8) | (b << 16) | (s->amode == A_VRAM ? vr & 0xFF000000u : a << 24);
+			else if(fmt == GE_FMT_565) v = (r >> 3) | ((g >> 2) << 5) | ((b >> 3) << 11);
+			else if(fmt == GE_FMT_5551) v = (r >> 3) | ((g >> 3) << 5) | ((b >> 3) << 10) | (s->amode == A_VRAM ? vr & 0x8000u : (a >> 7) << 15);
+			else v = (r >> 4) | ((g >> 4) << 4) | ((b >> 4) << 8) | (s->amode == A_VRAM ? vr & 0xF000u : (a >> 4) << 12);
+			raw[y * w + x] = v;
+		}
+	return 1;
+}
+
 void gx_ge_sync_vram(void){
 	int i;
 	tri_listo = 0;
@@ -4152,6 +4185,7 @@ void gx_ge_init(void){
 void gx_ge_enable(int on){
 	gx_ge_reset();
 	ge_rastreo_fb_donde = rastreo_donde;   //Arreglo
+	ge_brightcensus_pixeles = bc_pixeles;   //Arreglo
 	enabled = on;
 	ge_hw = on ? &gx_renderer : NULL;
 	ge_fast_math = on;

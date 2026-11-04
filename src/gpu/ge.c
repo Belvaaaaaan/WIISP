@@ -949,14 +949,17 @@ static void execute(DisplayList *l, u32 op){
 		break;
 	case GE_PRIM:
 		cycles_executed += (u64)vertex_cost() * (arg & 0xFFFF);
-		if(opt_on[OPT_PROF_BBOX]){ censo_bbox_prim(l, arg); break; }   //Arreglo
-		ge_draw_prim((arg >> 16) & 7, arg & 0xFFFF);
+		if(opt_on[OPT_PROF_BBOX]) censo_bbox_prim(l, arg);   //Arreglo
+		else ge_draw_prim((arg >> 16) & 7, arg & 0xFFFF);   //Arreglo
+		if(ge_bc_on) ge_brightcensus_dibujo_fin((arg >> 16) & 7);   //Arreglo
 		break;
 	case GE_BEZIER:
 		ge_draw_bezier(arg);
+		if(ge_bc_on) ge_brightcensus_dibujo_fin(8);   //Arreglo
 		break;
 	case GE_SPLINE:
 		ge_draw_spline(arg);
+		if(ge_bc_on) ge_brightcensus_dibujo_fin(9);   //Arreglo
 		break;
 	case GE_BOUNDINGBOX:
 		if(opt_on[OPT_PROF_BBOX]){ cycles_executed += 22ull * (arg & 0xFFFF); censo_bbox_caja(arg & 0xFFFF); break; }   //Arreglo

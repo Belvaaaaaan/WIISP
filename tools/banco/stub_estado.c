@@ -211,7 +211,12 @@ static void report(void){
 	fflush(stdout);
 }
 void gx_ge_prueba(void);
+extern void (*app_pasar_a_exacto)(unsigned cuadro);
+void gx_ge_sync_vram(void);
+static void pasar_a_exacto(unsigned cuadro){ (void)cuadro; gx_ge_sync_vram(); gx_ge_enable(0); }
+
 void host_renderer_hook(void){
+	app_pasar_a_exacto = pasar_a_exacto;
 	gx_ge_init();
 	if(getenv("PRUEBA_GX")) gx_ge_prueba();
 	gx_ge_enable(1);

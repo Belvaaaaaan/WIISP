@@ -5,6 +5,30 @@ la 0.5.17.2; antes se marcaban con `//arreglo`). Aquí va, por versión, qué
 se arregló o cambió y una descripción breve. El detalle está en
 `docs/CONTINUAR.md`.
 
+## 0.6.6
+
+Solo medidas: el cotejo dibujo a dibujo de GX contra el software
+(`test_brightnesscensus`).
+
+- `gpu/ge_brightcensus.c` (nuevo): en cuatro cuadros, después de cada
+  dibujo, el estado del GE, el rango de las coordenadas de textura y de
+  pantalla que llegaron al rasterizador y la miniatura del búfer de
+  destino (bloques de 16x16 que cambiaron) en `<prefijo>.dibujos.bin`.
+- `gpu/ge.c`: el registro al acabar cada PRIM, bezier y spline.
+  `gpu/ge_raster.c`: el rango de cada primitiva. `gpu/ge.h`,
+  `gpu/ge_internal.h`: su interfaz.
+- `wii/gx_ge.c`: `bc_pixeles`, el búfer de GX convertido como al bajarlo
+  a la VRAM.
+- `frontend/app.c`, `frontend/app.h`: `Exactodesde` (pasar a software en
+  un cuadro) y `Cotejo`. `wii/main.c`: las órdenes en el autotest y el
+  paso a software (vuelve GX al acabar la corrida). `host/main.c`:
+  `--exactodesde` y `--cotejo`. `tools/banco/stub_estado.c`: el paso a
+  software en el CLI de GX.
+- `core/opt.h`, `core/opt.c`: `test_brightnesscensus` (apagado).
+- `tools/banco/Census_comparación.py` (nuevo). `tests/test_brightcensus.c`
+  (nuevo). `mutaciones/0.6.6.txt`.
+- `hle/hle.h`, `dist/apps/wiisp/meta.xml`: versión 0.6.6.
+
 ## 0.6.5
 
 El suelo amarillo de DBZ en GX: la máscara de color parcial

@@ -374,6 +374,8 @@ int main(int argc, char **argv){
 			ge_rastreo_fb_fijar((u32)dir, (u32)largo);   //Arreglo
 		}   //Arreglo
 		else if(!strcmp(argv[i], "--rastreo-traza") && i + 1 < argc) ge_rastreo_fb_traza((unsigned)atoi(argv[++i]));   //Arreglo
+		else if(!strcmp(argv[i], "--exactodesde") && i + 1 < argc) app_guion_exactodesde((unsigned)atoi(argv[++i]));   //Arreglo
+		else if(!strcmp(argv[i], "--cotejo") && i + 1 < argc) app_guion_cotejo((unsigned)atoi(argv[++i]));   //Arreglo
 		else if(!strcmp(argv[i], "--grabar") && i + 1 < argc) grabar = argv[++i];
 		else if(!strcmp(argv[i], "--partidas") && i + 1 < argc) partidas = argv[++i];
 		else if(!strcmp(argv[i], "--capturas-guion") && i + 1 < argc) app_guion_capturas_cada((unsigned)atoi(argv[++i]));
@@ -389,7 +391,7 @@ int main(int argc, char **argv){
 		                "          [--screenshot FILE] [--capturas N] [--log FILE] [--osk TEXTO]\n"
 		                "          [--guion FILE] [--salida PREFIJO] [--grabar FILE] [--partidas DIR] [--volcado N]\n"
 		                "          [--opt NOMBRE=0|1]... [--capturas-guion N] [--veces N] [--ventana N]\n"   //Arreglo
-		                "          [--rastreo-fb DIRECCION[:LARGO]] [--rastreo-traza N]\n"   //Arreglo
+		                "          [--rastreo-fb DIRECCION[:LARGO]] [--rastreo-traza N] [--exactodesde N] [--cotejo N]\n"   //Arreglo
 		                "          EBOOT.PBP|archivo.elf|archivo.prx|imagen.iso|imagen.cso\n", argv[0]);
 		return 2;
 	}

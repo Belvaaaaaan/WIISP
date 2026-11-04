@@ -242,3 +242,10 @@ al repositorio), `gcc-powerpc-linux-gnu` y `qemu-user`. Las salidas van a
   texel a texel, el contenido y el % por bit de cada forma de lectura. En
   el CLI: `--opt prof_rastreo_fb=1 --rastreo-fb DIRECCION[:LARGO]
   --rastreo-traza N`.
+- `Census_comparación.py A.dibujos.bin B.dibujos.bin [--top N] [--umbral
+  U] [--mapas N]` (0.6.6): compara dibujo a dibujo dos registros de
+  `test_brightnesscensus` (GX contra software con `Exactodesde`): la
+  diferencia de cada búfer al final de cada cuadro, el primer dibujo que
+  la hace crecer y los que más, con su estado, sus UV y un mapa de
+  bloques. En el CLI: `--opt test_brightnesscensus=1 --cotejo N
+  [--exactodesde M]`.

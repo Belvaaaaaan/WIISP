@@ -4285,6 +4285,81 @@ los bits 0 y 1 como por software (0.6.4: ~10 % y 6-8 %, los demás a 0);
 la línea `gx_mascara_bits` (casi todo OR, nada sin arreglar en la pelea);
 el coste en la pelea (sin contra con).
 
+### Resultado de la 0.6.5 en el Wii (DBZ: sin / con)
+
+- `[PRUEBA_GX] gx_mascara_bits`: RGB8 y RGBA6, los 8 casos 1024 de 1024:
+  GX hace la operación lógica con el color del TEV como se supuso.
+- En "con", miles de estados de GX con la operación OR por ventana de la
+  pelea y ninguno sin arreglar; el 4444 de 0x04158000 sale ahora como por
+  software (bit 0 ~10 %, bit 1 6-9 %, los demás a 0; en "sin" todos los
+  bits ~13 %).
+- **Pero la imagen casi no cambia** (el usuario: sigue el suelo brillante
+  y los fantasmas; las huellas de "con" solo cambian en 4000 y 4400). El
+  búfer de las sombras ya se escribe bien: el fallo visible está en otro
+  dibujo. Sospecha (sin medir): la proyección de ese búfer sobre el suelo,
+  triángulos 3D con UV de -2558 a 3170 con clamp, y el rango o la
+  precisión de las coordenadas de textura de GX. En vez de suponer, el
+  usuario propuso comparar dibujo a dibujo GX contra el software: la
+  0.6.6.
+
+### v0.6.6: cotejo dibujo a dibujo de GX contra el software (`test_brightnesscensus`)
+
+Nombres elegidos por el usuario: interruptor `test_brightnesscensus`,
+código `gpu/ge_brightcensus.c`, órdenes `Exactodesde N` y `Cotejo N`,
+script `tools/banco/Census_comparación.py`.
+
+- `Exactodesde N` (autotest; `--exactodesde N` en el CLI): al empezar el
+  cuadro N, se bajan a la VRAM los búferes de GX y la corrida sigue con el
+  renderizador por software y la matemática exacta (`app_pasar_a_exacto`,
+  puesto por `wii/main.c`; al acabar la corrida vuelve GX). Así solo los
+  últimos cuadros van lentos. La partida es la misma (guion por cuadros).
+- `Cotejo N` (con `opt test_brightnesscensus 1`; `--cotejo N`): en los
+  cuadros N a N+3, después de cada dibujo (PRIM, bezier y spline, desde
+  `ge.c`), un registro en `<prefijo>.dibujos.bin` (little-endian; cabecera
+  `WIISPBC1`): el cuadro y el número de dibujo, la primitiva, 32 campos del
+  estado (destino, formato, ancho, tamaño de la tijera, borrado, máscaras,
+  operación lógica, mezcla, pruebas de alfa y stencil, z, tramado, textura
+  con formato, tamaño, función, modo de mapeo, wrap y filtro, paleta, tipo
+  de vértice, material, luces y niebla, número de primitivas), el rango de
+  s, t, q y de la posición en pantalla de los vértices que llegaron al
+  rasterizador (ganchos en `ge_raster.c`, comunes a GX y software) y la
+  miniatura del búfer de destino: el color medio (RGBA de 8 bits, con la
+  misma conversión que la VRAM) de cada bloque de 16x16, solo los bloques
+  que cambiaron desde el último registro de ese búfer. En GX se lee la
+  copia del búfer (`bc_pixeles` en `gx_ge.c`: copia del EFB si es más
+  nuevo y la misma conversión que al bajarlo; las filas del hueco y los
+  búferes que no están en la GPU, de la VRAM); por software, la VRAM. Las
+  charolas pendientes se envían al acabar cada dibujo. Línea `[COTEJO]`
+  en el registro con el número de dibujos y el tamaño.
+- `tools/banco/Census_comparación.py A.bin B.bin [--top N] [--umbral U]
+  [--mapas N]`: empareja los dibujos (cuadro, número, primitiva, destino,
+  textura; avisa si se desalinean), rehace las miniaturas y da: la
+  diferencia de cada búfer al final de cada cuadro, el primer dibujo que
+  la hace crecer, los N que más la hacen crecer (con su estado, las UV y
+  dónde pintó) y el mapa de bloques de los primeros.
+
+Pruebas: x86 con ASan 214.039 comprobaciones, 0 fallos; PowerPC bajo qemu
+PENDIENTE y devkitPPC PENDIENTE; `test_brightcensus` (la ventana de
+cuatro cuadros, el interruptor, la cabecera, los campos, el rango de las
+coordenadas, la media de un bloque, solo los bloques que cambian, el
+número de dibujo por cuadro, nada fuera de la ventana); mutaciones
+(`mutaciones/0.6.6.txt`, `--solo brightcensus`): 8 de 8; en el PC, con
+el CLI y el CLI de GX en `tests/guest/ge_mascara` y `ge_draw` (con
+`--exactodesde 50 --cotejo 52`: pasa a software en el cuadro 50, el
+registro de 52-55 sale como software), y el script con los dos
+registros; pspautotests 275/275; tests/guest 24/24; A/B con el CLI de GX
+en las 555, la 0.6.5 contra la 0.6.6 con el interruptor apagado: 0
+distintos.
+
+Autotest (2 registros y 2 `.dibujos.bin`, sin capturas, hasta el cuadro
+4010):
+- gx: GX con todo, `Cotejo 4000`;
+- exacto: lo mismo con `Exactodesde 3990`.
+
+Qué mirar: `python3 tools/banco/Census_comparación.py gx.dibujos.bin
+exacto.dibujos.bin`: el primer dibujo y los que más hacen crecer la
+diferencia en la pantalla, con su estado y sus UV.
+
 ### Para el siguiente chat (empezar aquí)
 
 Metodología acordada (detalle en `docs/HOJA_DE_RUTA.md`): primero medir
@@ -4318,12 +4393,11 @@ Metodología acordada (detalle en `docs/HOJA_DE_RUTA.md`): primero medir
   devkitPPC, perfil por función, psq_l emulado, A/B) y para leer los
   registros del Wii (`ventanas.py`): `tools/banco/LEEME.md`. El entorno
   (devkitPPC, qemu, pspautotests, PPSSPP): `tools/setup_entorno.sh`.
-- **Siguiente:** leer el resultado de la 0.6.5 en el Wii (ver "Qué mirar"
-  en su sección). Si quedan fantasmas, mirar la caché de texturas del 4444
-  (la mayoría de sus lecturas en GX salen de la caché). Después, vaciar la
-  tabla de códigos del stencil en los borrados completos, el coste de
-  crear y soltar el 4444 en cada imagen (medido en la 0.6.4) y el diseño
-  del IR (paso 11).
+- **Siguiente:** leer el cotejo de la 0.6.6 (ver "Qué mirar" en su
+  sección) y arreglar el dibujo que se separa, con su interruptor.
+  Después, vaciar la tabla de códigos del stencil en los borrados
+  completos, el coste de crear y soltar el 4444 en cada imagen (medido en
+  la 0.6.4) y el diseño del IR (paso 11).
   Después, el arreglo con su interruptor (máscara por bit con dos pasadas
   de operación lógica AND/OR, o pintar ese búfer pequeño por software), y
   vaciar la tabla de códigos en los borrados completos. Lo de la 0.6.3

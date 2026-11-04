@@ -53,6 +53,7 @@ enum {
 	OPT_PROF_EFECTOS,   //Arreglo
 	OPT_PRUEBA_GX,   //Arreglo
 	OPT_PROF_RASTREO_FB,   //Arreglo
+	OPT_TEST_BRIGHTNESSCENSUS,   //Arreglo
 	/* Primera tanda del GE (resultado idéntico) */
 	OPT_GE_SKIN_RAPIDO,   /* skinning mezclando las matrices por peso */
 	OPT_GE_MTX_CACHE,     /* matrices combinadas solo cuando cambian */

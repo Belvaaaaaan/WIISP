@@ -119,6 +119,11 @@ sd:/ISO/SFA3.iso
   prof_rastreo_fb 1`, el censo de las escrituras y lecturas de ese rango de
   la VRAM (hexadecimal; largo por defecto 2000) y la traza en orden de los
   cuadros N y N+1 (ver `docs/CONTINUAR.md`, v0.6.4).
+- `Exactodesde N` y `Cotejo N` (0.6.6): pasar al renderizador por software
+  al empezar el cuadro N (vuelve GX al acabar la corrida), y con `opt
+  test_brightnesscensus 1`, registrar cada dibujo de los cuadros N a N+3
+  en `<juego>.<sufijo>.dibujos.bin` para compararlos con
+  `tools/banco/Census_comparación.py` (ver `docs/CONTINUAR.md`, v0.6.6).
 
 **Al terminar, borra o renombra `autotest.txt`**: mientras exista, WIISP
 corre las pruebas en cada arranque y apaga el Wii sin llegar al menú.

@@ -294,6 +294,8 @@ static void (*before_capture)(void);
 static void (*mode_text)(char *buf, size_t size);
 static unsigned capturas_cada = 400;
 static unsigned volcado_cuadro;   //Arreglo
+static unsigned exacto_desde, cotejo_desde;   //Arreglo
+void (*app_pasar_a_exacto)(unsigned cuadro);   //Arreglo
 
 #ifndef HUELLA_CADA
 #define HUELLA_CADA 60    /* cuadros entre huellas (-DHUELLA_CADA=1: cada cuadro) */
@@ -400,6 +402,8 @@ static void capturar(int pedida){
 void app_set_mode_text(void (*fn)(char *buf, size_t size)){ mode_text = fn; }
 void app_guion_capturas_cada(unsigned cuadros){ capturas_cada = cuadros; }
 void app_guion_volcado(unsigned cuadro){ volcado_cuadro = cuadro; }   //Arreglo
+void app_guion_exactodesde(unsigned cuadro){ exacto_desde = cuadro; }   //Arreglo
+void app_guion_cotejo(unsigned cuadro){ cotejo_desde = cuadro; ge_brightcensus_fijar(cuadro); }   //Arreglo
 
 void app_capturas_sin_guion(const char *prefijo){
 	if(gs.modo) return;
@@ -500,6 +504,7 @@ void app_guion_parar(void){
 	guion_free(&gs.g);
 	memset(&gs, 0, sizeof(gs));
 	hle_set_osk(osk_func);
+	ge_brightcensus_cerrar();   //Arreglo
 }
 
 int app_guion_activo(void){ return gs.modo; }
@@ -557,8 +562,10 @@ int app_run_frame(void){
 	if(gs.modo == G_REPRODUCIR && guion_paso()) return 1;
 	if((gs.modo || gs.prefijo[0]) && capturas_cada && frames_run && frames_run % capturas_cada == 0) capturar(0);
 	if(volcado_cuadro && frames_run + 1 == volcado_cuadro && gs.prefijo[0]) ge_efectos_volcado(gs.prefijo, volcado_cuadro);   //Arreglo
+	if(exacto_desde && frames_run + 1 == exacto_desde && app_pasar_a_exacto) app_pasar_a_exacto(exacto_desde);   //Arreglo
 	frames_run++;
 	if(opt_on[OPT_PROF_RASTREO_FB]) ge_rastreo_fb_cuadro(frames_run);   //Arreglo
+	if(cotejo_desde && opt_on[OPT_TEST_BRIGHTNESSCENSUS]) ge_brightcensus_cuadro(frames_run, gs.prefijo[0] ? gs.prefijo : "cotejo");   //Arreglo
 	r = hle_run_frame();
 	if(volcado_cuadro && frames_run >= volcado_cuadro) ge_efectos_cuadro_fin(frames_run + 1);   //Arreglo
 	if(gs.modo && r){

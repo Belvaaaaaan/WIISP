@@ -1,0 +1,59 @@
+=== brightcensus: la ventana dura un cuadro de menos
+@ src/gpu/ge_brightcensus.c
+<<<
+	const int dentro = opt_on[OPT_TEST_BRIGHTNESSCENSUS] && bc_desde && cuadro >= bc_desde && cuadro < bc_desde + BC_CUADROS;
+>>>
+	const int dentro = opt_on[OPT_TEST_BRIGHTNESSCENSUS] && bc_desde && cuadro >= bc_desde && cuadro < bc_desde + BC_CUADROS - 1;
+===
+=== brightcensus: sin mirar el interruptor
+@ src/gpu/ge_brightcensus.c
+<<<
+	const int dentro = opt_on[OPT_TEST_BRIGHTNESSCENSUS] && bc_desde && cuadro >= bc_desde && cuadro < bc_desde + BC_CUADROS;
+>>>
+	const int dentro = bc_desde && cuadro >= bc_desde && cuadro < bc_desde + BC_CUADROS;
+===
+=== brightcensus: siempre todos los bloques
+@ src/gpu/ge_brightcensus.c
+<<<
+	if(todos) cambios = (u32)(bw * bh);
+>>>
+	todos = 1;
+	if(todos) cambios = (u32)(bw * bh);
+===
+=== brightcensus: el redondeo de la media
+@ src/gpu/ge_brightcensus.c
+<<<
+		for(i = 0; i < 4; i++) bc_nuevo[b][i] = (u8)(n ? (s[i] + n / 2) / n : 0);
+>>>
+		for(i = 0; i < 4; i++) bc_nuevo[b][i] = (u8)(n ? s[i] / n : 0);
+===
+=== brightcensus: el rango no se vacia entre dibujos
+@ src/gpu/ge_brightcensus.c
+<<<
+	bc_dibujo++;
+	bc_vaciar_rango();
+>>>
+	bc_dibujo++;
+===
+=== brightcensus: el maximo de las coordenadas toma el minimo
+@ src/gpu/ge_brightcensus.c
+<<<
+			if(c[k] > bc_max[k]) bc_max[k] = c[k];
+>>>
+			if(c[k] < bc_max[k]) bc_max[k] = c[k];
+===
+=== brightcensus: el numero de dibujo no vuelve a 0 en cada cuadro
+@ src/gpu/ge_brightcensus.c
+<<<
+	bc_cuadro = cuadro;
+	bc_dibujo = 0;
+>>>
+	bc_cuadro = cuadro;
+===
+=== brightcensus: los bloques del borde se cuentan enteros
+@ src/gpu/ge_brightcensus.c
+<<<
+	bw = (w + BC_BLOQUE - 1) / BC_BLOQUE;
+>>>
+	bw = w / BC_BLOQUE + 1;
+===

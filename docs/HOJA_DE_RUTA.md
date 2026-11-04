@@ -452,9 +452,13 @@ ahí en blanco con una máscara de color parcial (FFFFEF o FFFFDF: un solo
 bit del texel) y GX escribía el blanco entero.
 
 Hecha (v0.6.5): `gx_mascara_bits`, la máscara parcial con color constante
-como una operación lógica OR/AND del EFB. Sigue: ver en el Wii si el
-suelo y los fantasmas salen como por software y, después, el diseño del
-IR (paso 11).
+como una operación lógica OR/AND del EFB. Resultado: el búfer de las
+sombras sale ya como por software, pero la imagen casi no cambia.
+
+Hecha (v0.6.6): solo medidas, el cotejo dibujo a dibujo de GX contra el
+software (`test_brightnesscensus`, `Exactodesde`, `Cotejo`,
+`Census_comparación.py`). Sigue: arreglar el dibujo que se separa y,
+después, el diseño del IR (paso 11).
 
 Primera tanda acordada (todas "más barato", verificables en el PC):
 0.1 `prof_espera`, **skinning rápido** (`ge_skin_rapido`), **matrices al

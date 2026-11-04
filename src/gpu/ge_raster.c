@@ -2184,6 +2184,7 @@ int ge_raster_triangle_ccw_c(const GeVertex *v0, const GeVertex *v1, const GeVer
 	t = &ge_ch_tris[ge_ch_n];
 	t->v[0] = v0; t->v[1] = v1; t->v[2] = v2;
 	t->col = col;
+	if(ge_bc_on) ge_brightcensus_prim(t->v, 3);   //Arreglo
 	if(++ge_ch_n == GE_CH_TRIS) ge_raster_charola_vaciar();
 	return 1;
 }
@@ -2210,6 +2211,7 @@ void ge_raster_triangle_ccw(const GeVertex *v0, const GeVertex *v1, const GeVert
 	if(ge_ch_n) ge_raster_charola_vaciar();   //Arreglo
 	if(!range_of(v, 3, &x1, &y1, &x2, &y2)){ ge_tri_flags |= GE_TRI_OUTSIDE; return; }
 	ge_stats.primitives++;
+	if(ge_bc_on) ge_brightcensus_prim(v, 3);   //Arreglo
 	if(ge_hw){
 		int phase = prof_ge_enter(GEF_ENVIAR);
 		ge_hw->triangle(v0, v1, v2);
@@ -2231,6 +2233,7 @@ void ge_raster_rect(const GeVertex *v0, const GeVertex *v1){
 	if(ge_ch_n) ge_raster_charola_vaciar();   //Arreglo
 	if(!range_of(v, 2, &x1, &y1, &x2, &y2)) return;
 	ge_stats.primitives++;
+	if(ge_bc_on) ge_brightcensus_prim(v, 2);   //Arreglo
 	if(ge_hw){
 		int phase = prof_ge_enter(GEF_ENVIAR);
 		ge_hw->rect(v0, v1);
@@ -2251,6 +2254,7 @@ void ge_raster_clear_rect(const GeVertex *v0, const GeVertex *v1){
 	if(ge_ch_n) ge_raster_charola_vaciar();   //Arreglo
 	if(!range_of(v, 2, &x1, &y1, &x2, &y2)) return;
 	ge_stats.primitives++;
+	if(ge_bc_on) ge_brightcensus_prim(v, 2);   //Arreglo
 	if(ge_hw){ int phase = prof_ge_enter(GEF_ENVIAR); ge_hw->clear_rect(v0, v1); prof_ge_leave(phase); return; }
 	{
 		int old = prof_switch(PROF_RASTER);
@@ -2265,6 +2269,7 @@ void ge_raster_line(const GeVertex *v0, const GeVertex *v1){
 	if(ge_ch_n) ge_raster_charola_vaciar();   //Arreglo
 	if(!range_of(v, 2, &x1, &y1, &x2, &y2)) return;
 	ge_stats.primitives++;
+	if(ge_bc_on) ge_brightcensus_prim(v, 2);   //Arreglo
 	if(ge_hw){ int phase = prof_ge_enter(GEF_ENVIAR); ge_hw->line(v0, v1); prof_ge_leave(phase); return; }
 	{
 		int old = prof_switch(PROF_RASTER);
@@ -2280,6 +2285,7 @@ void ge_raster_point(const GeVertex *v0){
 	if(ge_ch_n) ge_raster_charola_vaciar();   //Arreglo
 	if(!range_of(v, 1, &x1, &y1, &x2, &y2)) return;
 	ge_stats.primitives++;
+	if(ge_bc_on) ge_brightcensus_prim(v, 1);   //Arreglo
 	if(ge_hw){ int phase = prof_ge_enter(GEF_ENVIAR); ge_hw->point(v0); prof_ge_leave(phase); return; }
 	{
 		int old = prof_switch(PROF_RASTER);
