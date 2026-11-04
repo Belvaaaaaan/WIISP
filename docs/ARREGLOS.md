@@ -5,6 +5,26 @@ la 0.5.17.2; antes se marcaban con `//arreglo`). Aquí va, por versión, qué
 se arregló o cambió y una descripción breve. El detalle está en
 `docs/CONTINUAR.md`.
 
+## 0.6.5
+
+El suelo amarillo de DBZ en GX: la máscara de color parcial
+(`gx_mascara_bits`, encendido).
+
+- `wii/gx_mascara.h` (nuevo): los bits que deja escribir `GE_MASKRGB` en el
+  formato del búfer y la decisión: camino de siempre, no escribir el
+  color, OR o AND del EFB con un color constante, o no se puede (y por
+  qué).
+- `wii/gx_ge.c`: con color constante (el del material, sin textura, mezcla,
+  operación lógica, niebla, tramado, color secundario, color en los
+  vértices ni luces) y sin escribir el alfa, la máscara parcial se hace con
+  `GX_BM_LOGIC` y el color en `KCOLOR0`; la clave del estado de GX y la de
+  las charolas miran el material, el color del vértice y las luces cuando
+  la máscara es parcial. Línea `gx_mascara_bits` en `[TIEMPOS]`.
+  `prueba_gx`: la operación lógica con el color del TEV en RGB8 y RGBA6.
+- `core/opt.h`, `core/opt.c`: `gx_mascara_bits`.
+- `tests/test_gxmascara.c` (nuevo). `mutaciones/0.6.5.txt`.
+- `hle/hle.h`, `dist/apps/wiisp/meta.xml`: versión 0.6.5.
+
 ## 0.6.4
 
 Solo medidas: el rastreo de un búfer (`prof_rastreo_fb`), para el 4444 de

@@ -443,6 +443,19 @@ comprueba en el Wii cómo guarda GX el alfa y la diferencia absoluta; el
 volcado queda armado hasta encontrar el efecto. Sigue: ver en el Wii si
 el aura sale como por software y, después, el diseño del IR.
 
+Resultado de la 0.6.3: el stencil exacto y la diferencia absoluta
+funcionan, pero el suelo amarillo y los fantasmas siguen igual.
+
+Hecha (v0.6.4): solo medidas, el rastreo de un búfer (`prof_rastreo_fb`)
+para el 4444 de 64x64 en 0x04158000. Resultado: cada personaje se dibuja
+ahí en blanco con una máscara de color parcial (FFFFEF o FFFFDF: un solo
+bit del texel) y GX escribía el blanco entero.
+
+Hecha (v0.6.5): `gx_mascara_bits`, la máscara parcial con color constante
+como una operación lógica OR/AND del EFB. Sigue: ver en el Wii si el
+suelo y los fantasmas salen como por software y, después, el diseño del
+IR (paso 11).
+
 Primera tanda acordada (todas "más barato", verificables en el PC):
 0.1 `prof_espera`, **skinning rápido** (`ge_skin_rapido`), **matrices al
 cambiar** (`ge_mtx_cache`), **color constante** (`ge_color_const`), 2.1

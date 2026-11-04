@@ -1,0 +1,63 @@
+=== gx_mascara: los bits del verde del 565 como los del 5551
+@ src/wii/gx_mascara.h
+<<<
+	static const uint8_t b[4][3] = { { 5, 6, 5 }, { 5, 5, 5 }, { 4, 4, 4 }, { 8, 8, 8 } };
+>>>
+	static const uint8_t b[4][3] = { { 5, 5, 5 }, { 5, 5, 5 }, { 4, 4, 4 }, { 8, 8, 8 } };
+===
+=== gx_mascara: la mascara nativa se desplaza un bit de mas
+@ src/wii/gx_mascara.h
+<<<
+		const uint32_t m = ((mascara >> (8 * c)) & 0xFFu) >> s, wn = ~m & ((1u << b) - 1u);
+>>>
+		const uint32_t m = ((mascara >> (8 * c)) & 0xFFu) >> (s + 1), wn = ~m & ((1u << b) - 1u);
+===
+=== gx_mascara: sin bits que escribir no se apaga el color
+@ src/wii/gx_mascara.h
+<<<
+	if(!w) return GM_NADA;
+>>>
+	if(!w) return GM_NORMAL;
+===
+=== gx_mascara: el color no constante se arregla igual
+@ src/wii/gx_mascara.h
+<<<
+	if(!constante) return GM_NO_COLOR;
+>>>
+	if(0 && !constante) return GM_NO_COLOR;
+===
+=== gx_mascara: escribir el alfa no impide el arreglo
+@ src/wii/gx_mascara.h
+<<<
+	if(escribe_alfa) return GM_NO_ALFA;
+>>>
+	if(0 && escribe_alfa) return GM_NO_ALFA;
+===
+=== gx_mascara: en RGBA6 solo se mira el bit mas bajo
+@ src/wii/gx_mascara.h
+<<<
+	if(rgba6 && (w & 0x030303u)) return GM_NO_RGBA6;
+>>>
+	if(rgba6 && (w & 0x010101u)) return GM_NO_RGBA6;
+===
+=== gx_mascara: OR con que haya un bit puesto
+@ src/wii/gx_mascara.h
+<<<
+	if(v == w){ *konst = w; return GM_OR; }
+>>>
+	if(v){ *konst = w; return GM_OR; }
+===
+=== gx_mascara: el AND borra el azul
+@ src/wii/gx_mascara.h
+<<<
+	if(!v){ *konst = ~w & 0xFFFFFFu; return GM_AND; }
+>>>
+	if(!v){ *konst = ~w & 0xFFFFu; return GM_AND; }
+===
+=== gx_mascara: el OR pone los bits del color entero
+@ src/wii/gx_mascara.h
+<<<
+	if(v == w){ *konst = w; return GM_OR; }
+>>>
+	if(v == w){ *konst = color; return GM_OR; }
+===

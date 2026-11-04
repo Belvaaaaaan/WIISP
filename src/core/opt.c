@@ -72,6 +72,7 @@ const OptInfo opt_info[OPT_N] = {
 	[OPT_GE_VDEC_PS] = { "ge_vdec_ps", 1, 1 },   //Arreglo
 	[OPT_GX_STENCIL_EXACTO] = { "gx_stencil_exacto", 1, 1 },   //Arreglo
 	[OPT_GX_ABSDIFF] = { "gx_absdiff", 1, 1 },   //Arreglo
+	[OPT_GX_MASCARA_BITS] = { "gx_mascara_bits", 1, 1 },   //Arreglo
 	[OPT_CPU_SIN_EXTRA]  = { "cpu_sin_extra",  1, 1 },
 	[OPT_CPU_PREDEC]     = { "cpu_predec",     1, 1 },
 	[OPT_CPU_VERIFICAR]  = { "cpu_verificar",  1, 0 },

@@ -69,6 +69,7 @@
 #include "wii/gx_tiles.h"
 #include "wii/gx_emit.h"
 #include "wii/gx_stencil.h"   //Arreglo
+#include "wii/gx_mascara.h"   //Arreglo
 
 #define EFB_W 640
 #define EFB_H 528
@@ -174,6 +175,7 @@ static u64 clut_ci_ticks, clut_ci_espera;   //Arreglo
 static unsigned ci8_verif, ci8_verif_mal;   //Arreglo
 static u8 st_ident[256];   //Arreglo
 static unsigned st_asignados, st_raros, st_perdidos, st_sin_control, st_rtt_alfa, st_mezcla_alfa, st_borrados;   //Arreglo
+static unsigned gm_cuenta[GM_N];   //Arreglo
 static int st_en_borrado;   //Arreglo
 static int abs_quiere, abs_tev, abs_ok, abs_x0, abs_y0, abs_x1, abs_y1, texgens3;   //Arreglo
 static unsigned abs_prims, abs_copias, abs_llamadas;   //Arreglo
@@ -271,6 +273,8 @@ static int charola, ch_tri, ch_spr, ch_pend;   //Arreglo
 static struct {   //Arreglo
 	core_u32 rgen, clut_gen, notas, avisos;
 	int tex;
+	int gm;   //Arreglo
+	core_u32 gm_h;   //Arreglo
 } ch;
 static unsigned rtt_dl[RD_N], rtt_dec[RO_N], rtt_gpu, rtt_miss[RM_N];
 static u64 rtt_dl_ticks[RD_N], rtt_dec_ticks[RO_N], rtt_dec_bytes[RO_N];
@@ -413,6 +417,17 @@ static int st_escribir(Surface *s, int v){   //Arreglo
 	if(a < 0){ st_perdidos++; return v & 0xFF; }
 	if(s->st.usados != usados){ st_asignados++; st_raros += s->st.raros != raros; }
 	return a;
+}
+
+//Arreglo
+static int gm_vigila(void){
+	const core_u32 m = ge.cmd[GE_MASKRGB] & 0xFFFFFFu;
+	return opt_on[OPT_GX_MASCARA_BITS] && m && m != 0xFFFFFFu;
+}
+
+//Arreglo
+static core_u32 gm_huella(void){
+	return (ge.cmd[GE_MATERIALAMBIENT] & 0xFFFFFFu) | (((ge.cmd[GE_VERTEXTYPE] >> 2) & 7u) << 24) | ((ge.cmd[GE_LIGHTINGENABLE] & 1u) << 27);
 }
 
 /* --- Rangos vigilados de la VRAM --------------------------------------------- */
@@ -2391,6 +2406,8 @@ static void apply_gx(void){
 	core_u32 blend_fix_a = r->blend_fix_a;
 	u8 btype = GX_BM_NONE, bsrc = GX_BL_ONE, bdst = GX_BL_ZERO, lop = GX_LO_COPY;
 	int use_sec, alpha_test;
+	int gm = GM_NORMAL;   //Arreglo
+	core_u32 gm_k = 0;   //Arreglo
 
 	set_mode(MODE_EMU);
 	load_pixel_projection((float)minz, (float)maxz);
@@ -2417,6 +2434,15 @@ static void apply_gx(void){
 			else if(r->zpass == SOP_REPLACE){ aw = 1; dsta = replace & 0xFF; }
 		}
 		if(aw && st_activo(cur_c)) dsta = st_escribir(cur_c, dsta);   //Arreglo
+		if(cw && gm_vigila()){   //Arreglo
+			const int sin_luz = through || !(ge.cmd[GE_LIGHTINGENABLE] & 1);   //Arreglo
+			const int constante = !tex_on && !r->alpha_blend && !r->apply_logic_op && !r->apply_fog && !r->dithering &&   //Arreglo
+			                      (through || !(ge.cmd[GE_LIGHTMODE] & 1)) && !((ge.cmd[GE_VERTEXTYPE] >> 2) & 7) && sin_luz;   //Arreglo
+			gm = gm_calcular(cur_c->fmt, mrgb, ge.cmd[GE_MATERIALAMBIENT] & 0xFFFFFFu, constante, aw,   //Arreglo
+			                 surface_pf(cur_c) == GX_PF_RGBA6_Z24, &gm_k);   //Arreglo
+			gm_cuenta[gm]++;   //Arreglo
+			if(gm == GM_NADA) cw = 0;   //Arreglo
+		}   //Arreglo
 	}
 	GX_SetColorUpdate(cw ? GX_TRUE : GX_FALSE);
 	GX_SetAlphaUpdate(aw ? GX_TRUE : GX_FALSE);
@@ -2476,6 +2502,7 @@ static void apply_gx(void){
 			break;
 		}
 	}
+	if(gm == GM_OR || gm == GM_AND){ btype = GX_BM_LOGIC; lop = gm == GM_OR ? GX_LO_OR : GX_LO_AND; }   //Arreglo
 	GX_SetBlendMode(btype, bsrc, bdst, lop);
 
 	/* TEV */
@@ -2483,7 +2510,12 @@ static void apply_gx(void){
 	/* Color secundario: con luces y especular separado, o de un vértice
 	   inmediato (VSCV) aunque las luces estén apagadas */
 	use_sec = !r->clear_mode && !through && (ge.cmd[GE_LIGHTMODE] & 1);
-	if(r->clear_mode || !tex_on){
+	if(gm == GM_OR || gm == GM_AND){   //Arreglo
+		GX_SetTevKColor(GX_KCOLOR0, rgb_color(gm_k, 255));   //Arreglo
+		tev_stage(GX_TEXCOORDNULL, GX_TEXMAP_NULL, GX_COLOR0A0,   //Arreglo
+		          GX_CC_ZERO, GX_CC_ZERO, GX_CC_ZERO, GX_CC_KONST, GX_CS_SCALE_1,   //Arreglo
+		          GX_CA_ZERO, GX_CA_ZERO, GX_CA_ZERO, GX_CA_RASA, GX_TEV_KCSEL_K0, GX_TEV_KASEL_K0_A);   //Arreglo
+	} else if(r->clear_mode || !tex_on){
 		tev_stage(GX_TEXCOORDNULL, GX_TEXMAP_NULL, GX_COLOR0A0,
 		          GX_CC_ZERO, GX_CC_ZERO, GX_CC_ZERO, GX_CC_RASC, GX_CS_SCALE_1,
 		          GX_CA_ZERO, GX_CA_ZERO, GX_CA_ZERO, GX_CA_RASA, GX_TEV_KCSEL_K0, GX_TEV_KASEL_K0_A);
@@ -2636,7 +2668,7 @@ static void ch_salida(ChSalida *o){   //Arreglo
 }
 
 static inline int ch_igual(void){   //Arreglo
-	return !(ge_sucio & GE_SUCIO_D) && ch.rgen == ge_raster_gen && ch.clut_gen == ge.clut_gen;
+	return !(ge_sucio & GE_SUCIO_D) && ch.rgen == ge_raster_gen && ch.clut_gen == ge.clut_gen && (!ch.gm || ch.gm_h == gm_huella());   //Arreglo
 }
 
 static void ch_textura_vista(void){   //Arreglo
@@ -2660,6 +2692,8 @@ static void charola_apuntar(void){   //Arreglo
 	}
 	ch.rgen = ge_raster_gen;
 	ch.clut_gen = ge.clut_gen;
+	ch.gm = gm_vigila();   //Arreglo
+	ch.gm_h = ch.gm ? gm_huella() : 0;   //Arreglo
 	ch_textura_vista();
 	ge_sucio &= ~(core_u32)GE_SUCIO_D;
 	ch_salida(&ch_sal);
@@ -2752,6 +2786,7 @@ typedef struct {
 	GXTexObj obj;
 	core_u32 mrgb, ma, lmode;
 	int dsta, abs;   //Arreglo
+	core_u32 gm_h;   //Arreglo
 } GxKey;
 typedef char gx_key_words[sizeof(GxKey) % 4 == 0 ? 1 : -1];
 
@@ -2770,6 +2805,7 @@ static void gx_key(GxKey *k){
 	k->mrgb = ge.cmd[GE_MASKRGB]; k->ma = ge.cmd[GE_MASKALPHA]; k->lmode = ge.cmd[GE_LIGHTMODE];
 	if(cur_c && stencil_val >= 0 && cur_c->st.usados) k->dsta = cur_c->st.cod[stencil_val & 0xFF];   //Arreglo
 	k->abs = abs_quiere;   //Arreglo
+	if(gm_vigila()) k->gm_h = gm_huella() | 0x80000000u;   //Arreglo
 }
 
 /* ge_verificar: el estado interno de libogc (__gxregs, 0x598 bytes; su
@@ -3611,6 +3647,12 @@ void gx_ge_rtt_report(char *buf, size_t size){
 		        "gx_absdiff: %u llamadas, %u primitivas, %u copias del destino\n",
 		        st_asignados, st_raros, st_perdidos, st_borrados, st_sin_control, st_rtt_alfa, st_mezcla_alfa,
 		        abs_llamadas, abs_prims, abs_copias);   //Arreglo
+	if(len < size)   //Arreglo
+		len += (size_t)snprintf(buf + len, size - len,   //Arreglo
+		        "gx_mascara_bits: estados con mascara de color parcial: %u con la operacion OR, %u con AND, %u sin nada que escribir; "
+		        "sin arreglar (como antes): %u color no constante, %u escriben el alfa, %u ponen y quitan bits, %u bits bajos en RGBA6\n",
+		        gm_cuenta[GM_OR], gm_cuenta[GM_AND], gm_cuenta[GM_NADA], gm_cuenta[GM_NO_COLOR], gm_cuenta[GM_NO_ALFA],
+		        gm_cuenta[GM_NO_BITS], gm_cuenta[GM_NO_RGBA6]);   //Arreglo
 	/* Cargas de paleta dentro de búferes dibujados */
 	for(i = 0; i < rtt_nclut && len < size; i++){
 		const RttClut *c = &rtt_clut[i];
@@ -3745,6 +3787,7 @@ void gx_ge_rtt_report(char *buf, size_t size){
 	ci8_verif = ci8_verif_mal = 0;   //Arreglo
 	st_asignados = st_raros = st_perdidos = st_sin_control = st_rtt_alfa = st_mezcla_alfa = st_borrados = 0;   //Arreglo
 	abs_llamadas = abs_prims = abs_copias = 0;   //Arreglo
+	memset(gm_cuenta, 0, sizeof(gm_cuenta));   //Arreglo
 	rtt_pad_skips = 0;
 	hole_made = hole_filled = hole_skips = hole_rows_dl = hole_rows_up = 0;
 	hole_ticks = 0;
@@ -3912,6 +3955,51 @@ static int pg_a8(const u8 *t, int x, int y){ return t[((y >> 2) * (PG_W >> 3) + 
 
 static int pg_esperado(int a, int forma){ int c = a >> 2; return forma ? (c << 2) | (c >> 4) : c << 2; }
 
+//Arreglo
+static core_u32 pg_nativo(int fmt, const u8 *p){
+	const core_u32 c = (core_u32)p[1] | ((core_u32)p[32] << 8) | ((core_u32)p[33] << 16);
+	return c & gm_escribibles(fmt, 0);
+}
+
+//Arreglo
+static void pg_mascara(u8 *d, u8 *res){
+	static const core_u32 casos[4][3] = { { GE_FMT_4444, 0xFFFFEFu, 0xFFFFFFu }, { GE_FMT_4444, 0xFFFFDFu, 0xFFFFFFu },
+	                                      { GE_FMT_4444, 0xFFFFEFu, 0x000000u }, { GE_FMT_565, 0xFF7F07u, 0x0080F8u } };
+	int bien[2][4], f, c, x, y, malos = 0;
+	for(f = 0; f < 2; f++)
+		for(c = 0; c < 4; c++){
+			const int pf = f ? GX_PF_RGBA6_Z24 : GX_PF_RGB8_Z24, fmt = (int)casos[c][0];
+			core_u32 k;
+			const int op = gm_calcular(fmt, casos[c][1], casos[c][2], 1, 0, f, &k);
+			bien[f][c] = 0;
+			pg_estado(pf, 0);
+			for(y = 0; y < PG_H; y++)
+				for(x = 0; x < PG_W; x++) pg_cuadro(x, y, 1, 1, (core_u32)((x * 29 + y * 83 + c * 7) & 0xFF) | ((core_u32)((x * 7 + y * 31 + 9) & 0xFF) << 8) |
+				                                          ((core_u32)((x * 53 + y * 5 + 77) & 0xFF) << 16) | 0xFF000000u);
+			pg_copiar(d, GX_TF_RGBA8);
+			if(op == GM_OR || op == GM_AND){
+				GX_SetBlendMode(GX_BM_LOGIC, GX_BL_ONE, GX_BL_ZERO, op == GM_OR ? GX_LO_OR : GX_LO_AND);
+				GX_SetTevKColor(GX_KCOLOR0, rgb_color(k, 255));
+				nst = 0;
+				tev_stage(GX_TEXCOORDNULL, GX_TEXMAP_NULL, GX_COLOR0A0, GX_CC_ZERO, GX_CC_ZERO, GX_CC_ZERO, GX_CC_KONST, GX_CS_SCALE_1,
+				          GX_CA_ZERO, GX_CA_ZERO, GX_CA_ZERO, GX_CA_RASA, GX_TEV_KCSEL_K0, GX_TEV_KASEL_K0_A);
+				GX_SetNumTevStages(1);
+				pg_cuadro(0, 0, PG_W, PG_H, 0xFF336699u);
+			}
+			pg_copiar(res, GX_TF_RGBA8);
+			for(y = 0; y < PG_H; y++)
+				for(x = 0; x < PG_W; x++){
+					const core_u32 w = gm_escribibles(fmt, casos[c][1]), viejo = pg_nativo(fmt, tile_ptr(d, PG_W, x, y));
+					const core_u32 quiere = (casos[c][2] & w) | (viejo & ~w);
+					bien[f][c] += (op == GM_OR || op == GM_AND) && pg_nativo(fmt, tile_ptr(res, PG_W, x, y)) == quiere;
+				}
+			malos += bien[f][c] != PG_W * PG_H;
+		}
+	hle_log_quiet("[PRUEBA_GX] gx_mascara_bits (operacion logica del EFB con el color del TEV; 4444 FFFFEF y FFFFDF en blanco, 4444 FFFFEF en negro, "
+	              "565 FF7F07): RGB8 %d %d %d %d, RGBA6 %d %d %d %d de %d bien%s\n", bien[0][0], bien[0][1], bien[0][2], bien[0][3],
+	              bien[1][0], bien[1][1], bien[1][2], bien[1][3], PG_W * PG_H, malos ? " (MAL)" : "");
+}
+
 void gx_ge_prueba(void){
 	static const int ids[8] = { 0x00, 0x01, 0x05, 0x06, 0x08, 0x0D, 0x1C, 0x1F };
 	static const int ej[8] = { 0x01, 0x05, 0x06, 0x0D, 0x1F, 0x80, 0xFE, 0xFF };
@@ -3986,6 +4074,7 @@ void gx_ge_prueba(void){
 	hle_log_quiet("[PRUEBA_GX] gx_absdiff (|fuente - destino| en el TEV con la copia del destino): pixel a pixel %d de %d bien, "
 	              "con un cuadro grande %d de %d bien%s\n", PG_W * PG_H - malos[0], PG_W * PG_H, PG_W * PG_H - malos[1], PG_W * PG_H,
 	              malos[0] || malos[1] ? " (MAL)" : "");
+	pg_mascara(d, res);   //Arreglo
 	free(a8);
 	free(d);
 	free(res);

@@ -4212,6 +4212,79 @@ aura) se cruza con el 4444 (crear, soltar, hueco).
 - `rastreo_comparar.py` empareja mal los mapas cuando una corrida tiene
   menos (GX hizo 2 y software 4).
 
+### v0.6.5: la máscara de color parcial en GX (`gx_mascara_bits`)
+
+- El fallo (medido en la 0.6.4): DBZ dibuja cada personaje en el 4444 de
+  64x64 de 0x04158000 en blanco con `GE_MASKRGB` FFFFEF o FFFFDF (solo deja
+  escribir el bit 0 o el 1 del texel); GX no tiene máscara por bits y
+  escribía el blanco entero.
+- `wii/gx_mascara.h` (nuevo, puro, probado en el PC): `gm_escribibles` da
+  los bits que deja escribir la máscara en el formato del búfer, ya
+  colocados en los 8 bits de cada canal del EFB (la PSP pasa el color y la
+  máscara a 565/5551/4444 quedándose con los bits altos; GX baja el EFB a
+  la VRAM igual). `gm_calcular`: si la máscara deja escribir todo, el
+  camino de siempre; si no deja escribir nada, no se escribe el color; si
+  es parcial y el color es constante, una operación lógica del EFB con un
+  color del TEV: OR con los bits escribibles si el color los tiene todos a
+  1, AND con el resto si los tiene todos a 0. Así quedan exactos los bits
+  de la PSP y los demás no se tocan. No se arregla (queda como antes y se
+  cuenta): color no constante, el dibujo escribe también el alfa
+  (stencil), unos bits escribibles a 1 y otros a 0 (harían falta dos
+  pasadas), o bits escribibles en los 2 bits bajos de un canal con el EFB
+  en RGBA6 (6 bits por canal).
+- Color constante: sin textura, sin mezcla, sin operación lógica del
+  juego, sin niebla, sin tramado, sin color secundario, sin color en los
+  vértices y sin luces: el color es el del material (`GE_MATERIALAMBIENT`).
+- `wii/gx_ge.c`: en `apply_gx` (con el interruptor, si la máscara es
+  parcial), `GX_BM_LOGIC` con `GX_LO_OR`/`GX_LO_AND` y una etapa del TEV
+  que da `KCOLOR0`; el alfa sigue saliendo del rasterizador (para la prueba
+  de alfa). La clave del estado de GX (`ge_estado_sucio`) y la de las
+  charolas guardan el material, el formato del color del vértice y las
+  luces cuando la máscara es parcial (no cambian el estado del
+  rasterizador). Línea `gx_mascara_bits` en `[TIEMPOS]` (por estado de GX
+  aplicado: OR, AND, sin nada que escribir y los que quedan como antes, por
+  motivo).
+- `prueba_gx`: en el Wii, la operación lógica con el color del TEV sobre un
+  EFB RGB8 y RGBA6 con 1024 píxeles distintos, en cuatro casos (4444
+  FFFFEF y FFFFDF en blanco, 4444 FFFFEF en negro, 565 FF7F07), contra lo
+  que da la PSP.
+
+Pruebas: x86 con ASan 213.886 comprobaciones, 0 fallos; PowerPC bajo qemu
+PENDIENTE y devkitPPC PENDIENTE; `test_gxmascara` (lo escribible de cada formato, los casos de
+DBZ, cada motivo para no arreglar y 400.000 casos al azar: los 4 formatos,
+RGB8 y RGBA6, la operación de GX sobre un EFB con bits bajos al azar,
+contra la fórmula de la PSP del renderizador por software); mutaciones
+(`mutaciones/0.6.5.txt`, `--solo gxmascara`): 9 de 9 (la que sobrevivía,
+"en RGBA6 solo se mira el bit más bajo", obligó a probar un 8888 con solo
+el bit 1 escribible); `prueba_gx` corre entera en qemu (sale "(MAL)": la
+GPU de mentira no pinta); pspautotests 275/275; A/B con el CLI de GX en
+las 555: la 0.6.4 contra la 0.6.5 con `gx_mascara_bits` apagado, 0
+distintos; el interruptor a 0 contra 1, 0 distintos (ninguna pspautotest
+dibuja con máscara parcial y color constante: la única con máscara,
+`gpu/dither`, lleva tramado). Por eso, `tests/guest/ge_mascara.c` (nuevo):
+un 4444 de 64x64 borrado, después sprites sin color en el vértice con
+FFFFEF y FFFFDF en blanco, FFFFEF en negro, F0F0F0 (nada que escribir) y
+0FFF0F en verde (AND en rojo y azul); lee la VRAM y escribe la fila 0 y
+los texeles con cada bit (por software: 1536 con el bit 0 y 1536 con el
+1, nada más). tests/guest 24/24. Con el CLI de GX y `GX_TRAZA=1`, el
+interruptor a 0 contra 1: el borrado igual; los cuatro sprites con
+OR/AND cambian la mezcla, la entrada del TEV y su color constante, y el
+de F0F0F0 la escritura del color.
+
+Autotest (2 registros y 2 `.capturas.txt`), el guion entero (hasta el
+cuadro 5047), las dos con el rastreo de 0x04158000 y la traza de los
+cuadros 4000 y 4001:
+- sin: `gx_mascara_bits 0` (como la 0.6.4), con `prueba_gx` antes de
+  cargar el juego;
+- con: `gx_mascara_bits 1`.
+
+Qué mirar: `[PRUEBA_GX] gx_mascara_bits` (los 8 números a 1024); las
+capturas de "con" de 4000, 4400 y 4800 (sin suelo amarillo y, si era la
+misma causa, sin fantasmas); en "con", `Rastreo, lectura` del 4444 con
+los bits 0 y 1 como por software (0.6.4: ~10 % y 6-8 %, los demás a 0);
+la línea `gx_mascara_bits` (casi todo OR, nada sin arreglar en la pelea);
+el coste en la pelea (sin contra con).
+
 ### Para el siguiente chat (empezar aquí)
 
 Metodología acordada (detalle en `docs/HOJA_DE_RUTA.md`): primero medir
@@ -4245,10 +4318,12 @@ Metodología acordada (detalle en `docs/HOJA_DE_RUTA.md`): primero medir
   devkitPPC, perfil por función, psq_l emulado, A/B) y para leer los
   registros del Wii (`ventanas.py`): `tools/banco/LEEME.md`. El entorno
   (devkitPPC, qemu, pspautotests, PPSSPP): `tools/setup_entorno.sh`.
-- **Siguiente:** 0.6.5, emular en GX la máscara de color parcial con su
-  interruptor (con color constante: operación lógica OR con los bits que
-  deja la máscara y, si hace falta, AND en una segunda pasada), ver si los
-  fantasmas se van con eso o si queda la caché de texturas del 4444.
+- **Siguiente:** leer el resultado de la 0.6.5 en el Wii (ver "Qué mirar"
+  en su sección). Si quedan fantasmas, mirar la caché de texturas del 4444
+  (la mayoría de sus lecturas en GX salen de la caché). Después, vaciar la
+  tabla de códigos del stencil en los borrados completos, el coste de
+  crear y soltar el 4444 en cada imagen (medido en la 0.6.4) y el diseño
+  del IR (paso 11).
   Después, el arreglo con su interruptor (máscara por bit con dos pasadas
   de operación lógica AND/OR, o pintar ese búfer pequeño por software), y
   vaciar la tabla de códigos en los borrados completos. Lo de la 0.6.3
