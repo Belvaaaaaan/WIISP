@@ -4387,6 +4387,33 @@ Dolphin, libogc, YAGCD y PPSSPP):
   rango de s, t y q de cada dibujo: dirá cuál de las dos causas aplica
   (q mínima <= 0, |s|·64 o |t|·64 por encima de 65.536).
 
+### Resultado de la 0.6.6 en el Wii (DBZ: gx / exacto, cotejo de 4000-4003)
+
+- Las dos corridas, 3840 dibujos (2828 con textura), 0 desalineados.
+- Capturas del cuadro 4010: en GX solo cambia el escenario (suelo,
+  colinas, acantilados, cielo); personajes, HUD y "FIGHT!" iguales. El
+  suelo sale casi exactamente al doble por canal. Fantasmas: una sombra
+  oscura de más, una copia de las piernas de Goku y una copia de las
+  etiquetas de nombre del HUD.
+- **Causa encontrada:** casi toda la diferencia la meten los dibujos del
+  terreno (CLUT4 128x128, mezcla 6/7 = DOUBLESRCALPHA/DOUBLEINVSRCALPHA,
+  función 010100 = modulate con alfa y color doblado; 1657 por ventana).
+  En la PSP (y en nuestro software) el factor del destino de
+  DOUBLEINVSRCALPHA es 1 - 2α (puede ser negativo): resultado
+  = 2α·fuente + (1 - 2α)·destino. `dst_factor` en `gx_ge.c` lo traduce como
+  `GX_BL_INVSRCALPHA` (1 - α): GX suma de más α·destino. Como el borrado de
+  cada cuadro (601) no borra el color, el terreno se pinta encima de la
+  imagen de hace dos cuadros: con α = 0,5, la PSP la tapa del todo y GX
+  deja pasar la mitad, cuadro tras cuadro. Eso da el doble de brillo (la
+  serie converge a 2·fuente) y las estelas de lo que había antes
+  (personajes y etiquetas de cuadros anteriores): los fantasmas.
+- La proyección del mapa de sombras no es la causa: solo 12 dibujos usan
+  proyección, con q = 1 y s, t pequeñas (s -9..16, t 0..30).
+- Defectos de la herramienta: en GX casi ningún dibujo cuenta primitivas
+  (el camino rápido no pasa por `ge_raster_*`; vale el recuento del
+  software); "el primer dibujo" del script sale engañado por lo heredado
+  del cuadro anterior (el búfer no se borra).
+
 ### Para el siguiente chat (empezar aquí)
 
 Metodología acordada (detalle en `docs/HOJA_DE_RUTA.md`): primero medir
@@ -4420,8 +4447,9 @@ Metodología acordada (detalle en `docs/HOJA_DE_RUTA.md`): primero medir
   devkitPPC, perfil por función, psq_l emulado, A/B) y para leer los
   registros del Wii (`ventanas.py`): `tools/banco/LEEME.md`. El entorno
   (devkitPPC, qemu, pspautotests, PPSSPP): `tools/setup_entorno.sh`.
-- **Siguiente:** leer el cotejo de la 0.6.6 (ver "Qué mirar" en su
-  sección) y arreglar el dibujo que se separa, con su interruptor.
+- **Siguiente:** arreglar en GX los factores de mezcla dobles
+  (DOUBLEINVSRCALPHA = 1 - 2α, y los demás dobles), con su interruptor;
+  ver "Resultado de la 0.6.6".
   Después, vaciar la tabla de códigos del stencil en los borrados
   completos, el coste de crear y soltar el 4444 en cada imagen (medido en
   la 0.6.4) y el diseño del IR (paso 11).
