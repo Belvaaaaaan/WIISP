@@ -4186,6 +4186,32 @@ GX y en software; en la traza, el orden de escrituras, bajadas y
 lecturas del cuadro 4000 y si el 565 de 512 de la misma dirección (el del
 aura) se cruza con el 4444 (crear, soltar, hueco).
 
+### Resultado de la 0.6.4 en el Wii (DBZ: gx / soft, hasta el cuadro 4100)
+
+- Las huellas de "gx" hasta el 4000 son las de "con" de la 0.6.3: el
+  rastreo no toca la imagen. Las dos corridas llegan al 4100 (la pelea
+  solo cae en la última ventana). La traza de GX y la de software tienen
+  los mismos 504 eventos en el cuadro 4001, en el mismo orden.
+- **Causa del suelo amarillo, confirmada:** cada personaje se dibuja en el
+  4444 con una máscara de color parcial: `FFFFEF` (solo deja escribir el
+  bit 4 del rojo de 8 bits, el bit 0 del texel 4444) o `FFFFDF` (bit 5,
+  el bit 1 del texel). El color es constante: material FFFFFFFF, sin color
+  en los vértices, sin textura, sin mezcla, sin operación lógica, sin z,
+  sin escribir el alfa (máscara FF), tiras de triángulos. GX ignora la
+  máscara y escribe el blanco entero: en GX los bits 0 a 11 del texel
+  salen todos iguales (12-13 %), por software solo los bits 0 y 1 (10 % y
+  6-8 %) y el resto a 0. El bit 15 (alfa) coincide en los dos (11,88 %).
+- Lecturas en GX: el 4444 suele estar "igual" (bajado) al leerse y la
+  textura sale de la caché de texturas en la mayoría (405 de 434 en una
+  forma); en otras se decodifica (el 4444 en el EFB, más nuevo). El 565
+  de ancho 512 del aura vive en la misma dirección con un hueco.
+- Coste visto: por ventana, ~200 veces crear y soltar el 4444, bajarlo,
+  subirlo y hacer el hueco en el 565 (una vez por imagen).
+- La tabla de escrituras se llenó (64 estados; el número de stencil que
+  queda puesto aunque la prueba esté apagada cambia con cada personaje).
+- `rastreo_comparar.py` empareja mal los mapas cuando una corrida tiene
+  menos (GX hizo 2 y software 4).
+
 ### Para el siguiente chat (empezar aquí)
 
 Metodología acordada (detalle en `docs/HOJA_DE_RUTA.md`): primero medir
@@ -4219,8 +4245,10 @@ Metodología acordada (detalle en `docs/HOJA_DE_RUTA.md`): primero medir
   devkitPPC, perfil por función, psq_l emulado, A/B) y para leer los
   registros del Wii (`ventanas.py`): `tools/banco/LEEME.md`. El entorno
   (devkitPPC, qemu, pspautotests, PPSSPP): `tools/setup_entorno.sh`.
-- **Siguiente:** leer el resultado de la 0.6.4 en el Wii (el rastreo de
-  0x04158000, ver "Qué mirar" en su sección) y decidir el arreglo.
+- **Siguiente:** 0.6.5, emular en GX la máscara de color parcial con su
+  interruptor (con color constante: operación lógica OR con los bits que
+  deja la máscara y, si hace falta, AND en una segunda pasada), ver si los
+  fantasmas se van con eso o si queda la caché de texturas del 4444.
   Después, el arreglo con su interruptor (máscara por bit con dos pasadas
   de operación lógica AND/OR, o pintar ese búfer pequeño por software), y
   vaciar la tabla de códigos en los borrados completos. Lo de la 0.6.3
