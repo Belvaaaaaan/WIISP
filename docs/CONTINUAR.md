@@ -4152,19 +4152,23 @@ GX y software) y unos ganchos en `wii/gx_ge.c`, `gpu/ge_vertex.c`,
   texel (distintos por bit), el contenido y el % por bit de cada forma de
   lectura en las dos corridas.
 
-Pruebas: x86 con ASan PENDIENTE; PowerPC bajo qemu PENDIENTE; devkitPPC
-PENDIENTE; `test_rastreo_fb` (el rango y sus bordes, el alto del búfer
+Pruebas: x86 con ASan 213.759 comprobaciones, 0 fallos; PowerPC bajo qemu
+408.977 y devkitPPC 408.978, 0 fallos; `test_rastreo_fb` (el rango y sus bordes, el alto del búfer
 por la tijera, la clave con la máscara y la operación lógica, el AND/OR
 del color con y sin índices y el del material, por un `ge_draw_prim`
 de verdad; el contenido por bit; la lectura pendiente de GX, el camino y
 el contenido de GX; las bajadas con y sin lectura; la traza en el
 registro: ventana de dos cuadros, líneas juntas, mapas, límite de mapas,
-el informe que cuadra y vacía; la tabla llena); pspautotests PENDIENTE;
+el informe que cuadra y vacía; la tabla llena); pspautotests 275/275;
 mutaciones (`mutaciones/0.6.4.txt`, `mutar.py --solo rastreo_fb`): 16 de
 16 (la que sobrevivía, "la operación lógica no entra en la clave",
 obligó a probar dos dibujos que solo cambian de operación); A/B con el
 CLI de GX en las 555, `prof_rastreo_fb` 0 contra 1 vigilando toda la
-VRAM con traza desde el cuadro 1: PENDIENTE.
+VRAM (`--rastreo-fb 04000000:200000 --rastreo-traza 1`): solo
+`io/file/rename` distinto, con la misma huella de GX (0 dibujos; cambia
+entre corridas, como siempre). Con el CLI de PC y el de GX en
+`gpu/rendertarget/depal`, la traza y `rastreo_comparar.py` (en el CLI
+de GX los mapas salen a 0: la GPU de mentira no pinta).
 
 Autotest (2 registros y 2 `.capturas.txt`):
 - gx: GX como en la 0.6.3, con `prof_rastreo_fb`, `rastreo_fb 04158000
