@@ -4058,6 +4058,40 @@ de los volcados):
 
 Qué mirar: lo de **Siguiente** (abajo).
 
+### Resultado de la 0.6.3 en el Wii (DBZ: antes / con / soft)
+
+- `[PRUEBA_GX]`: todo como se supuso. RGBA6 trunca el alfa a 6 bits y la
+  copia A8 repite los 2 bits altos (TEV y DstAlpha 64/256 y 256/256),
+  códigos 64/64, DBZ 8/8, diferencia absoluta 1024/1024 en los dos casos.
+- El stencil exacto funciona: los histogramas del CLUT32 que lee el alfa
+  (volcados 1, 2, 6 y 7, cuadros 4001 y 4003) coinciden con software a
+  ±0,01 % (fondo 0x7F 89,7 %, 00 6,25 %, 01, 08, 0B, 1F, 17, 1C...: el
+  juego usa muchos más valores que los 7 de personaje). `gx_absdiff`: 1
+  copia por llamada. Costo de los dos: ~1 % en la pelea.
+- **Pero la imagen no cambió**: el usuario ve el suelo amarillo y los
+  fantasmas igual que antes (capturas de "con" 4000/4400/4800). "antes" da
+  las huellas de la 0.6.2; "con" solo cambia 4000, 4400 y 4800 (DECEB80E,
+  0A4BF111, E0BB6320). Lo visible no venía (solo) de esos dos fallos.
+- Sospechoso principal (lo vio también un análisis aparte de los
+  registros): las texturas 64x64 4444 en 0x04158000 (volcados 4 y 5:
+  CLUT16 >>0 y >>1 &01, paleta 000000/FFFFFF, mezcla 2/3/0, triángulos
+  3D con UV muy fuera, -2558..3170, con clamp: se proyectan sobre el
+  suelo). En GX los dos bits salen idénticos (13,72 % y 13,72 %); por
+  software 11,11 % y 9,35 % (la unión ~13,7 %). Cada personaje se dibuja
+  ahí con su ref (01, 0D, 08...) y, casi seguro, una máscara de color que
+  deja escribir un bit (GE_MASKRGB parcial; GX las ignora, ver la
+  cabecera de `gx_ge.c`) u otra operación que GX no hace. El censo no
+  anota la máscara de color ni la operación lógica. La multiplicación
+  del aura no puede aclarar, así que el amarillo sale de otro dibujo
+  (probablemente esta proyección). También mirar si se lee el 4444 de la
+  VRAM antes de bajarlo (151 de 300 bajadas sin lectura en 4200-4800).
+- Otros: la tabla de códigos llegó a 60 de 64 y no se vacía nunca (el
+  búfer no vuelve a A_UNIFORM); hay que vaciarla en los borrados que tapan
+  todo. La máscara 565 del aura difiere un 0,4 % (bordes de 1 bit: filtro
+  bilineal y la fila 272). Las `[STATS]` del final caen en el registro de
+  la corrida siguiente; en `.capturas.txt` la lista de opciones se corta.
+  Idea de velocidad: CLUT16 sobre 565 con C14X2 en la GPU (~4 %).
+
 ### Para el siguiente chat (empezar aquí)
 
 Metodología acordada (detalle en `docs/HOJA_DE_RUTA.md`): primero medir
@@ -4091,19 +4125,15 @@ Metodología acordada (detalle en `docs/HOJA_DE_RUTA.md`): primero medir
   devkitPPC, perfil por función, psq_l emulado, A/B) y para leer los
   registros del Wii (`ventanas.py`): `tools/banco/LEEME.md`. El entorno
   (devkitPPC, qemu, pspautotests, PPSSPP): `tools/setup_entorno.sh`.
-- **Siguiente:** leer los registros de la 0.6.3: las líneas `[PRUEBA_GX]`
-  de "antes" (cómo guarda GX el alfa de 6 bits; 64/64 códigos y 8/8 de
-  DBZ; la diferencia absoluta 1024 de 1024 en los dos casos), las
-  capturas de "con" junto a las de software de la 0.6.2 (mismos cuadros:
-  ¿el aura sale como por software?) y las de "antes" (tienen que dar las
-  huellas de la 0.6.2), los volcados de "con" y de "soft" (el histograma
-  del CLUT32 que lee el alfa: en GX tienen que salir los mismos valores
-  que por software, 01, 05, 06, 08, 0D, 1C, 1F; y la máscara de
-  0x04158000), la línea `gx_stencil_exacto` (sin sitio y borrados sin
-  controlar a 0; cuántas mezclas o texturas leen el alfa con códigos) y
-  `gx_absdiff` (copias por llamada), y la velocidad de "con" contra
-  "antes". Si sale bien, el diseño del IR; si no, con los volcados se ve
-  qué pasada falla. Lo de la 0.6.2 (ya leído, ver su resultado). Opcionales: la pantalla en pares (si `ps_div` y los merges
+- **Siguiente:** 0.6.4, solo medir el suelo amarillo y los fantasmas:
+  censo de los dibujos a 0x04158000 4444 64x64 y de sus lecturas
+  (GE_MASKRGB, GE_MASKALPHA, operación lógica, mezcla, color, textura,
+  dónde estaba el 4444 al leerse: GPU o VRAM y si estaba bajado), y
+  comparar los volcados 4 y 5 (`.ef4001.4/.5.*.bmp`) de "con" y "soft".
+  Después, el arreglo con su interruptor (máscara por bit con dos pasadas
+  de operación lógica AND/OR, o pintar ese búfer pequeño por software), y
+  vaciar la tabla de códigos en los borrados completos. Lo de la 0.6.3
+  (ya leído, ver su resultado). Opcionales: la pantalla en pares (si `ps_div` y los merges
   salen a 0 en la autoprueba), la caché de huesos (~2 %), los índices CI8
   por la GPU y la charola parcial de los menús. El limitador de
   velocidad, al final de todo.
