@@ -4524,6 +4524,24 @@ fantasmas); `Census_comparación.py con.dibujos.bin exacto.dibujos.bin`
 la línea `gx_mezcla_doble` (copias del destino por llamada) y la
 velocidad en la pelea (sin contra con).
 
+### Resultado de la 0.6.7 en el Wii (DBZ: sin / con)
+
+- `[PRUEBA_GX] gx_mezcla_doble`: variante 0 de la resta 201.326.592 de
+  201.326.592 bien (todo S y D, 256 alfas, 4 tramados), variante 1
+  158.957.691; elegida 0 por la prueba de un píxel. El modelo del TEV
+  coincide con el hardware.
+- **La imagen ya sale bien** (el usuario: sin suelo brillante ni fantasmas).
+  Las huellas de "con" cambian desde 3600.
+- **Pero va más lento en la pelea:** 4200-4800 49,1 % → 27,6 %, la última
+  ventana 44,0 % → 21,3 %; el GE (que incluye esperar a la GPU) sube de
+  ~39 % a ~65 %. La ventana 3600-4200 (21 s → 97 s) lleva además el cotejo
+  de 4000-4003 (las mediciones solo pesan ahí). Por ventana de la pelea:
+  ~4.000-7.000 llamadas con la mezcla doble, 0,4-1 millones de
+  primitivas y **32.000-63.000 copias del destino** (~100-200 por imagen):
+  cada copia es el búfer entero (480x272 RGBA8, más los índices A8 que
+  `efb_to_tex` copia en los búferes con el alfa en la GPU) con su
+  `GX_PixModeSync`, y el terreno pasa por 14-16 etapas del TEV.
+
 ### Para el siguiente chat (empezar aquí)
 
 Metodología acordada (detalle en `docs/HOJA_DE_RUTA.md`): primero medir
@@ -4557,9 +4575,11 @@ Metodología acordada (detalle en `docs/HOJA_DE_RUTA.md`): primero medir
   devkitPPC, perfil por función, psq_l emulado, A/B) y para leer los
   registros del Wii (`ventanas.py`): `tools/banco/LEEME.md`. El entorno
   (devkitPPC, qemu, pspautotests, PPSSPP): `tools/setup_entorno.sh`.
-- **Siguiente:** leer el resultado de la 0.6.7 en el Wii (ver "Qué mirar"
-  en su sección). Si `prueba_gx` da "(MAL)", el modelo del TEV no coincide
-  con el hardware en algo: el primer píxel distinto dice dónde.
+- **Siguiente:** recuperar la velocidad de la 0.6.7 sin perder la imagen
+  (ver su resultado): primero medir en qué se va (copias contra etapas) y
+  por qué se vuelve a copiar; después, de una en una: copiar solo las
+  filas cambiadas y sin los índices A8, menos copias, y un camino barato
+  si el alfa del terreno no pasa de 0,5.
   Después, vaciar la tabla de códigos del stencil en los borrados
   completos, el coste de crear y soltar el 4444 en cada imagen (medido en
   la 0.6.4) y el diseño del IR (paso 11).
