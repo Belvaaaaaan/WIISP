@@ -4572,6 +4572,29 @@ copias por solape; el resto es la primera copia de cada llamada y las
 etapas), los motivos de las copias, las filas cambiadas frente a las
 copiadas y el reparto del alfa.
 
+### Resultado de la 0.6.8 en el Wii (DBZ: con / una_copia / sin)
+
+- Velocidad en la pelea (sin / con / una_copia): 4200-4800 49,8 / 27,7 /
+  46,1 %; la última ventana 45,2 / 21,5 / 37,5 %. **Las copias por solape
+  son casi todo el coste**; la primera copia de cada llamada y las 13
+  etapas cuestan ~4-8 puntos. El GE (con la espera a la GPU) 40 / 65 / 43 %:
+  la GPU se atasca con las copias.
+- Por ventana de la pelea (con): ~4.200-7.200 llamadas con la mezcla doble,
+  0,4-1 millón de primitivas, ~200 millones de píxeles (el terreno se pinta
+  unas 5 veces la pantalla por imagen); copias: una al empezar cada llamada
+  y **24.000-51.000 por solape** (~6-7 por llamada) más 600-4.900 por
+  llenarse la lista de 128 polígonos. Cada copia es el búfer entero (más los
+  índices A8): 9-17 millones de filas copiadas por ventana, pero en las
+  copias por solape **solo ~8-13 % de las filas habían cambiado** desde la
+  copia anterior.
+- Alfa: el 80 % de los píxeles de la mezcla doble pueden pasar de 127 (el
+  máximo del vértice por el de la paleta): un camino barato para alfa
+  <= 127 no compensa. Descartado.
+- Conclusión: copiar solo la franja de filas cambiadas (las filas de tiles
+  de una textura RGBA8 son contiguas en la memoria), sin los índices A8,
+  y sin vaciar toda la caché de texturas, debería acercar "con" a
+  "una_copia" sin tocar la imagen.
+
 ### Para el siguiente chat (empezar aquí)
 
 Metodología acordada (detalle en `docs/HOJA_DE_RUTA.md`): primero medir
