@@ -4542,6 +4542,36 @@ velocidad en la pelea (sin contra con).
   `efb_to_tex` copia en los búferes con el alfa en la GPU) con su
   `GX_PixModeSync`, y el terreno pasa por 14-16 etapas del TEV.
 
+### v0.6.8: el coste de `gx_mezcla_doble` (`prof_mezcla`, solo mide)
+
+- `prof_mezcla` (apagado): en la línea `gx_mezcla_doble (prof_mezcla)` de
+  `[TIEMPOS]`, las copias del destino por motivo (al empezar la llamada,
+  porque una primitiva pisa otra, porque se llenó la lista de 128
+  polígonos), las filas copiadas (el búfer entero cada vez) y, en las
+  copias por solape o lista llena, cuántas filas habían cambiado de verdad
+  desde la copia anterior (el techo de copiar solo esas filas); las
+  primitivas y los píxeles (área) de la mezcla doble según su alfa máximo
+  posible: el del vértice por el máximo de la paleta (`gm_alfa_textura`,
+  CLUT4/8/16/32; sin paleta cuenta como 255; sin el alfa de la textura,
+  solo el del vértice), en dos grupos: hasta 127 (donde un camino barato
+  podría bastar) y más de 127.
+- `test_mezcla_una_copia` (apagado, solo para medir): no se vuelve a copiar
+  por solape ni por lista llena (la imagen sale mal donde se pisan): la
+  diferencia de velocidad con "con" es lo que cuestan esas copias.
+- Pruebas: x86 con ASan 214.391 comprobaciones, 0 fallos; pspautotests
+  275/275; A/B con el CLI de GX en las 555, la 0.6.7 contra la 0.6.8 con
+  `prof_mezcla` encendido: 0 distintos (el censo no toca GX); en
+  `tests/guest/ge_mezcla_doble`, `test_mezcla_una_copia` quita la copia por
+  solape.
+
+Autotest (3 registros, sin capturas, el guion entero): con (como la
+0.6.7, con `prof_mezcla`), una_copia (con `test_mezcla_una_copia`) y sin
+(`gx_mezcla_doble 0`). Qué mirar: en la pelea, la velocidad de las tres
+(sin − con = lo que cuesta el arreglo; una_copia − con = lo que cuestan las
+copias por solape; el resto es la primera copia de cada llamada y las
+etapas), los motivos de las copias, las filas cambiadas frente a las
+copiadas y el reparto del alfa.
+
 ### Para el siguiente chat (empezar aquí)
 
 Metodología acordada (detalle en `docs/HOJA_DE_RUTA.md`): primero medir

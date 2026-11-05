@@ -5,6 +5,17 @@ la 0.5.17.2; antes se marcaban con `//arreglo`). Aquí va, por versión, qué
 se arregló o cambió y una descripción breve. El detalle está en
 `docs/CONTINUAR.md`.
 
+## 0.6.8
+
+Solo medidas: el coste de `gx_mezcla_doble`.
+
+- `wii/gx_ge.c`: `prof_mezcla` (copias por motivo, filas copiadas y
+  cambiadas, primitivas y área por alfa máximo, `gm_alfa_textura`) y
+  `test_mezcla_una_copia` (sin las copias por solape, para medir).
+- `core/opt.h`, `core/opt.c`: `prof_mezcla` y `test_mezcla_una_copia`
+  (apagados).
+- `hle/hle.h`, `dist/apps/wiisp/meta.xml`: versión 0.6.8.
+
 ## 0.6.7
 
 El suelo brillante y los fantasmas de DBZ: la mezcla doble de la PSP

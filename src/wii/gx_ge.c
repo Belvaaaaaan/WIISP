@@ -205,6 +205,9 @@ static GXTexObj gm_copia_obj, gm_tram_obj;   //Arreglo
 static void gm_swap_limpiar(void);   //Arreglo
 static GXColor rgb_color(core_u32 c, u8 a);   //Arreglo
 static unsigned gm_llamadas[2], gm_prims[2], gm_copias[2], gm_sin_etapas, gm_dobles_16;   //Arreglo
+static unsigned gm_c_motivo[3], gm_sin_copiar, gm_alfa_prims[2], gm_ta_max;   //Arreglo
+static u64 gm_filas_copiadas, gm_filas_cambiadas, gm_alfa_area[2];   //Arreglo
+static int32_t gm_cambio[2];   //Arreglo
 static float pos_off;
 
 /* Perfilado (ticks del Wii) */
@@ -2470,6 +2473,26 @@ static void load_dither(const GeRasterState *r){
 	GX_LoadTexObj(&dither_obj, GX_TEXMAP2);
 }
 
+//Arreglo
+static unsigned gm_alfa_textura(const GeRasterState *r){
+	unsigned m = 0, i, n;
+	if(!tex_on || !r->use_tex_alpha) return 256;
+	if(r->texfmt < GE_TFMT_CLUT4 || r->texfmt > GE_TFMT_CLUT32) return 255;
+	n = r->texfmt == GE_TFMT_CLUT4 ? 16 : 256;
+	for(i = 0; i < n; i++){
+		const u32 shift = (r->clutformat >> 2) & 0x1F, mask = (r->clutformat >> 8) & 0xFF, off = ((r->clutformat >> 16) & 0x1F) << 4;
+		const u32 idx = ((i >> shift) & mask) | off;
+		unsigned a;
+		if(r->clut_fmt == GE_FMT_8888) a = ge.clut[(idx & 0x1FF) * 4 + 3];
+		else {
+			const u32 v = rd_le16(ge.clut + (idx & 0x3FF) * 2);
+			a = r->clut_fmt == GE_FMT_4444 ? (v >> 12) * 17u : r->clut_fmt == GE_FMT_5551 ? ((v >> 15) ? 255u : 0u) : 255u;
+		}
+		if(a > m) m = a;
+	}
+	return m;
+}
+
 static void apply_gx(void){
 	const GeRasterState *r = ge_raster_state();
 	core_u32 mrgb = ge.cmd[GE_MASKRGB] & 0xFFFFFF, ma = ge.cmd[GE_MASKALPHA] & 0xFF;
@@ -2690,6 +2713,7 @@ static void apply_gx(void){
 		if(gm_activo->tramado) gm_tramado(r->dithering ? r->dither : NULL);   //Arreglo
 		gm_copia_ok = 0;   //Arreglo
 		gm_llamadas[gm_activo == &gm_doble]++;   //Arreglo
+		if(opt_on[OPT_PROF_MEZCLA]) gm_ta_max = gm_alfa_textura(r);   //Arreglo
 		if(gm_activo == &gm_doble && cur_c->fmt != GE_FMT_8888) gm_dobles_16++;   //Arreglo
 	}   //Arreglo
 	else if(texgens3){ GX_SetNumTexGens(2); texgens3 = 0; }   //Arreglo
@@ -3077,9 +3101,9 @@ static inline void put_vertex(const GeVertex *v, const GeVertex *cv, float k){
 }
 
 //Arreglo
-static void gm_antes(const int32_t *x, const int32_t *y, int n){
+static void gm_antes(const int32_t *x, const int32_t *y, int n, int va){
 	int32_t c[4] = { x[0], y[0], x[0], y[0] };
-	int i, j;
+	int i, j, motivo = gm_copia_ok ? 1 : 0;
 	for(i = 1; i < n; i++){
 		if(x[i] < c[0]) c[0] = x[i];
 		if(y[i] < c[1]) c[1] = y[i];
@@ -3087,11 +3111,28 @@ static void gm_antes(const int32_t *x, const int32_t *y, int n){
 		if(y[i] > c[3]) c[3] = y[i];
 	}
 	gm_prims[gm_activo == &gm_doble]++;
-	if(gm_copia_ok && gm_n == GM_POLIGONOS) gm_copia_ok = 0;
+	if(gm_copia_ok && gm_n == GM_POLIGONOS){ gm_copia_ok = 0; motivo = 2; }
 	for(j = 0; gm_copia_ok && j < gm_n; j++)
 		if(c[0] < gm_caja[j][2] && gm_caja[j][0] < c[2] && c[1] < gm_caja[j][3] && gm_caja[j][1] < c[3] &&
 		   !gm_separados(x, y, n, gm_px[j], gm_py[j], gm_lados[j]))
 			gm_copia_ok = 0;
+	if(!gm_copia_ok && motivo && opt_on[OPT_TEST_MEZCLA_UNA_COPIA]){ gm_copia_ok = 1; gm_sin_copiar++; if(gm_n == GM_POLIGONOS) gm_n = 0; }   //Arreglo
+	if(opt_on[OPT_PROF_MEZCLA] && gm_activo == &gm_doble){   //Arreglo
+		int64_t area = 0;   //Arreglo
+		const int ta = gm_ta_max, a = ta == 256 ? va : ((va + 1) * ta) >> 8;   //Arreglo
+		for(i = 0; i < n; i++) area += (int64_t)x[i] * y[(i + 1) % n] - (int64_t)x[(i + 1) % n] * y[i];   //Arreglo
+		gm_alfa_prims[a > 127]++;   //Arreglo
+		gm_alfa_area[a > 127] += (u64)((area < 0 ? -area : area) / 512);   //Arreglo
+		if(!gm_copia_ok){   //Arreglo
+			gm_c_motivo[motivo]++;   //Arreglo
+			gm_filas_copiadas += (u64)cur_c->h;   //Arreglo
+			if(motivo && gm_cambio[1] >= gm_cambio[0]) gm_filas_cambiadas += (u64)((gm_cambio[1] >> 4) - (gm_cambio[0] >> 4) + 1);   //Arreglo
+			gm_cambio[0] = c[1]; gm_cambio[1] = c[3];   //Arreglo
+		} else {   //Arreglo
+			if(c[1] < gm_cambio[0]) gm_cambio[0] = c[1];   //Arreglo
+			if(c[3] > gm_cambio[1]) gm_cambio[1] = c[3];   //Arreglo
+		}   //Arreglo
+	}   //Arreglo
 	if(!gm_copia_ok){
 		efb_to_tex(cur_c);
 		gm_copias[gm_activo == &gm_doble]++;
@@ -3106,14 +3147,15 @@ static void gm_antes(const int32_t *x, const int32_t *y, int n){
 //Arreglo
 static void gm_triangulo(const GeVertex *a, const GeVertex *b, const GeVertex *c){
 	const int32_t x[3] = { a->x, b->x, c->x }, y[3] = { a->y, b->y, c->y };
-	gm_antes(x, y, 3);
+	const int va = (int)(a->color0 >> 24), vb = (int)(b->color0 >> 24), vc = (int)(c->color0 >> 24);
+	gm_antes(x, y, 3, va > vb ? (va > vc ? va : vc) : (vb > vc ? vb : vc));
 }
 
 //Arreglo
-static void gm_rectangulo(int32_t x0, int32_t y0, int32_t x1, int32_t y1){
+static void gm_rectangulo(int32_t x0, int32_t y0, int32_t x1, int32_t y1, int va){
 	const int32_t xa = x0 < x1 ? x0 : x1, xb = x0 < x1 ? x1 : x0, ya = y0 < y1 ? y0 : y1, yb = y0 < y1 ? y1 : y0;
 	const int32_t x[4] = { xa, xb, xb, xa }, y[4] = { ya, ya, yb, yb };
-	gm_antes(x, y, 4);
+	gm_antes(x, y, 4, va);
 }
 
 /* --- Censo: qué parte de una textura sobre un framebuffer se lee ----------- */
@@ -3439,7 +3481,7 @@ static void gx_rect(const GeVertex *v0, const GeVertex *v1){
 		prepare_state();
 	}
 	if(rtt_cur && tex_on) rtt_note_sprite(v0, v1);
-	if(gm_activo) gm_rectangulo(v0->x, v0->y, v1->x, v1->y);   //Arreglo
+	if(gm_activo) gm_rectangulo(v0->x, v0->y, v1->x, v1->y, (int)(v1->color0 >> 24));   //Arreglo
 	draw_sprite(v0, v1);
 	drawn();
 }
@@ -3519,7 +3561,7 @@ static void gx_line(const GeVertex *v0, const GeVertex *v1){
 	if(!prepare(0)) return;
 	if(use_clut_gpu && tex_on){ clut_gpu_fallback(); prepare_state(); }   /* sin comprobación de límites */
 	if(gm_activo) gm_rectangulo((v0->x < v1->x ? v0->x : v1->x) - 16, (v0->y < v1->y ? v0->y : v1->y) - 16,   //Arreglo
-	                            (v0->x > v1->x ? v0->x : v1->x) + 16, (v0->y > v1->y ? v0->y : v1->y) + 16);   //Arreglo
+	                            (v0->x > v1->x ? v0->x : v1->x) + 16, (v0->y > v1->y ? v0->y : v1->y) + 16, 255);   //Arreglo
 	pos_off = 0.5f;
 	GX_Begin(GX_LINES, GX_VTXFMT0, 2);
 	put_vertex(v0, flat ? v1 : v0, 1.0f);
@@ -3536,7 +3578,7 @@ static void gx_point(const GeVertex *v0){
 	if(ch_pend){ ch_pend = 0; targets_dirty = 1; }   //Arreglo
 	if(!prepare(0)) return;
 	if(use_clut_gpu && tex_on){ clut_gpu_fallback(); prepare_state(); }
-	if(gm_activo) gm_rectangulo(v0->x - 16, v0->y - 16, v0->x + 16, v0->y + 16);   //Arreglo
+	if(gm_activo) gm_rectangulo(v0->x - 16, v0->y - 16, v0->x + 16, v0->y + 16, 255);   //Arreglo
 	pos_off = 0.5f;
 	GX_Begin(GX_POINTS, GX_VTXFMT0, 1);
 	put_vertex(v0, v0, 1.0f);
@@ -3745,6 +3787,13 @@ void gx_ge_rtt_report(char *buf, size_t size){
 		        "gx_mezcla_doble: %u llamadas (%u sobre un bufer de 16 bits), %u primitivas, %u copias del destino; "
 		        "como antes por no caber en 16 etapas: %u; resta del alfa del TEV: variante %d%s\n",
 		        gm_llamadas[1], gm_dobles_16, gm_prims[1], gm_copias[1], gm_sin_etapas, gm_swsub, gm_resta ? "" : " (sin decidir)");   //Arreglo
+	if(len < size && opt_on[OPT_PROF_MEZCLA])   //Arreglo
+		len += (size_t)snprintf(buf + len, size - len,   //Arreglo
+		        "gx_mezcla_doble (prof_mezcla): copias al empezar %u, por solape %u, por lista llena %u; filas copiadas %llu, de ellas "
+		        "cambiadas desde la copia anterior (en las de solape y lista llena) %llu; primitivas con alfa maximo <= 127: %u (%llu px), "
+		        "> 127: %u (%llu px); solapes sin copiar (test_mezcla_una_copia) %u\n",
+		        gm_c_motivo[0], gm_c_motivo[1], gm_c_motivo[2], (unsigned long long)gm_filas_copiadas, (unsigned long long)gm_filas_cambiadas,
+		        gm_alfa_prims[0], (unsigned long long)gm_alfa_area[0], gm_alfa_prims[1], (unsigned long long)gm_alfa_area[1], gm_sin_copiar);   //Arreglo
 	if(len < size)   //Arreglo
 		len += (size_t)snprintf(buf + len, size - len,   //Arreglo
 		        "gx_mascara_bits: estados con mascara de color parcial: %u con la operacion OR, %u con AND, %u sin nada que escribir; "
@@ -3888,6 +3937,11 @@ void gx_ge_rtt_report(char *buf, size_t size){
 	memset(gm_prims, 0, sizeof(gm_prims));   //Arreglo
 	memset(gm_copias, 0, sizeof(gm_copias));   //Arreglo
 	gm_sin_etapas = gm_dobles_16 = 0;   //Arreglo
+	memset(gm_c_motivo, 0, sizeof(gm_c_motivo));   //Arreglo
+	memset(gm_alfa_prims, 0, sizeof(gm_alfa_prims));   //Arreglo
+	memset(gm_alfa_area, 0, sizeof(gm_alfa_area));   //Arreglo
+	gm_sin_copiar = 0;   //Arreglo
+	gm_filas_copiadas = gm_filas_cambiadas = 0;   //Arreglo
 	memset(gm_cuenta, 0, sizeof(gm_cuenta));   //Arreglo
 	rtt_pad_skips = 0;
 	hole_made = hole_filled = hole_skips = hole_rows_dl = hole_rows_up = 0;
