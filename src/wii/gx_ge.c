@@ -71,6 +71,7 @@
 #include "wii/gx_stencil.h"   //Arreglo
 #include "wii/gx_mascara.h"   //Arreglo
 #include "wii/gx_mezcla.h"   //Arreglo
+#include "wii/gx_huellas.h"   //Arreglo
 typedef char gm_codigos_gx[(GMC_CPREV == GX_CC_CPREV && GMC_APREV == GX_CC_APREV && GMC_C0 == GX_CC_C0 && GMC_A0 == GX_CC_A0 &&   //Arreglo
                             GMC_C1 == GX_CC_C1 && GMC_A1 == GX_CC_A1 && GMC_C2 == GX_CC_C2 && GMC_A2 == GX_CC_A2 && GMC_TEXC == GX_CC_TEXC &&   //Arreglo
                             GMC_TEXA == GX_CC_TEXA && GMC_ONE == GX_CC_ONE && GMC_KONST == GX_CC_KONST && GMC_ZERO == GX_CC_ZERO &&   //Arreglo
@@ -208,6 +209,14 @@ static unsigned gm_llamadas[2], gm_prims[2], gm_copias[2], gm_sin_etapas, gm_dob
 static unsigned gm_c_motivo[3], gm_sin_copiar, gm_alfa_prims[2], gm_ta_max;   //Arreglo
 static u64 gm_filas_copiadas, gm_filas_cambiadas, gm_alfa_area[2];   //Arreglo
 static int32_t gm_cambio[2];   //Arreglo
+static int32_t gm_sucia[4];   //Arreglo
+static int gm_parcial_ok, gm_parcial_a8_ok, gm_parcial_listo;   //Arreglo
+static unsigned gm_c_parciales, gm_c_sin_a8, gm_c_nada;   //Arreglo
+static u64 gm_px_copiados, gm_px_enteros;   //Arreglo
+static HzTabla *pz_tabla;   //Arreglo
+static u32 pz_epoca = 1, pz_rango;   //Arreglo
+static int pz_activo, pz_escribe, pz_prueba, pz_sup;   //Arreglo
+static unsigned pz_tri[2], pz_sin_sitio, pz_cat[2][5], pz_estados[2], pz_estados_rotados[2], pz_marca;   //Arreglo
 static float pos_off;
 
 /* Perfilado (ticks del Wii) */
@@ -816,6 +825,34 @@ static void efb_to_tex_body(Surface *s){
 	GX_PixModeSync();
 	GX_InvalidateTexAll();
 	s->has_tex = 1;
+}
+
+//Arreglo
+static void efb_to_tex_rect(Surface *s, const int *r, int a8){
+	int old = prof_switch(PROF_FB);
+	rastreo_ev(RG_COPIA_EFB, s, -1, NULL);
+	copy_filter_none();
+	GX_SetTexCopySrc((u16)r[0], (u16)r[1], (u16)r[2], (u16)r[3]);
+	GX_SetTexCopyDst((u16)s->w, (u16)r[3], GX_TF_RGBA8, GX_FALSE);
+	GX_CopyTex(s->tex + gm_desplazamiento(s->w, 4, 64, r[0], r[1]), GX_FALSE);
+	s->tex_gen++;
+	if(a8 && s->a8_want && s->fmt == GE_FMT_8888 && s->amode == A_GPU && ensure_ci(s)){
+		const int cw = ci_width(s);
+		int ra[4] = { 0, 0, cw, s->h };
+		if(s->ci_kind == CI_A8 && s->ci_valid && gm_parcial_a8_ok){
+			const int x1 = (r[0] + r[2] + 7) & ~7;
+			ra[0] = r[0] & ~7; ra[1] = r[1]; ra[2] = (x1 < cw ? x1 : cw) - ra[0]; ra[3] = r[3];
+		}
+		GX_SetTexCopySrc((u16)ra[0], (u16)ra[1], (u16)ra[2], (u16)ra[3]);
+		GX_SetTexCopyDst((u16)cw, (u16)ra[3], GX_CTF_A8, GX_FALSE);
+		GX_CopyTex(s->ci + gm_desplazamiento(cw, 8, 32, ra[0], ra[1]), GX_FALSE);
+		s->ci_kind = CI_A8;
+		s->ci_valid = 1;
+	} else if(s->ci_kind == CI_A8) s->ci_valid = 0;
+	GX_PixModeSync();
+	GX_InvalidateTexAll();
+	s->has_tex = 1;
+	prof_switch(old);
 }
 
 static void save_efb(void){
@@ -2731,6 +2768,15 @@ static void apply_gx(void){
 	else if(r->clear_mode) GX_SetZMode(GX_TRUE, GX_ALWAYS, r->depth_write ? GX_TRUE : GX_FALSE);
 	else if(r->depth_test_func == CMP_ALWAYS && !r->depth_write) GX_SetZMode(GX_FALSE, GX_ALWAYS, GX_FALSE);
 	else GX_SetZMode(GX_TRUE, cmp_map[r->depth_test_func & 7], r->depth_write ? GX_TRUE : GX_FALSE);
+	pz_activo = opt_on[OPT_PROF_PROFUNDIDAD] && cur_z && !r->clear_mode && (r->depth_write || r->depth_test_func != CMP_ALWAYS);   //Arreglo
+	if(pz_activo){   //Arreglo
+		pz_escribe = r->depth_write != 0;   //Arreglo
+		pz_prueba = r->depth_test_func != CMP_ALWAYS;   //Arreglo
+		pz_rango = (u32)minz | ((u32)maxz << 16);   //Arreglo
+		pz_sup = (int)(cur_c - surf);   //Arreglo
+		pz_marca = 0;   //Arreglo
+		if(pz_prueba) pz_estados[pz_escribe]++;   //Arreglo
+	}   //Arreglo
 
 	GX_SetDstAlpha(dsta >= 0 ? GX_TRUE : GX_FALSE, (u8)(dsta >= 0 ? dsta : 0));
 	GX_SetDither(GX_FALSE);
@@ -3101,6 +3147,21 @@ static inline void put_vertex(const GeVertex *v, const GeVertex *cv, float k){
 }
 
 //Arreglo
+static void gm_copiar(int motivo){
+	Surface *s = cur_c;
+	int r[4] = { 0, 0, s->w, s->h };
+	const int a8 = !opt_on[OPT_GX_MEZCLA_SIN_A8];
+	const int parcial = motivo && gm_parcial_ok && opt_on[OPT_GX_MEZCLA_PARCIAL];
+	gm_px_enteros += (u64)s->w * (u64)s->h;
+	if(parcial && !gm_rect_copia(gm_sucia, s->w, s->h, 4, 4, r)){ gm_c_nada++; return; }
+	gm_px_copiados += (u64)r[2] * (u64)r[3];
+	if(!parcial && a8){ efb_to_tex(s); return; }
+	gm_c_parciales += parcial;
+	gm_c_sin_a8 += !a8 && s->a8_want && s->fmt == GE_FMT_8888 && s->amode == A_GPU;
+	efb_to_tex_rect(s, r, a8);
+}
+
+//Arreglo
 static void gm_antes(const int32_t *x, const int32_t *y, int n, int va){
 	int32_t c[4] = { x[0], y[0], x[0], y[0] };
 	int i, j, motivo = gm_copia_ok ? 1 : 0;
@@ -3134,14 +3195,40 @@ static void gm_antes(const int32_t *x, const int32_t *y, int n, int va){
 		}   //Arreglo
 	}   //Arreglo
 	if(!gm_copia_ok){
-		efb_to_tex(cur_c);
+		gm_copiar(motivo);   //Arreglo
 		gm_copias[gm_activo == &gm_doble]++;
 		gm_copia_ok = 1;
 		gm_n = 0;
 	}
+	if(!gm_n) memcpy(gm_sucia, c, sizeof(c));   //Arreglo
+	else {   //Arreglo
+		if(c[0] < gm_sucia[0]) gm_sucia[0] = c[0];   //Arreglo
+		if(c[1] < gm_sucia[1]) gm_sucia[1] = c[1];   //Arreglo
+		if(c[2] > gm_sucia[2]) gm_sucia[2] = c[2];   //Arreglo
+		if(c[3] > gm_sucia[3]) gm_sucia[3] = c[3];   //Arreglo
+	}   //Arreglo
 	for(i = 0; i < n; i++){ gm_px[gm_n][i] = x[i]; gm_py[gm_n][i] = y[i]; }
 	memcpy(gm_caja[gm_n], c, sizeof(c));
 	gm_lados[gm_n++] = (u8)n;
+}
+
+//Arreglo
+static void pz_triangulo(const GeVertex *a, const GeVertex *b, const GeVertex *c){
+	const int32_t x[3] = { a->x, b->x, c->x }, y[3] = { a->y, b->y, c->y }, z[3] = { a->z, b->z, c->z };
+	int primero = 0, k;
+	u32 clave;
+	if(!pz_tabla){
+		pz_tabla = calloc(1, sizeof(HzTabla));
+		if(!pz_tabla){ pz_activo = 0; return; }
+	}
+	clave = hz_huella(x, y, z, (u32)pz_sup, &primero);
+	pz_tri[pz_escribe]++;
+	if(pz_prueba){
+		k = hz_buscar(pz_tabla, clave, primero, pz_rango, pz_epoca);
+		pz_cat[pz_escribe][k]++;
+		if((k == HZ_ROTADO || k == HZ_ROTADO_OTRO_RANGO) && !pz_marca){ pz_marca = 1; pz_estados_rotados[pz_escribe]++; }
+	}
+	if(pz_escribe && !hz_poner(pz_tabla, clave, primero, pz_rango, pz_epoca)) pz_sin_sitio++;
 }
 
 //Arreglo
@@ -3309,6 +3396,7 @@ static void __attribute__((noinline)) gx_triangle_ref_path(const GeVertex *v0, c
 	}
 	if(rtt_cur && tex_on) rtt_note_triangle(v0, v1, v2);
 	if(gm_activo) gm_triangulo(v0, v1, v2);   //Arreglo
+	if(pz_activo) pz_triangulo(v0, v1, v2);   //Arreglo
 	c = flat ? v2 : NULL;
 	k = tex_on && !through && tex_norm ? gx_tex_scale3(v0, v1, v2) : 1.0f;
 	GX_Begin(GX_TRIANGLES, GX_VTXFMT0, 3);
@@ -3364,6 +3452,7 @@ static void gx_triangle(const GeVertex *v0, const GeVertex *v1, const GeVertex *
 	}
 	if(rtt_cur && tex_on) rtt_note_triangle(v0, v1, v2);
 	if(gm_activo) gm_triangulo(v0, v1, v2);   //Arreglo
+	if(pz_activo) pz_triangulo(v0, v1, v2);   //Arreglo
 	/* Antes de cargar el estado: así no se guarda en la pila para la llamada */
 	GX_Begin(GX_TRIANGLES, GX_VTXFMT0, 3);
 	l.tex_on = tex_on; l.through = through; l.tex_proj = tex_proj;
@@ -3414,6 +3503,7 @@ static void gx_triangles(const GeTriCharola *t, int n){   //Arreglo
 		for(; i < n; i++){
 			const GeVertex *a = t[i].v[0], *b = t[i].v[1], *c = t[i].v[2], *col = t[i].col;
 			GxVtxWords w;
+			if(pz_activo) pz_triangulo(a, b, c);   //Arreglo
 			l.k = norm ? gx_tex_scale3(a, b, c) : 1.0f;
 			w = gx_vertex_fast(a, fl ? col : a, &l); put_words(&w);
 			w = gx_vertex_fast(b, fl ? col : b, &l); put_words(&w);
@@ -3655,6 +3745,7 @@ int gx_ge_present(void *xfb, GXRModeObj *rm, int widescreen){
 	int r;
 	gx_ge_present_wait();   /* la anterior ya tiene que estar (video.c la espera antes) */
 	r = present_body(xfb, rm, widescreen);
+	if(!++pz_epoca) pz_epoca = 1;   //Arreglo
 	tri_listo = 0;
 	charola = 0;   //Arreglo
 	prof_present += gettime() - t0;
@@ -3785,15 +3876,29 @@ void gx_ge_rtt_report(char *buf, size_t size){
 	if(len < size)   //Arreglo
 		len += (size_t)snprintf(buf + len, size - len,   //Arreglo
 		        "gx_mezcla_doble: %u llamadas (%u sobre un bufer de 16 bits), %u primitivas, %u copias del destino; "
-		        "como antes por no caber en 16 etapas: %u; resta del alfa del TEV: variante %d%s\n",
-		        gm_llamadas[1], gm_dobles_16, gm_prims[1], gm_copias[1], gm_sin_etapas, gm_swsub, gm_resta ? "" : " (sin decidir)");   //Arreglo
+		        "como antes por no caber en 16 etapas: %u; resta del alfa del TEV: variante %d%s; "
+		        "copia parcial comprobada al arrancar: RGBA8 %s, A8 %s; copias parciales (gx_mezcla_parcial) %u, sin nada que copiar %u, "
+		        "sin los indices A8 (gx_mezcla_sin_a8) %u\n",
+		        gm_llamadas[1], gm_dobles_16, gm_prims[1], gm_copias[1], gm_sin_etapas, gm_swsub, gm_resta ? "" : " (sin decidir)",
+		        !gm_parcial_listo ? "sin comprobar" : gm_parcial_ok ? "bien" : "MAL", !gm_parcial_listo ? "sin comprobar" : gm_parcial_a8_ok ? "bien" : "MAL",
+		        gm_c_parciales, gm_c_nada, gm_c_sin_a8);   //Arreglo
 	if(len < size && opt_on[OPT_PROF_MEZCLA])   //Arreglo
 		len += (size_t)snprintf(buf + len, size - len,   //Arreglo
 		        "gx_mezcla_doble (prof_mezcla): copias al empezar %u, por solape %u, por lista llena %u; filas copiadas %llu, de ellas "
 		        "cambiadas desde la copia anterior (en las de solape y lista llena) %llu; primitivas con alfa maximo <= 127: %u (%llu px), "
-		        "> 127: %u (%llu px); solapes sin copiar (test_mezcla_una_copia) %u\n",
+		        "> 127: %u (%llu px); solapes sin copiar (test_mezcla_una_copia) %u; pixeles copiados %llu de %llu (copias enteras)\n",
 		        gm_c_motivo[0], gm_c_motivo[1], gm_c_motivo[2], (unsigned long long)gm_filas_copiadas, (unsigned long long)gm_filas_cambiadas,
-		        gm_alfa_prims[0], (unsigned long long)gm_alfa_area[0], gm_alfa_prims[1], (unsigned long long)gm_alfa_area[1], gm_sin_copiar);   //Arreglo
+		        gm_alfa_prims[0], (unsigned long long)gm_alfa_area[0], gm_alfa_prims[1], (unsigned long long)gm_alfa_area[1], gm_sin_copiar,
+		        (unsigned long long)gm_px_copiados, (unsigned long long)gm_px_enteros);   //Arreglo
+	if(len < size && opt_on[OPT_PROF_PROFUNDIDAD])   //Arreglo
+		len += (size_t)snprintf(buf + len, size - len,   //Arreglo
+		        "prof_profundidad: triangulos que escriben z %u, que no %u (sin sitio en la tabla %u); con prueba de z y escritura: "
+		        "pareja igual %u, mismo primer vertice y otro rango %u, otro primer vertice %u, otro primer vertice y otro rango %u, sin pareja %u "
+		        "(estados %u, con algun triangulo rotado %u); con prueba de z sin escritura: pareja igual %u, mismo primer vertice y otro rango %u, "
+		        "otro primer vertice %u, otro primer vertice y otro rango %u, sin pareja %u (estados %u, con algun triangulo rotado %u)\n",
+		        pz_tri[1], pz_tri[0], pz_sin_sitio, pz_cat[1][HZ_IGUAL], pz_cat[1][HZ_OTRO_RANGO], pz_cat[1][HZ_ROTADO], pz_cat[1][HZ_ROTADO_OTRO_RANGO],
+		        pz_cat[1][HZ_SIN_PAREJA], pz_estados[1], pz_estados_rotados[1], pz_cat[0][HZ_IGUAL], pz_cat[0][HZ_OTRO_RANGO], pz_cat[0][HZ_ROTADO],
+		        pz_cat[0][HZ_ROTADO_OTRO_RANGO], pz_cat[0][HZ_SIN_PAREJA], pz_estados[0], pz_estados_rotados[0]);   //Arreglo
 	if(len < size)   //Arreglo
 		len += (size_t)snprintf(buf + len, size - len,   //Arreglo
 		        "gx_mascara_bits: estados con mascara de color parcial: %u con la operacion OR, %u con AND, %u sin nada que escribir; "
@@ -3942,6 +4047,13 @@ void gx_ge_rtt_report(char *buf, size_t size){
 	memset(gm_alfa_area, 0, sizeof(gm_alfa_area));   //Arreglo
 	gm_sin_copiar = 0;   //Arreglo
 	gm_filas_copiadas = gm_filas_cambiadas = 0;   //Arreglo
+	gm_c_parciales = gm_c_sin_a8 = gm_c_nada = 0;   //Arreglo
+	gm_px_copiados = gm_px_enteros = 0;   //Arreglo
+	memset(pz_tri, 0, sizeof(pz_tri));   //Arreglo
+	memset(pz_cat, 0, sizeof(pz_cat));   //Arreglo
+	memset(pz_estados, 0, sizeof(pz_estados));   //Arreglo
+	memset(pz_estados_rotados, 0, sizeof(pz_estados_rotados));   //Arreglo
+	pz_sin_sitio = 0;   //Arreglo
 	memset(gm_cuenta, 0, sizeof(gm_cuenta));   //Arreglo
 	rtt_pad_skips = 0;
 	hole_made = hole_filled = hole_skips = hole_rows_dl = hole_rows_up = 0;
@@ -4247,6 +4359,144 @@ static void gm_decidir_resta(void){
 }
 
 //Arreglo
+static void pg_copiar_rect(u8 *dst, u8 fmt, int ancho, int x, int y, int w, int h){
+	const int a8 = fmt == GX_CTF_A8;
+	GX_SetTexCopySrc((u16)x, (u16)y, (u16)w, (u16)h);
+	GX_SetTexCopyDst((u16)ancho, (u16)h, fmt, GX_FALSE);
+	GX_CopyTex(dst + gm_desplazamiento(ancho, a8 ? 8 : 4, a8 ? 32 : 64, x, y), GX_FALSE);
+}
+
+//Arreglo
+static void pg_esperar_copias(u8 *dst, u32 bytes){
+	GX_PixModeSync();
+	GX_InvalidateTexAll();
+	wait_gpu();
+	DCInvalidateRange(dst, bytes);
+}
+
+//Arreglo
+static int pg_rect_bien(const u8 *ref, const u8 *dst, int ancho, int alto, int a8, const int (*r)[4], int nr){
+	const int tw = a8 ? 8 : 4, tb = a8 ? 32 : 64;
+	int tx, ty, k, i;
+	for(ty = 0; ty < alto / 4; ty++)
+		for(tx = 0; tx < ancho / tw; tx++){
+			const u32 o = gm_desplazamiento(ancho, tw, tb, tx * tw, ty * 4);
+			int dentro = 0;
+			for(k = 0; k < nr; k++)
+				dentro |= tx * tw >= r[k][0] && tx * tw < r[k][0] + r[k][2] && ty * 4 >= r[k][1] && ty * 4 < r[k][1] + r[k][3];
+			if(dentro){ if(memcmp(ref + o, dst + o, (size_t)tb)) return 0; }
+			else for(i = 0; i < tb; i++) if(dst[o + i] != 0xCD) return 0;
+		}
+	return 1;
+}
+
+//Arreglo
+static void pg_patron(int w, int h, int paso){
+	int x, y;
+	for(y = 0; y < h; y += paso)
+		for(x = 0; x < w; x += paso)
+			pg_cuadro(x, y, paso, paso, (core_u32)((x * 37 + y * 101) & 0xFF) | ((core_u32)((x * 13 + y * 7 + 40) & 0xFF) << 8) |
+			                            ((core_u32)((x * 3 + y * 59 + 200) & 0xFF) << 16) | ((core_u32)((x * 29 + y * 11 + 5) & 0xFF) << 24));
+}
+
+//Arreglo
+static void gm_decidir_parcial(void){
+	static const int rc[3][4] = { { 4, 4, 8, 8 }, { 40, 0, 24, 16 }, { 0, 12, 64, 4 } }, ra[2][4] = { { 8, 4, 16, 8 }, { 40, 0, 24, 12 } };
+	u8 *ref = memalign(32, PG_W * PG_H * 4), *dst = memalign(32, PG_W * PG_H * 4);
+	int k;
+	gm_parcial_ok = gm_parcial_a8_ok = 0;
+	gm_parcial_listo = 1;
+	if(!ref || !dst){ free(ref); free(dst); return; }
+	pg_estado(GX_PF_RGBA6_Z24, 1);
+	pg_patron(PG_W, PG_H, 1);
+	copy_filter_none();
+	pg_copiar(ref, GX_TF_RGBA8);
+	memset(dst, 0xCD, PG_W * PG_H * 4);
+	DCFlushRange(dst, PG_W * PG_H * 4);
+	for(k = 0; k < 3; k++) pg_copiar_rect(dst, GX_TF_RGBA8, PG_W, rc[k][0], rc[k][1], rc[k][2], rc[k][3]);
+	pg_esperar_copias(dst, PG_W * PG_H * 4);
+	gm_parcial_ok = pg_rect_bien(ref, dst, PG_W, PG_H, 0, rc, 3);
+	pg_copiar(ref, GX_CTF_A8);
+	memset(dst, 0xCD, PG_W * PG_H);
+	DCFlushRange(dst, PG_W * PG_H);
+	for(k = 0; k < 2; k++) pg_copiar_rect(dst, GX_CTF_A8, PG_W, ra[k][0], ra[k][1], ra[k][2], ra[k][3]);
+	pg_esperar_copias(dst, PG_W * PG_H);
+	gm_parcial_a8_ok = pg_rect_bien(ref, dst, PG_W, PG_H, 1, ra, 2);
+	free(ref);
+	free(dst);
+	mode = MODE_NONE;
+}
+
+#define PC_W 480
+#define PC_H 272
+
+//Arreglo
+static void pg_copias(void){
+	static const int tam[10][2] = { { 480, 272 }, { 480, 64 }, { 480, 16 }, { 480, 4 }, { 240, 136 }, { 128, 128 }, { 64, 64 }, { 32, 32 }, { 16, 16 }, { 4, 4 } };
+	static const int franjas[4] = { 4, 8, 16, 68 };
+	const u32 bytes = PC_W * PC_H * 4;
+	u8 *ref = memalign(32, bytes), *dst = memalign(32, bytes), *a8 = memalign(32, 512 * PC_H);
+	char l[1200];
+	size_t len;
+	int f, k, i, y, iguales[2][4];
+	if(!ref || !dst || !a8){ free(ref); free(dst); free(a8); hle_log_quiet("[PRUEBA_GX] copias: sin memoria\n"); return; }
+	for(f = 0; f < 2; f++){
+		pg_estado(f ? GX_PF_RGBA6_Z24 : GX_PF_RGB8_Z24, f);
+		pg_patron(PC_W, PC_H, 2);
+		copy_filter_none();
+		pg_copiar_rect(ref, GX_TF_RGBA8, PC_W, 0, 0, PC_W, PC_H);
+		pg_esperar_copias(ref, bytes);
+		for(k = 0; k < 4; k++){
+			memset(dst, 0xCD, bytes);
+			DCFlushRange(dst, bytes);
+			for(y = 0; y < PC_H; y += franjas[k]) pg_copiar_rect(dst, GX_TF_RGBA8, PC_W, 0, y, PC_W, y + franjas[k] <= PC_H ? franjas[k] : PC_H - y);
+			pg_esperar_copias(dst, bytes);
+			iguales[f][k] = !memcmp(ref, dst, bytes);
+		}
+	}
+	hle_log_quiet("[PRUEBA_GX] copia parcial de 480x272 por franjas de 4/8/16/68 filas contra la copia entera: RGB8 %s %s %s %s, RGBA6 %s %s %s %s%s\n",
+	              iguales[0][0] ? "igual" : "DISTINTA", iguales[0][1] ? "igual" : "DISTINTA", iguales[0][2] ? "igual" : "DISTINTA", iguales[0][3] ? "igual" : "DISTINTA",
+	              iguales[1][0] ? "igual" : "DISTINTA", iguales[1][1] ? "igual" : "DISTINTA", iguales[1][2] ? "igual" : "DISTINTA", iguales[1][3] ? "igual" : "DISTINTA",
+	              iguales[0][0] && iguales[0][1] && iguales[0][2] && iguales[0][3] && iguales[1][0] && iguales[1][1] && iguales[1][2] && iguales[1][3] ? "" : " (MAL)");
+	len = (size_t)snprintf(l, sizeof(l), "[PRUEBA_GX] tiempo por copia RGBA8 en us (64 copias, cada una con GX_PixModeSync; entre parentesis con GX_InvalidateTexAll):");
+	for(k = 0; k < 10; k++){
+		u64 t[2];
+		int m;
+		for(m = 0; m < 2; m++){
+			const u64 t0 = gettime();
+			for(i = 0; i < 64; i++){
+				pg_copiar_rect(dst, GX_TF_RGBA8, PC_W, 0, 0, tam[k][0], tam[k][1]);
+				GX_PixModeSync();
+				if(m) GX_InvalidateTexAll();
+			}
+			wait_gpu();
+			t[m] = gettime() - t0;
+		}
+		len += (size_t)snprintf(l + len, sizeof(l) - len, " %dx%d %u (%u)", tam[k][0], tam[k][1], (unsigned)(ticks_to_microsecs(t[0]) / 64),
+		                        (unsigned)(ticks_to_microsecs(t[1]) / 64));
+	}
+	{
+		const u64 t0 = gettime();
+		u64 t1;
+		for(i = 0; i < 64; i++){
+			pg_copiar_rect(dst, GX_TF_RGBA8, PC_W, 0, 0, PC_W, PC_H);
+			pg_copiar_rect(a8, GX_CTF_A8, 512, 0, 0, 512, PC_H);
+			GX_PixModeSync();
+			GX_InvalidateTexAll();
+		}
+		wait_gpu();
+		t1 = gettime() - t0;
+		snprintf(l + len, sizeof(l) - len, "; la copia de antes (480x272 mas los indices A8 de 512x272 y GX_InvalidateTexAll) %u\n",
+		         (unsigned)(ticks_to_microsecs(t1) / 64));
+	}
+	hle_log_quiet("%s", l);
+	free(ref);
+	free(dst);
+	free(a8);
+	mode = MODE_NONE;
+}
+
+//Arreglo
 static void pg_mezcla(void){
 	static const int tramados[4] = { 0, -8, 7, -1 };
 	u8 *ts = memalign(32, PM_N * PM_N * 4), *td = memalign(32, PM_N * PM_N * 4), *dc = memalign(32, PM_N * PM_N * 4);
@@ -4402,6 +4652,8 @@ void gx_ge_prueba(void){
 	pg_mascara(d, res);   //Arreglo
 	gm_decidir_resta();   //Arreglo
 	pg_mezcla();   //Arreglo
+	gm_decidir_parcial();   //Arreglo
+	pg_copias();   //Arreglo
 	free(a8);
 	free(d);
 	free(res);
@@ -4474,6 +4726,7 @@ void gx_ge_init(void){
 	copy_filter_none();
 	gm_programa_abs(&gm_abs);   //Arreglo
 	gm_decidir_resta();   //Arreglo
+	gm_decidir_parcial();   //Arreglo
 	mode = MODE_NONE;
 	efb_fmt = -1;
 }

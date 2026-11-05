@@ -1,0 +1,105 @@
+=== gm_rect_copia: empieza un pixel por dentro
+@ src/wii/gx_mezcla.h
+<<<
+	int x0 = (int)(caja[0] >> 4) - 1, y0 = (int)(caja[1] >> 4) - 1, x1 = (int)(caja[2] >> 4) + 2, y1 = (int)(caja[3] >> 4) + 2;
+>>>
+	int x0 = (int)(caja[0] >> 4) + 1, y0 = (int)(caja[1] >> 4) - 1, x1 = (int)(caja[2] >> 4) + 2, y1 = (int)(caja[3] >> 4) + 2;
+===
+=== gm_rect_copia: el final sin el pixel de mas
+@ src/wii/gx_mezcla.h
+<<<
+	int x0 = (int)(caja[0] >> 4) - 1, y0 = (int)(caja[1] >> 4) - 1, x1 = (int)(caja[2] >> 4) + 2, y1 = (int)(caja[3] >> 4) + 2;
+>>>
+	int x0 = (int)(caja[0] >> 4) - 1, y0 = (int)(caja[1] >> 4) - 1, x1 = (int)(caja[2] >> 4) + 2, y1 = (int)(caja[3] >> 4);
+===
+=== gm_rect_copia: sin alinear el principio
+@ src/wii/gx_mezcla.h
+<<<
+	x0 &= ~(al_x - 1);
+>>>
+	x0 &= ~0;
+===
+=== gm_rect_copia: el final redondeado hacia abajo
+@ src/wii/gx_mezcla.h
+<<<
+	y1 = (y1 + al_y - 1) & ~(al_y - 1);
+>>>
+	y1 = y1 & ~(al_y - 1);
+===
+=== gm_rect_copia: sin recortar al ancho
+@ src/wii/gx_mezcla.h
+<<<
+	if(x1 > lim_x) x1 = lim_x;
+>>>
+	if(x1 > lim_x + 4) x1 = lim_x;
+===
+=== gm_rect_copia: negativos sin recortar
+@ src/wii/gx_mezcla.h
+<<<
+	if(y0 < 0) y0 = 0;
+>>>
+	if(y0 < -4) y0 = 0;
+===
+=== gm_desplazamiento: el ancho sin redondear
+@ src/wii/gx_mezcla.h
+<<<
+	return (uint32_t)((y / 4) * ((ancho + tile_w - 1) / tile_w) + x / tile_w) * (uint32_t)tile_bytes;
+>>>
+	return (uint32_t)((y / 4) * (ancho / tile_w) + x / tile_w) * (uint32_t)tile_bytes;
+===
+=== hz_huella: sin ordenar por x
+@ src/wii/gx_huellas.h
+<<<
+	if(a[0] != b[0]) return a[0] < b[0];
+>>>
+	if(a[0] != b[0]) return 0;
+===
+=== hz_huella: sin la superficie
+@ src/wii/gx_huellas.h
+<<<
+	uint32_t h = 2166136261u ^ superficie;
+>>>
+	uint32_t h = 2166136261u;
+===
+=== hz_huella: el primero mal
+@ src/wii/gx_huellas.h
+<<<
+	for(i = 0; i < 3; i++) if(orden[i] == 0) *primero = i;
+>>>
+	for(i = 0; i < 3; i++) if(orden[i] == 1) *primero = i;
+===
+=== hz_huella: sin la z
+@ src/wii/gx_huellas.h
+<<<
+		for(j = 0; j < 3; j++){ h ^= (uint32_t)v[orden[i]][j]; h *= 16777619u; h ^= h >> 15; }
+>>>
+		for(j = 0; j < 2; j++){ h ^= (uint32_t)v[orden[i]][j]; h *= 16777619u; h ^= h >> 15; }
+===
+=== hz_buscar: el rango no cuenta
+@ src/wii/gx_huellas.h
+<<<
+	mismo_rango = t->rango[i] == rango && !t->rangos_varios[i];
+>>>
+	mismo_rango = !t->rangos_varios[i];
+===
+=== hz_poner: sin marcar rangos distintos
+@ src/wii/gx_huellas.h
+<<<
+	if(t->rango[i] != rango) t->rangos_varios[i] = 1;
+>>>
+	if(t->rango[i] != rango) t->rango[i] = rango;
+===
+=== hz_poner: sin juntar los primeros
+@ src/wii/gx_huellas.h
+<<<
+	t->primeros[i] |= (uint8_t)(1u << primero);
+>>>
+	t->primeros[i] = (uint8_t)(1u << primero);
+===
+=== hz_casilla: la epoca no cuenta
+@ src/wii/gx_huellas.h
+<<<
+		if(t->epoca[i] != epoca){ if(*libre < 0) *libre = (int)i; return -1; }
+>>>
+		if(t->epoca[i] == 0){ if(*libre < 0) *libre = (int)i; return -1; }
+===

@@ -176,4 +176,57 @@ void test_gxmezcla(void){
 	CHECK_EQ(falsos, 0);
 	CHECK(separados > 3000 && juntos > 3000);
 	printf("  solapes: %ld separados, %ld que se pisan, %ld separados que comparten un pixel\n", separados, juntos, falsos);
+	{
+		static const int sup[3][3] = { { 480, 272, 4 }, { 64, 16, 4 }, { 512, 272, 8 } };
+		long fuera = 0, mal_alin = 0, vacios = 0, pix = 0, mal_desp = 0;
+		int r[4];
+		const int32_t lejos[4] = { -400, -400, -20, -20 }, pegado[4] = { 480 * 16 + 40, 10, 480 * 16 + 90, 70 };
+		CHECK_EQ(gm_rect_copia(lejos, 480, 272, 4, 4, r), 0);
+		CHECK_EQ(gm_rect_copia(pegado, 480, 272, 4, 4, r), 0);
+		{
+			const int32_t c[4] = { 5 * 16 + 3, 9 * 16, 13 * 16, 17 * 16 + 15 };
+			CHECK_EQ(gm_rect_copia(c, 480, 272, 4, 4, r), 1);
+			CHECK_EQ(r[0], 4); CHECK_EQ(r[1], 8); CHECK_EQ(r[2], 12); CHECK_EQ(r[3], 12);
+			CHECK_EQ(gm_rect_copia(c, 512, 272, 8, 4, r), 1);
+			CHECK_EQ(r[0], 0); CHECK_EQ(r[2], 16);
+		}
+		for(i = 0; i < 20000; i++){
+			const int *su = sup[i % 3];
+			int32_t x[3], y[3], c[4];
+			int px, py;
+			for(k = 0; k < 3; k++){
+				x[k] = (int32_t)(rnd() % (unsigned)((su[0] + 40) * 16)) - 20 * 16;
+				y[k] = (int32_t)(rnd() % (unsigned)((su[1] + 40) * 16)) - 20 * 16;
+				if(i & 7){ x[k] = x[0] + (int32_t)(rnd() % 600) - 300; y[k] = y[0] + (int32_t)(rnd() % 600) - 300; }
+			}
+			c[0] = c[2] = x[0]; c[1] = c[3] = y[0];
+			for(k = 1; k < 3; k++){
+				if(x[k] < c[0]) c[0] = x[k];
+				if(y[k] < c[1]) c[1] = y[k];
+				if(x[k] > c[2]) c[2] = x[k];
+				if(y[k] > c[3]) c[3] = y[k];
+			}
+			if(!gm_rect_copia(c, su[0], su[1], su[2], 4, r)){ r[0] = r[1] = 0; r[2] = r[3] = 0; vacios++; }
+			else {
+				if(r[0] % su[2] || r[1] % 4 || ((r[0] + r[2]) % su[2] && r[0] + r[2] != su[0]) || ((r[1] + r[3]) % 4 && r[1] + r[3] != su[1]) ||
+				   r[0] < 0 || r[1] < 0 || r[0] + r[2] > su[0] || r[1] + r[3] > su[1]) mal_alin++;
+			}
+			for(py = (int)(c[1] >> 4) - 2; py <= (int)(c[3] >> 4) + 2; py++)
+				for(px = (int)(c[0] >> 4) - 2; px <= (int)(c[2] >> 4) + 2; px++){
+					if(px < 0 || py < 0 || px >= su[0] || py >= su[1] || !cubre(x, y, 3, px, py)) continue;
+					pix++;
+					if(px < r[0] || px >= r[0] + r[2] || py < r[1] || py >= r[1] + r[3]) fuera++;
+				}
+		}
+		for(i = 0; i < 2000; i++){
+			const int w = 4 * (int)(1 + rnd() % 160), xx = 4 * (int)(rnd() % (unsigned)(w / 4)), yy = 4 * (int)(rnd() % 68);
+			if(gm_desplazamiento(w, 4, 64, xx, yy) != (uint32_t)((((yy >> 2) * (w >> 2) + (xx >> 2)) << 6))) mal_desp++;
+			if(gm_desplazamiento(w, 8, 32, xx & ~7, yy) != (uint32_t)(((yy >> 2) * ((w + 7) >> 3) + ((xx & ~7) >> 3)) * 32)) mal_desp++;
+		}
+		CHECK_EQ(fuera, 0);
+		CHECK_EQ(mal_alin, 0);
+		CHECK_EQ(mal_desp, 0);
+		CHECK(pix > 100000 && vacios < 6000);
+		printf("  copia parcial: %ld pixeles cubiertos, %ld fuera del rectangulo, %ld rectangulos mal alineados, %ld vacios\n", pix, fuera, mal_alin, vacios);
+	}
 }

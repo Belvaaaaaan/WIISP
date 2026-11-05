@@ -227,4 +227,23 @@ static inline int gm_separados(const int32_t *xa, const int32_t *ya, int na, con
 	return 0;
 }
 
+static inline int gm_rect_copia(const int32_t *caja, int lim_x, int lim_y, int al_x, int al_y, int *r){
+	int x0 = (int)(caja[0] >> 4) - 1, y0 = (int)(caja[1] >> 4) - 1, x1 = (int)(caja[2] >> 4) + 2, y1 = (int)(caja[3] >> 4) + 2;
+	if(x0 < 0) x0 = 0;
+	if(y0 < 0) y0 = 0;
+	x0 &= ~(al_x - 1);
+	y0 &= ~(al_y - 1);
+	x1 = (x1 + al_x - 1) & ~(al_x - 1);
+	y1 = (y1 + al_y - 1) & ~(al_y - 1);
+	if(x1 > lim_x) x1 = lim_x;
+	if(y1 > lim_y) y1 = lim_y;
+	if(x1 <= x0 || y1 <= y0) return 0;
+	r[0] = x0; r[1] = y0; r[2] = x1 - x0; r[3] = y1 - y0;
+	return 1;
+}
+
+static inline uint32_t gm_desplazamiento(int ancho, int tile_w, int tile_bytes, int x, int y){
+	return (uint32_t)((y / 4) * ((ancho + tile_w - 1) / tile_w) + x / tile_w) * (uint32_t)tile_bytes;
+}
+
 #endif

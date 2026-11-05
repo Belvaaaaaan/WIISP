@@ -258,3 +258,12 @@ al repositorio), `gcc-powerpc-linux-gnu` y `qemu-user`. Las salidas van a
   la huella que deja `gx_ge_init` (la prueba de un píxel de la resta), para
   comparar con `ab_versiones.py` contra una versión sin ella (compilando
   las dos con el mismo `stub_estado.c`).
+  Desde la 0.6.9 también vuelve a numerar los punteros desde cero (la
+  comprobación de la copia parcial de `gx_ge_init` usa búferes propios).
+- Copias de mentira (0.6.9, `stub_estado.c`): `GX_CopyTex` escribe en el
+  destino, en el mosaico de RGBA8 o de A8, un valor que depende solo de la
+  posición en el EFB (x·7 + y·13). Así la copia parcial y la entera dejan
+  los mismos bytes y la comprobación de arranque de la copia parcial
+  (`gm_decidir_parcial`) pasa en el CLI de GX, que entonces recorre ese
+  camino. Las dos versiones de un A/B tienen que compilarse con el mismo
+  stub.

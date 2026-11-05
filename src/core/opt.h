@@ -56,6 +56,7 @@ enum {
 	OPT_TEST_BRIGHTNESSCENSUS,   //Arreglo
 	OPT_PROF_MEZCLA,   //Arreglo
 	OPT_TEST_MEZCLA_UNA_COPIA,   //Arreglo
+	OPT_PROF_PROFUNDIDAD,   //Arreglo
 	/* Primera tanda del GE (resultado idéntico) */
 	OPT_GE_SKIN_RAPIDO,   /* skinning mezclando las matrices por peso */
 	OPT_GE_MTX_CACHE,     /* matrices combinadas solo cuando cambian */
@@ -111,6 +112,8 @@ enum {
 	OPT_GX_ABSDIFF,   //Arreglo
 	OPT_GX_MEZCLA_DOBLE,   //Arreglo
 	OPT_GX_MASCARA_BITS,   //Arreglo
+	OPT_GX_MEZCLA_PARCIAL,   //Arreglo
+	OPT_GX_MEZCLA_SIN_A8,   //Arreglo
 	/* Fase 2: intérprete cacheado */
 	OPT_CPU_SIN_EXTRA,    /* 2.1 sin costo por instrucción */
 	OPT_CPU_PREDEC,       /* 2.2 predecodificación (cpu/predec.h) */

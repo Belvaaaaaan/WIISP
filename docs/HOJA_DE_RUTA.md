@@ -465,6 +465,13 @@ TEV con una copia del destino, y el módulo de mezcla en el TEV que también
 hace `gx_absdiff`. Sigue: ver en el Wii la prueba exhaustiva y las
 capturas y, después, el diseño del IR (paso 11).
 
+Hecha (v0.6.9): `gx_mezcla_parcial` y `gx_mezcla_sin_a8`: en las copias del
+destino de la mezcla doble que se repiten dentro de una llamada, solo el
+rectángulo de lo dibujado desde la copia anterior y sin los índices A8
+(comprobado al arrancar en el propio Wii). Con `prof_profundidad`, la
+medida de si las capas del suelo llegan a GX con el mismo primer vértice
+(investigación en `Documentos/Copias_y_profundidad_en_GX.md`).
+
 Primera tanda acordada (todas "más barato", verificables en el PC):
 0.1 `prof_espera`, **skinning rápido** (`ge_skin_rapido`), **matrices al
 cambiar** (`ge_mtx_cache`), **color constante** (`ge_color_const`), 2.1

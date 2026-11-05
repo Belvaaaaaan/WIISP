@@ -102,9 +102,21 @@ void GX_SetCopyFilter(u8 aa, u8 sp[12][2], u8 vf, u8 vfilt[7]){
 void GX_SetPixelFmt(u8 pf, u8 zf){ P(F_PIXFMT, 0, pf, zf); }
 void GX_SetDispCopySrc(u16 l, u16 t, u16 w, u16 h){ P(F_DISPSRC, 0, l, t, w, h); }
 void GX_SetDispCopyDst(u16 w, u16 h){ P(F_DISPDST, 0, w, h); }
-void GX_SetTexCopySrc(u16 l, u16 t, u16 w, u16 h){ P(F_TEXSRC, 0, l, t, w, h); }
-void GX_SetTexCopyDst(u16 w, u16 h, u32 fmt, u8 mip){ P(F_TEXDST, 0, w, h, fmt, mip); }
-void GX_CopyTex(void *dest, u8 clear){ event(1, fnv(ptr_id(dest), clear)); }
+static u32 copia_src[4], copia_ancho, copia_fmt;   //Arreglo
+void GX_SetTexCopySrc(u16 l, u16 t, u16 w, u16 h){ P(F_TEXSRC, 0, l, t, w, h); copia_src[0] = l; copia_src[1] = t; copia_src[2] = w; copia_src[3] = h; }   //Arreglo
+void GX_SetTexCopyDst(u16 w, u16 h, u32 fmt, u8 mip){ P(F_TEXDST, 0, w, h, fmt, mip); copia_ancho = w; copia_fmt = fmt; }   //Arreglo
+static void copia_falsa(u8 *d){   //Arreglo
+	u32 x, y;   //Arreglo
+	for(y = 0; y < copia_src[3]; y++)   //Arreglo
+		for(x = 0; x < copia_src[2]; x++){   //Arreglo
+			const u32 ex = copia_src[0] + x, ey = copia_src[1] + y, v = ex * 7u + ey * 13u;   //Arreglo
+			if(copia_fmt == 0x6){   //Arreglo
+				u8 *p = d + ((y >> 2) * ((copia_ancho + 3) >> 2) + (x >> 2)) * 64 + ((y & 3) * 4 + (x & 3)) * 2;   //Arreglo
+				p[0] = (u8)(v >> 3); p[1] = (u8)v; p[32] = (u8)(v >> 1); p[33] = (u8)(ex ^ ey);   //Arreglo
+			} else if(copia_fmt == 0x27) d[((y >> 2) * ((copia_ancho + 7) >> 3) + (x >> 3)) * 32 + (y & 3) * 8 + (x & 7)] = (u8)(v >> 3);   //Arreglo
+		}   //Arreglo
+}   //Arreglo
+void GX_CopyTex(void *dest, u8 clear){ event(1, fnv(ptr_id(dest), clear)); copia_falsa((u8 *)dest); }   //Arreglo
 void GX_CopyDisp(void *dest, u8 clear){ event(2, fnv(ptr_id(dest), clear)); }
 void GX_DrawDone(void){ event(3, 0); }
 /* Testigos (gx_paralelo): la GPU de mentira acaba en el acto */
@@ -226,6 +238,8 @@ void host_renderer_hook(void){
 		state_h = begins = fifo_tris = fifo_prims = fifo_malos = 0;   //Arreglo
 		prim_tipo = prim_n = prim_estado = prim_vistos = prim_h = tri_h = 0;   //Arreglo
 		trace_h = fifo_h = 2166136261u;   //Arreglo
+		memset((void *)ptrs, 0, sizeof(ptrs));   //Arreglo
+		ptr_next = 0;   //Arreglo
 	}   //Arreglo
 	if(getenv("PRUEBA_GX")) gx_ge_prueba();
 	gx_ge_enable(1);

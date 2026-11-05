@@ -4595,6 +4595,76 @@ copiadas y el reparto del alfa.
   y sin vaciar toda la caché de texturas, debería acercar "con" a
   "una_copia" sin tocar la imagen.
 
+### Investigación tras la 0.6.8 (otro chat y prueba de profundidad en el Wii)
+
+Resumida en `Documentos/Copias_y_profundidad_en_GX.md`: el coste de las
+copias (~4 píxeles por ciclo, una copia entera de 480x272 son ~134 µs), por
+qué la copia de un rectángulo dentro de la misma textura es válida y
+exacta, lo descartado (truco de máscara de PPSSPP, camino barato con alfa
+<= 127 por el tramado, leer el EFB desde el TEV) y la prueba `wiisp_ztest`
+en el Wii: GX es determinista, pero la z de un triángulo depende de qué
+vértice va primero (rotar: hasta 53 unidades de Z24; reflejar sin cambiar
+el primero: 0), y la PSP no. Es la explicación más probable del moteado del
+suelo de DBZ: falta confirmarlo con el juego (`prof_profundidad`).
+
+### v0.6.9: copia parcial del destino de la mezcla doble (`gx_mezcla_parcial`, `gx_mezcla_sin_a8`) y `prof_profundidad`
+
+- `gx_mezcla_parcial` (encendido): en las copias por solape o por lista
+  llena (no en la primera de cada llamada, ni tras un borrado o un blit),
+  solo se copia el rectángulo que cubre lo dibujado desde la copia
+  anterior (`gm_sucia`, la unión de las cajas de la lista), con un píxel de
+  margen, alineado a los tiles de 4x4 y recortado al búfer
+  (`gm_rect_copia`). Va a su sitio dentro de la misma textura RGBA8
+  (`gm_desplazamiento`; el paso entre filas, el de la textura entera). Si
+  no queda nada dentro del búfer, no se copia. Es exacto: entre dos copias
+  de una llamada solo se dibujan primitivas de la lista. Si hay que copiar
+  los índices A8 y ya valían, también solo su rectángulo (alineado a 8 en
+  x); si no valían, enteros.
+- `gx_mezcla_sin_a8` (encendido): las copias de la mezcla doble (todas, no
+  solo las de solape) no copian los índices A8: los marca como no válidos.
+  Lo que lee el búfer como textura con paleta lo copia otra vez al cambiar
+  de destino (esa copia sí lleva los índices).
+- Comprobación al arrancar (`gm_decidir_parcial`, en `gx_ge_init`): en el
+  propio Wii, tres rectángulos RGBA8 y dos A8 de un búfer de 64x16 con un
+  patrón, contra la copia entera, y lo de fuera sin tocar. Si sale mal, la
+  copia parcial no se usa (va en la línea `gx_mezcla_doble` de
+  `[TIEMPOS]`: "copia parcial comprobada al arrancar: RGBA8 bien, A8
+  bien").
+- `prueba_gx` (`pg_copias`): 480x272 copiado por franjas de 4, 8, 16 y 68
+  filas contra la copia entera, con el EFB en RGB8 y en RGBA6, y el tiempo
+  por copia de varios tamaños (con y sin `GX_InvalidateTexAll`) y de la
+  copia de antes (con los índices A8).
+- `prof_profundidad` (apagado, solo mide): cada triángulo de un dibujo con
+  prueba o escritura de z se guarda por su huella (los tres vértices x, y,
+  z ordenados, y la superficie) con su primer vértice y su rango de z
+  (minz/maxz); la tabla se vacía en cada imagen. Los triángulos con prueba
+  de z se cuentan según lo que ya había en la imagen: pareja igual (misma
+  geometría, mismo primer vértice y rango), mismo primer vértice y otro
+  rango, otro primer vértice, las dos cosas, o sin pareja; aparte, los que
+  escriben z y los que no. Línea `prof_profundidad` en `[TIEMPOS]`.
+- `prof_mezcla`: además, los píxeles copiados frente a los de las copias
+  enteras; la línea `gx_mezcla_doble`, las copias parciales, las que no
+  copiaron nada y las que se saltaron los índices A8.
+- Pruebas: x86 con ASan 0 fallos (con `gm_rect_copia` contra la cobertura
+  de 20.000 triángulos y `test_huellas`); las dos suites nuevas también en
+  PowerPC bajo qemu; mutaciones `0.6.9.txt` 15 de 15 detectadas (el píxel
+  de margen de la izquierda sobra con el muestreo en el centro: es margen
+  de seguridad; la mutación prueba empezar un píxel por dentro). A/B con
+  el CLI de GX en las 555, la 0.6.8 contra la 0.6.9 con los interruptores
+  nuevos apagados: 0 distintos (compilando las dos con el stub nuevo).
+
+Autotest (4 registros, sin capturas, el guion entero): con (como la 0.6.8,
+`gx_mezcla_parcial 0` y `gx_mezcla_sin_a8 0`, con `prueba_gx` antes de
+cargar el juego), parcial (solo la copia parcial), parcial_sin_a8 (las
+dos) y una_copia (el techo: sin las copias por solape, la imagen sale mal
+donde se pisan). Las cuatro con `prof_mezcla` y `prof_profundidad`. Qué
+mirar: en el registro de "con", las líneas `[PRUEBA_GX]` de la copia
+parcial (franjas iguales y tiempos) y la comprobación de arranque; la
+velocidad de las cuatro en la pelea; los píxeles copiados; y en
+`prof_profundidad`, cuántos triángulos de las capas sin escritura tienen
+pareja con otro primer vértice (si son muchos, el vértice canónico de la
+0.6.10 debería quitar el moteado).
+
 ### Para el siguiente chat (empezar aquí)
 
 Metodología acordada (detalle en `docs/HOJA_DE_RUTA.md`): primero medir
@@ -4628,11 +4698,13 @@ Metodología acordada (detalle en `docs/HOJA_DE_RUTA.md`): primero medir
   devkitPPC, perfil por función, psq_l emulado, A/B) y para leer los
   registros del Wii (`ventanas.py`): `tools/banco/LEEME.md`. El entorno
   (devkitPPC, qemu, pspautotests, PPSSPP): `tools/setup_entorno.sh`.
-- **Siguiente:** recuperar la velocidad de la 0.6.7 sin perder la imagen
-  (ver su resultado): primero medir en qué se va (copias contra etapas) y
-  por qué se vuelve a copiar; después, de una en una: copiar solo las
-  filas cambiadas y sin los índices A8, menos copias, y un camino barato
-  si el alfa del terreno no pasa de 0,5.
+- **Siguiente:** leer el resultado de la 0.6.9 (velocidad de con,
+  parcial, parcial_sin_a8 y una_copia; `prueba_gx` de la copia parcial;
+  `prof_profundidad`). Si las capas del suelo llegan con otro primer
+  vértice, la 0.6.10: el primer vértice canónico con su interruptor
+  (`Documentos/Copias_y_profundidad_en_GX.md`). Para más adelante:
+  posiciones en 16 bits, tiras, `GX_InvalidateTexRegion` con una zona
+  propia, un solo `GX_PixModeSync` por tanda y las capas sin solape.
   Después, vaciar la tabla de códigos del stencil en los borrados
   completos, el coste de crear y soltar el 4444 en cada imagen (medido en
   la 0.6.4) y el diseño del IR (paso 11).

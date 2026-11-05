@@ -186,9 +186,10 @@ Conclusiones:
 
 ## 3. Orden acordado
 
-1. **0.6.9:** copia parcial del rectángulo cambiado en las recopias por
-   solape (interruptor `gx_mezcla_parcial`), sin la copia A8 en esas
-   recopias (`gx_mezcla_sin_a8`).
+1. **0.6.9 (hecha):** copia parcial del rectángulo cambiado en las
+   recopias por solape (interruptor `gx_mezcla_parcial`), y sin la copia A8
+   en todas las copias de la mezcla doble (`gx_mezcla_sin_a8`; lo que lee
+   el búfer con paleta lo vuelve a copiar entero al cambiar de destino).
    - Comprobación en `prueba_gx` de que la copia parcial es idéntica byte a
      byte a la completa, con tiempos de copia.
    - Medida de las huellas de profundidad.

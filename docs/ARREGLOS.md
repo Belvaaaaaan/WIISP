@@ -5,6 +5,29 @@ la 0.5.17.2; antes se marcaban con `//arreglo`). Aquí va, por versión, qué
 se arregló o cambió y una descripción breve. El detalle está en
 `docs/CONTINUAR.md`.
 
+## 0.6.9
+
+La copia parcial del destino de la mezcla doble, sin los índices A8, y la
+medida de las huellas de profundidad.
+
+- `wii/gx_mezcla.h`: `gm_rect_copia` (el rectángulo de lo dibujado desde la
+  última copia, con un píxel de margen y alineado a los tiles) y
+  `gm_desplazamiento` (dónde empieza un tile dentro de la textura).
+- `wii/gx_huellas.h` (nuevo): la huella de un triángulo sin importar el
+  orden de sus vértices, su primer vértice y la tabla de cada imagen.
+- `wii/gx_ge.c`: `gx_mezcla_parcial` (`gm_copiar`, `efb_to_tex_rect`,
+  `gm_sucia`), `gx_mezcla_sin_a8`, la comprobación de arranque
+  `gm_decidir_parcial`, `pg_copias` en `prueba_gx` (franjas contra la copia
+  entera y tiempos) y `prof_profundidad` (`pz_triangulo`); los contadores
+  en `[TIEMPOS]`.
+- `core/opt.h`, `core/opt.c`: `gx_mezcla_parcial` y `gx_mezcla_sin_a8`
+  (encendidos), `prof_profundidad` (apagado).
+- `tools/banco/stub_estado.c`: copias de mentira y la numeración de los
+  punteros desde cero con `GX_AB_TRAS_INICIO`.
+- `tests/test_gxmezcla.c`, `tests/test_huellas.c` (nuevo),
+  `tools/banco/mutaciones/0.6.9.txt`.
+- `hle/hle.h`, `dist/apps/wiisp/meta.xml`: versión 0.6.9.
+
 ## 0.6.8
 
 Solo medidas: el coste de `gx_mezcla_doble`.
