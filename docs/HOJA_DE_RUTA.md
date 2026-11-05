@@ -457,8 +457,13 @@ sombras sale ya como por software, pero la imagen casi no cambia.
 
 Hecha (v0.6.6): solo medidas, el cotejo dibujo a dibujo de GX contra el
 software (`test_brightnesscensus`, `Exactodesde`, `Cotejo`,
-`Census_comparación.py`). Sigue: arreglar el dibujo que se separa y,
-después, el diseño del IR (paso 11).
+`Census_comparación.py`). Resultado: los dibujos del terreno con la
+mezcla doble (DOUBLESRCALPHA/DOUBLEINVSRCALPHA) mal traducida.
+
+Hecha (v0.6.7): `gx_mezcla_doble`, la mezcla doble exacta en 13 etapas del
+TEV con una copia del destino, y el módulo de mezcla en el TEV que también
+hace `gx_absdiff`. Sigue: ver en el Wii la prueba exhaustiva y las
+capturas y, después, el diseño del IR (paso 11).
 
 Primera tanda acordada (todas "más barato", verificables en el PC):
 0.1 `prof_espera`, **skinning rápido** (`ge_skin_rapido`), **matrices al

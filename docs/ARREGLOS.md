@@ -5,6 +5,30 @@ la 0.5.17.2; antes se marcaban con `//arreglo`). Aquí va, por versión, qué
 se arregló o cambió y una descripción breve. El detalle está en
 `docs/CONTINUAR.md`.
 
+## 0.6.7
+
+El suelo brillante y los fantasmas de DBZ: la mezcla doble de la PSP
+(DOUBLESRCALPHA/DOUBLEINVSRCALPHA) exacta en el TEV (`gx_mezcla_doble`,
+encendido).
+
+- `wii/gx_mezcla.h` (nuevo): los programas del TEV como tablas (diferencia
+  absoluta y mezcla doble), el intérprete bit a bit del TEV, la fórmula de
+  la PSP y la prueba de solape de polígonos.
+- `wii/gx_ge.c`: el módulo de mezcla en el TEV con copia del destino
+  (`gm_*`) reemplaza el código de `gx_absdiff`; la mezcla doble en 13
+  etapas con su textura de tramado; la regla de copia por solape real de
+  las primitivas; vuelta a SWAP0 de las etapas que el programa cambia;
+  `gm_decidir_resta` al arrancar; `prueba_gx` con la prueba de un píxel y
+  la exhaustiva; línea `gx_mezcla_doble` en `[TIEMPOS]`; comprobación en
+  compilación de los códigos de libogc.
+- `core/opt.h`, `core/opt.c`: `gx_mezcla_doble`.
+- `tools/banco/stub_estado.c`: `GX_SetTevSwapMode`,
+  `GX_SetTevSwapModeTable` y `GX_PeekARGB`; las líneas de la 0.6.6 sin
+  marcar, marcadas.
+- `tools/banco/mezcla_exhaustiva.c` (nuevo), `tests/test_gxmezcla.c` (nuevo),
+  `mutaciones/0.6.7.txt`.
+- `hle/hle.h`, `dist/apps/wiisp/meta.xml`: versión 0.6.7.
+
 ## 0.6.6
 
 Solo medidas: el cotejo dibujo a dibujo de GX contra el software

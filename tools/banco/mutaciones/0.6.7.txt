@@ -1,0 +1,92 @@
+=== gx_mezcla: la etapa 1 del alfa sin dividir
+@ src/wii/gx_mezcla.h
+<<<
+	               { GMA_ZERO, GMA_APREV, GMA_KONST, GMA_ZERO, GMO_ADD, GMB_CERO, GMS_MEDIO, 0, GMR_REG0 }, GMK_1, GMK_K0_A },
+>>>
+	               { GMA_ZERO, GMA_APREV, GMA_KONST, GMA_ZERO, GMO_ADD, GMB_CERO, GMS_1, 0, GMR_REG0 }, GMK_1, GMK_K0_A },
+===
+=== gx_mezcla: la comparacion de la etapa 3 con mayor o igual
+@ src/wii/gx_mezcla.h
+<<<
+	{ GMT_TRAMADO, 1, { GMC_KONST, GMC_C2, GMC_TEXC, GMC_C2, GMO_CMP_GT, GMB_CERO, GMS_1, 0, GMR_REG2 },
+>>>
+	{ GMT_TRAMADO, 1, { GMC_KONST, GMC_C2, GMC_TEXC, GMC_C2, GMO_CMP_EQ, GMB_CERO, GMS_1, 0, GMR_REG2 },
+===
+=== gx_mezcla: la etapa 8 con otra tabla de intercambio
+@ src/wii/gx_mezcla.h
+<<<
+	{ GMT_TRAMADO, 3, { GMC_ZERO, GMC_C0, GMC_A0, GMC_C1, GMO_SUB, GMB_CERO, GMS_1, 0, GMR_REG1 },
+>>>
+	{ GMT_TRAMADO, 2, { GMC_ZERO, GMC_C0, GMC_A0, GMC_C1, GMO_SUB, GMB_CERO, GMS_1, 0, GMR_REG1 },
+===
+=== gx_mezcla: la ultima etapa sin restar la mitad
+@ src/wii/gx_mezcla.h
+<<<
+	{ GMT_NADA, 0, { GMC_ZERO, GMC_CPREV, GMC_ONE, GMC_C1, GMO_ADD, GMB_MENOS, GMS_1, 1, GMR_PREV }, GM_PASA_SAT(GMR_PREV), GMK_1, GMK_1 },
+>>>
+	{ GMT_NADA, 0, { GMC_ZERO, GMC_CPREV, GMC_ONE, GMC_C1, GMO_ADD, GMB_CERO, GMS_1, 1, GMR_PREV }, GM_PASA_SAT(GMR_PREV), GMK_1, GMK_1 },
+===
+=== gx_mezcla: K1.a distinto
+@ src/wii/gx_mezcla.h
+<<<
+	p->konst[1][3] = 127; p->konst_usa[1][3] = 1;
+>>>
+	p->konst[1][3] = 128; p->konst_usa[1][3] = 1;
+===
+=== gx_mezcla: el texel de tramado sin el desplazamiento de 130
+@ src/wii/gx_mezcla.h
+<<<
+	rgba[0] = 255; rgba[1] = 1; rgba[2] = (uint8_t)(swsub ? 2 : 1); rgba[3] = (uint8_t)(4 * d + 130);
+>>>
+	rgba[0] = 255; rgba[1] = 1; rgba[2] = (uint8_t)(swsub ? 2 : 1); rgba[3] = (uint8_t)(4 * d + 128);
+===
+=== gx_mezcla: el modelo del TEV sin el peso c + (c >> 7)
+@ src/wii/gx_mezcla.h
+<<<
+	a &= 255; b &= 255; c &= 255; c += c >> 7;
+	t = (a * (256 - c) + b * c) << ls;
+>>>
+	a &= 255; b &= 255; c &= 255;
+	t = (a * (256 - c) + b * c) << ls;
+===
+=== gx_mezcla: el modelo del TEV redondea la resta como la suma
+@ src/wii/gx_mezcla.h
+<<<
+		t = (t + (escala == GMS_MEDIO ? 0 : op == GMO_SUB ? 127 : 128)) >> 8;
+>>>
+		t = (t + (escala == GMS_MEDIO ? 0 : 128)) >> 8;
+===
+=== gx_mezcla: la diferencia absoluta con la copia y la fuente al reves
+@ src/wii/gx_mezcla.h
+<<<
+	{ GMT_COPIA, 0, { GMC_TEXC, GMC_ZERO, GMC_ZERO, GMC_CPREV, GMO_SUB, GMB_CERO, GMS_1, 1, GMR_REG0 }, GM_PASA_SAT(GMR_REG0), 0x0C, GMK_K0_A },
+>>>
+	{ GMT_COPIA, 0, { GMC_TEXC, GMC_ZERO, GMC_ZERO, GMC_CPREV, GMO_ADD, GMB_CERO, GMS_1, 1, GMR_REG0 }, GM_PASA_SAT(GMR_REG0), 0x0C, GMK_K0_A },
+===
+=== gx_mezcla: el solape cuenta como separados los que se tocan con area
+@ src/wii/gx_mezcla.h
+<<<
+			if(maxa <= minb || maxb <= mina) return 1;
+>>>
+			if(maxa - minb <= (maxa - mina) / 4 || maxb - mina <= (maxb - minb) / 4) return 1;
+===
+=== gx_mezcla: el solape solo mira las aristas del primero
+@ src/wii/gx_mezcla.h
+<<<
+	for(pol = 0; pol < 2; pol++){
+>>>
+	for(pol = 0; pol < 1; pol++){
+===
+=== gx_mezcla: la formula de la PSP con el factor del destino sin signo
+@ src/wii/gx_mezcla.h
+<<<
+	return f < 0 ? -t : t;
+}
+
+static inline int gm_psp_doble(int s, int d, int alfa, int tramado){
+>>>
+	return t;
+}
+
+static inline int gm_psp_doble(int s, int d, int alfa, int tramado){
+===

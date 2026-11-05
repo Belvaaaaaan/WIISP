@@ -107,6 +107,7 @@ enum {
 	OPT_GE_VDEC_PS,   //Arreglo
 	OPT_GX_STENCIL_EXACTO,   //Arreglo
 	OPT_GX_ABSDIFF,   //Arreglo
+	OPT_GX_MEZCLA_DOBLE,   //Arreglo
 	OPT_GX_MASCARA_BITS,   //Arreglo
 	/* Fase 2: intérprete cacheado */
 	OPT_CPU_SIN_EXTRA,    /* 2.1 sin costo por instrucción */

@@ -30,7 +30,7 @@ enum { F_VTXDESC, F_CLEARVTX, F_NUMCHANS, F_NUMTEXGENS, F_TEXCOORDGEN, F_CHANCTR
        F_CURMTX, F_CULL, F_CLIP, F_COPLANAR, F_LINEW, F_POINTS, F_NUMIND, F_COPYFILTER, F_PIXFMT, F_DISPSRC, F_DISPDST,
        F_TEXSRC, F_TEXDST, F_PROJ, F_VIEWPORT, F_SCISSOR, F_BLEND, F_ALPHACMP, F_COLORUPD, F_ALPHAUPD, F_DSTALPHA,
        F_DITHER, F_ZMODE, F_ZCOMPLOC, F_ZTEX, F_NUMTEV, F_TEVORDER, F_TEVCIN, F_TEVCOP, F_TEVAIN, F_TEVAOP, F_TEVKCSEL,
-       F_TEVKASEL, F_TEVKCOLOR, F_TEVOP, F_LOADTEX, F_N };
+       F_TEVKASEL, F_TEVKCOLOR, F_TEVOP, F_LOADTEX, F_TEVSWAP, F_SWAPTAB, F_N };   //Arreglo
 
 static u32 slot[F_N][64], state_h, trace_h = 2166136261u, begins;
 static u32 fifo_h = 2166136261u, fifo_tris, fifo_prims, fifo_malos;
@@ -136,6 +136,9 @@ void GX_SetTevKAlphaSel(u8 st, u8 sel){ P(F_TEVKASEL, st, sel); }
 /* GXColor va por valor: en el ABI de PowerPC, un puntero a la copia */
 void GX_SetTevKColor(u8 sel, const u8 *c){ P(F_TEVKCOLOR, sel, c[0] | (c[1] << 8) | (c[2] << 16) | ((u32)c[3] << 24)); }
 void GX_SetTevOp(u8 st, u8 mode){ P(F_TEVOP, st, mode); }
+void GX_SetTevSwapMode(u8 st, u8 ras, u8 tex){ P(F_TEVSWAP, st, ras, tex); }   //Arreglo
+void GX_SetTevSwapModeTable(u8 id, u8 r, u8 g, u8 b, u8 a){ P(F_SWAPTAB, id, r, g, b, a); }   //Arreglo
+void GX_PeekARGB(u16 x, u16 y, u8 *c){ (void)x; (void)y; c[0] = 191; c[1] = 191; c[2] = 191; c[3] = 255; }   //Arreglo
 /* Los objetos de textura llevan lo que se les dio (el puntero, por orden de aparición) */
 void GX_InitTexObj(GXTexObj *o, void *img, u16 w, u16 h, u8 fmt, u8 ws, u8 wt, u8 mip){
 	memset(o, 0, sizeof(*o));
@@ -211,12 +214,12 @@ static void report(void){
 	fflush(stdout);
 }
 void gx_ge_prueba(void);
-extern void (*app_pasar_a_exacto)(unsigned cuadro);
-void gx_ge_sync_vram(void);
-static void pasar_a_exacto(unsigned cuadro){ (void)cuadro; gx_ge_sync_vram(); gx_ge_enable(0); }
+extern void (*app_pasar_a_exacto)(unsigned cuadro);   //Arreglo
+void gx_ge_sync_vram(void);   //Arreglo
+static void pasar_a_exacto(unsigned cuadro){ (void)cuadro; gx_ge_sync_vram(); gx_ge_enable(0); }   //Arreglo
 
 void host_renderer_hook(void){
-	app_pasar_a_exacto = pasar_a_exacto;
+	app_pasar_a_exacto = pasar_a_exacto;   //Arreglo
 	gx_ge_init();
 	if(getenv("PRUEBA_GX")) gx_ge_prueba();
 	gx_ge_enable(1);

@@ -249,3 +249,8 @@ al repositorio), `gcc-powerpc-linux-gnu` y `qemu-user`. Las salidas van a
   la hace crecer y los que más, con su estado, sus UV y un mapa de
   bloques. En el CLI: `--opt test_brightnesscensus=1 --cotejo N
   [--exactodesde M]`.
+- `mezcla_exhaustiva.c` (0.6.7): las tablas del TEV de `wii/gx_mezcla.h`
+  (mezcla doble y diferencia absoluta) contra la fórmula de la PSP en
+  todas las combinaciones, con las dos variantes de la resta del alfa
+  (`gcc -O2 -Isrc tools/banco/mezcla_exhaustiva.c`, ~2 minutos: 541
+  millones de comparaciones, 0 distintas).

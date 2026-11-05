@@ -587,6 +587,7 @@ int main(int argc, char **argv){
 	SUITE(test_brightcensus);   //Arreglo
 	SUITE(test_gxstencil);   //Arreglo
 	SUITE(test_gxmascara);   //Arreglo
+	SUITE(test_gxmezcla);   //Arreglo
 	SUITE(test_bbox);   //Arreglo
 	SUITE(test_listas);   //Arreglo
 	SUITE(test_tirones);   //Arreglo

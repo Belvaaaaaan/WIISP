@@ -56,6 +56,7 @@ void test_efectos(void);   //Arreglo
 void test_rastreo_fb(void);   //Arreglo
 void test_gxmascara(void);   //Arreglo
 void test_brightcensus(void);   //Arreglo
+void test_gxmezcla(void);   //Arreglo
 void test_gxstencil(void);   //Arreglo
 void test_bbox(void);   //Arreglo
 void test_listas(void);   //Arreglo

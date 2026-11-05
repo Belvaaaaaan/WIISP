@@ -4414,6 +4414,101 @@ Dolphin, libogc, YAGCD y PPSSPP):
   software); "el primer dibujo" del script sale engañado por lo heredado
   del cuadro anterior (el búfer no se borra).
 
+### v0.6.7: la mezcla doble de la PSP exacta en el TEV (`gx_mezcla_doble`)
+
+La causa del suelo brillante y los fantasmas (resultado de la 0.6.6): en la
+PSP, DOUBLESRCALPHA/DOUBLEINVSRCALPHA da 2α·S + (1 - 2α)·D (el factor del
+destino puede ser negativo); GX hacía 2α·S + (1 - α)·D. El diseño exacto
+vino de una investigación aparte (otro chat, con `verify_blend13.c`):
+13 etapas del TEV leyendo el destino de una copia del EFB, 0 diferencias
+contra la fórmula de la PSP en las 268 millones de combinaciones (todo α,
+los 16 tramados, todo S y D); sin copia no hay forma exacta.
+
+- `wii/gx_mezcla.h` (nuevo, puro, probado en el PC): los programas del TEV
+  como **tablas** (una sola fuente: el Wii las emite y el PC las ejecuta),
+  la diferencia absoluta (3 etapas, la de `gx_absdiff`) y la mezcla doble
+  (13 etapas, con sus colores constantes, sus tablas de intercambio y la
+  textura de tramado 4x4: R = 255, G = 1, B = 1 o 2, A = 4·tramado + 130);
+  `gm_ejecutar`, un intérprete bit a bit del TEV (el modelo de hwtests
+  `gxtest/tev.cpp` y del TEV por software de Dolphin: entradas a, b, c de
+  8 bits, peso c + (c >> 7), redondeo 128 al sumar y 127 al restar, ÷2 sin
+  redondeo, registros de 11 bits con signo, comparaciones); la fórmula de
+  la PSP (`gm_psp_doble`, la misma de `blend_term` en `ge_raster.c`); y
+  `gm_separados`, la prueba de ejes separadores entre dos polígonos
+  convexos en 1/16 de píxel (los que solo se tocan cuentan como
+  separados).
+- La resta en el combinador de alfa no está confirmada en el hardware (dos
+  modelos posibles). El programa vale para los dos cambiando dos constantes
+  (`swsub`: K3.a y el azul del tramado); `gm_decidir_resta` lo decide al
+  arrancar GX con un píxel (R = 191: variante 0, 190: variante 1).
+- `wii/gx_ge.c`: el camino de `gx_absdiff` pasa a ser un caso del módulo
+  (se borraron `abs_etapas`, `abs_antes`, `abs_sprite`, `abs_vertices`):
+  `gm_quiere` (en `setup_targets`), `gm_activo` (en `apply_gx`), `gm_emitir`
+  (la tabla a `GX_SetTev*`; los colores constantes se juntan con los que
+  usan las etapas anteriores: K0.rgb del color de la textura, K1.rgb de la
+  niebla), `gm_tramado` (textura de tramado, anillo de 8), `gm_texgen` (la
+  copia en TEXMAP3 muestreada en el píxel, la de antes). La mezcla doble
+  se usa con ecuación ADD y factores 6/7, sin operación lógica, si caben
+  las 13 etapas detrás de las del color, el color secundario y la niebla
+  (si no, la mezcla de GX de antes y se cuenta); la mezcla de GX queda en
+  NONE, nuestra etapa de tramado se quita (el tramado va dentro, después de
+  la mezcla, como en la PSP), y el alfa de salida es α (la prueba de alfa
+  sigue igual).
+- **Regla de copia nueva (para los dos programas):** se copia el destino al
+  empezar cada llamada y otra vez solo si la primitiva **pisa de verdad**
+  alguna dibujada desde la última copia (`gm_antes`: caja y después ejes
+  separadores; triángulos, sprites como rectángulos, líneas y puntos como
+  su caja más un píxel; hasta 128 polígonos, después se copia). Con la
+  regla de antes (cajas), una tira de triángulos copiaba casi en cada
+  triángulo. La copia se invalida también en los borrados y en `blit`.
+- Las tablas de intercambio que usa el programa (SWAP1..3) y los modos por
+  etapa: `tev_stage` y `blit` vuelven a SWAP0 las etapas que el programa
+  dejó cambiadas (`gm_swap_sucio`).
+- Una comprobación en compilación asegura que los códigos de las tablas son
+  los de libogc (`gm_codigos_gx`).
+- `prueba_gx`: la prueba de un píxel y la exhaustiva en la GPU: el programa
+  entero sobre un EFB RGB8 de 256x256 con S = x y D = y (y sus inversos en
+  los otros canales), los 256 α y los tramados 0, -8, 7 y -1, con las dos
+  variantes, contra la fórmula de la PSP. "(MAL)" si la elegida no da todo
+  bien.
+- Línea `gx_mezcla_doble` en `[TIEMPOS]` (llamadas, sobre búferes de 16
+  bits, primitivas, copias del destino, las que no caben, la variante de la
+  resta). Límites: con el EFB en RGBA6 (búferes con el alfa en la GPU,
+  como los de pantalla de DBZ) el color tiene 6 bits; el color de la fuente
+  viene de la función de textura de GX (±1); los búferes de 16 bits leen el
+  destino sin cuantizar; las otras combinaciones de factores dobles y
+  SUB/REVSUB, como antes.
+
+Pruebas: x86 con ASan PENDIENTE; PowerPC bajo qemu PENDIENTE y devkitPPC
+PENDIENTE; `test_gxmezcla` (el modelo del TEV en casos conocidos de
+redondeo y saturación, la fórmula, las tablas contra la PSP en todos los α
+con 4 tramados y valores frontera más 60.000 al azar con las dos
+variantes, que la variante equivocada falla, la diferencia absoluta en
+todos los S y D, y `gm_separados`: casos conocidos, simetría y 30.000
+pares al azar contra la cobertura por centros de píxel con la regla de
+relleno: ningún par "separado" comparte un píxel);
+`tools/banco/mezcla_exhaustiva.c` (las tablas reales, exhaustivo: 541
+millones de comparaciones, 0 distintas, con las dos variantes y la
+diferencia absoluta); mutaciones (`mutaciones/0.6.7.txt`, `--solo
+gxmezcla`): 12 de 12 (tres sobrevivían: el redondeo de la resta, que el
+programa no usa, obligó a probar el modelo del TEV con casos donde importa;
+la simetría de `gm_separados`; y un margen de solape, cambiado por uno que
+importa); `prueba_gx` corre entera en qemu (sale "(MAL)": la GPU de mentira
+no pinta); A/B con el CLI de GX: PENDIENTE.
+
+Autotest (2 registros, 2 `.capturas.txt` y 1 `.dibujos.bin`), el guion
+entero:
+- sin: `gx_mezcla_doble 0` (como la 0.6.6), con `prueba_gx` antes;
+- con: `gx_mezcla_doble 1`, con el cotejo de 4000-4003 (se compara con el
+  `exacto.dibujos.bin` de la 0.6.6: la partida es la misma).
+
+Qué mirar: `[PRUEBA_GX] gx_mezcla_doble` (la elegida, todo bien); las
+capturas de "con" de 4000, 4400 y 4800 (sin suelo brillante ni
+fantasmas); `Census_comparación.py con.dibujos.bin exacto.dibujos.bin`
+(los dibujos del terreno, mezcla 076, ya no deben aumentar la diferencia);
+la línea `gx_mezcla_doble` (copias del destino por llamada) y la
+velocidad en la pelea (sin contra con).
+
 ### Para el siguiente chat (empezar aquí)
 
 Metodología acordada (detalle en `docs/HOJA_DE_RUTA.md`): primero medir
@@ -4447,9 +4542,9 @@ Metodología acordada (detalle en `docs/HOJA_DE_RUTA.md`): primero medir
   devkitPPC, perfil por función, psq_l emulado, A/B) y para leer los
   registros del Wii (`ventanas.py`): `tools/banco/LEEME.md`. El entorno
   (devkitPPC, qemu, pspautotests, PPSSPP): `tools/setup_entorno.sh`.
-- **Siguiente:** arreglar en GX los factores de mezcla dobles
-  (DOUBLEINVSRCALPHA = 1 - 2α, y los demás dobles), con su interruptor;
-  ver "Resultado de la 0.6.6".
+- **Siguiente:** leer el resultado de la 0.6.7 en el Wii (ver "Qué mirar"
+  en su sección). Si `prueba_gx` da "(MAL)", el modelo del TEV no coincide
+  con el hardware en algo: el primer píxel distinto dice dónde.
   Después, vaciar la tabla de códigos del stencil en los borrados
   completos, el coste de crear y soltar el 4444 en cada imagen (medido en
   la 0.6.4) y el diseño del IR (paso 11).
