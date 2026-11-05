@@ -254,3 +254,7 @@ al repositorio), `gcc-powerpc-linux-gnu` y `qemu-user`. Las salidas van a
   todas las combinaciones, con las dos variantes de la resta del alfa
   (`gcc -O2 -Isrc tools/banco/mezcla_exhaustiva.c`, ~2 minutos: 541
   millones de comparaciones, 0 distintas).
+- `GX_AB_TRAS_INICIO=1` (0.6.7, en el entorno del CLI de GX): el stub borra
+  la huella que deja `gx_ge_init` (la prueba de un píxel de la resta), para
+  comparar con `ab_versiones.py` contra una versión sin ella (compilando
+  las dos con el mismo `stub_estado.c`).

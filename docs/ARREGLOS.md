@@ -23,8 +23,10 @@ encendido).
   compilación de los códigos de libogc.
 - `core/opt.h`, `core/opt.c`: `gx_mezcla_doble`.
 - `tools/banco/stub_estado.c`: `GX_SetTevSwapMode`,
-  `GX_SetTevSwapModeTable` y `GX_PeekARGB`; las líneas de la 0.6.6 sin
-  marcar, marcadas.
+  `GX_SetTevSwapModeTable` y `GX_PeekARGB`; `GX_AB_TRAS_INICIO` (borra lo
+  que deja `gx_ge_init`, para comparar con versiones sin la prueba del
+  arranque); las líneas de la 0.6.6 sin marcar, marcadas.
+- `tests/guest/ge_mezcla_doble.c` (nuevo).
 - `tools/banco/mezcla_exhaustiva.c` (nuevo), `tests/test_gxmezcla.c` (nuevo),
   `mutaciones/0.6.7.txt`.
 - `hle/hle.h`, `dist/apps/wiisp/meta.xml`: versión 0.6.7.

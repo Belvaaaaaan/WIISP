@@ -4494,7 +4494,22 @@ gxmezcla`): 12 de 12 (tres sobrevivían: el redondeo de la resta, que el
 programa no usa, obligó a probar el modelo del TEV con casos donde importa;
 la simetría de `gm_separados`; y un margen de solape, cambiado por uno que
 importa); `prueba_gx` corre entera en qemu (sale "(MAL)": la GPU de mentira
-no pinta); A/B con el CLI de GX: PENDIENTE.
+no pinta); pspautotests 275/275; tests/guest 26/26, con
+`tests/guest/ge_mezcla_doble.c` (nuevo: sprites con la mezcla doble sobre
+un fondo conocido, α 0, 32, 64, 127, 128, 160, 200 y 255, y dos sprites
+que se pisan en la misma llamada; por software sale la fórmula de la PSP,
+comprobada a mano: con α = 255 el rojo satura y el verde resta el
+destino); con el CLI de GX y `GX_TRAZA=1` en ese programa, el interruptor
+a 0 contra 1: los 10 sprites usan el programa (mezcla, etapas, colores
+constantes, tablas de intercambio) y hay 2 copias del destino de más (una
+al empezar y otra cuando un sprite pisa al anterior; el que solo toca el
+borde no copia). A/B con el CLI de GX en las 555 (con
+`GX_AB_TRAS_INICIO=1`, nuevo en `stub_estado.c`: borra lo que deja
+`gx_ge_init`, porque la prueba de un píxel del arranque cambia la huella;
+la 0.6.6 compilada con el mismo stub): la 0.6.6 contra la 0.6.7 con
+`gx_mezcla_doble` apagado, 0 distintos (también las de `gx_absdiff`, que
+ya va por el módulo nuevo); el interruptor a 0 contra 1, 0 distintos
+(ninguna pspautotest usa el par doble).
 
 Autotest (2 registros, 2 `.capturas.txt` y 1 `.dibujos.bin`), el guion
 entero:

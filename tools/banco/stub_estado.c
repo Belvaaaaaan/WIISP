@@ -221,6 +221,12 @@ static void pasar_a_exacto(unsigned cuadro){ (void)cuadro; gx_ge_sync_vram(); gx
 void host_renderer_hook(void){
 	app_pasar_a_exacto = pasar_a_exacto;   //Arreglo
 	gx_ge_init();
+	if(getenv("GX_AB_TRAS_INICIO")){   //Arreglo
+		memset(slot, 0, sizeof(slot));   //Arreglo
+		state_h = begins = fifo_tris = fifo_prims = fifo_malos = 0;   //Arreglo
+		prim_tipo = prim_n = prim_estado = prim_vistos = prim_h = tri_h = 0;   //Arreglo
+		trace_h = fifo_h = 2166136261u;   //Arreglo
+	}   //Arreglo
 	if(getenv("PRUEBA_GX")) gx_ge_prueba();
 	gx_ge_enable(1);
 	atexit(report);
