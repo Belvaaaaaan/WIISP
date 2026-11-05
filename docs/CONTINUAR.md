@@ -4651,7 +4651,12 @@ suelo de DBZ: falta confirmarlo con el juego (`prof_profundidad`).
   de margen de la izquierda sobra con el muestreo en el centro: es margen
   de seguridad; la mutación prueba empezar un píxel por dentro). A/B con
   el CLI de GX en las 555, la 0.6.8 contra la 0.6.9 con los interruptores
-  nuevos apagados: 0 distintos (compilando las dos con el stub nuevo).
+  nuevos apagados: 0 distintos (compilando las dos con el stub nuevo); con
+  los interruptores encendidos, también 0: ninguna de las 555 vuelve a
+  copiar el destino de la mezcla doble dentro de una llamada. En
+  `tests/guest/ge_mezcla_doble` la copia parcial sí se activa (motivo
+  solape), pero lo dibujado antes cubre el búfer entero de 64x64 y el
+  rectángulo sale igual a la copia entera.
 
 Autotest (4 registros, sin capturas, el guion entero): con (como la 0.6.8,
 `gx_mezcla_parcial 0` y `gx_mezcla_sin_a8 0`, con `prueba_gx` antes de
