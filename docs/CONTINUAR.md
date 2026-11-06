@@ -4699,6 +4699,29 @@ pareja con otro primer vértice (si son muchos, el vértice canónico de la
   hace fallar la prueba GEQUAL en GX (`wiisp_ztest`) y no en la PSP. Los
   que escriben z casi nunca tienen pareja rotada (1 y 126).
 
+### v0.6.10: el primer vértice canónico (`gx_vertice_canonico`)
+
+- `gx_vertice_canonico` (encendido): antes de mandar cada triángulo a GX,
+  se rota para que empiece por su vértice menor (por y, después x, después
+  z; `hz_canonico`). Rotar no cambia el sentido de giro; el color plano
+  (el del último vértice de la PSP) sigue a su vértice. En el Wii
+  (`wiisp_ztest`) la z de GX solo depende del primer vértice (reflejar sin
+  cambiarlo da 0 diferencias): con esto, dos pasadas con los mismos
+  triángulos en otro orden dan la misma z, como en la PSP. Va en los tres
+  caminos: el de referencia, `gx_triangle` y la tanda de `gx_triangles`.
+- `[TIEMPOS]`: la línea `gx_vertice_canonico` (triángulos rotados).
+  `prof_profundidad` mide el orden ya rotado: "otro primer vértice"
+  debería quedar en 0 en las capas.
+- Pruebas: x86 con ASan 0 fallos (`hz_canonico`: las tres rotaciones de
+  20.000 triángulos con empates eligen el mismo vértice); mutaciones
+  `0.6.10.txt` 3 de 3 detectadas. A/B con el CLI de GX en las 555 contra
+  la 0.6.9: ver abajo.
+
+Autotest (2 registros, capturas, el guion entero): sin (como la 0.6.9,
+`gx_vertice_canonico 0`) y con. Las dos con `prof_profundidad`. Qué mirar:
+el moteado del suelo en las capturas y a ojo, "otro primer vértice" en
+`prof_profundidad` (con: 0) y la velocidad (debería ser la misma).
+
 ### Para el siguiente chat (empezar aquí)
 
 Metodología acordada (detalle en `docs/HOJA_DE_RUTA.md`): primero medir
@@ -4732,9 +4755,9 @@ Metodología acordada (detalle en `docs/HOJA_DE_RUTA.md`): primero medir
   devkitPPC, perfil por función, psq_l emulado, A/B) y para leer los
   registros del Wii (`ventanas.py`): `tools/banco/LEEME.md`. El entorno
   (devkitPPC, qemu, pspautotests, PPSSPP): `tools/setup_entorno.sh`.
-- **Siguiente:** la 0.6.10, el primer vértice canónico con su interruptor
-  (confirmado por `prof_profundidad` en la 0.6.9; ver
-  `Documentos/Copias_y_profundidad_en_GX.md`). Para más adelante:
+- **Siguiente:** leer el resultado de la 0.6.10 (el moteado del suelo y
+  `prof_profundidad`). Después, velocidad: el CPU es ahora el cuello de
+  botella en la pelea (diseño del IR, posiciones en 16 bits). Para más adelante:
   posiciones en 16 bits, tiras, `GX_InvalidateTexRegion` con una zona
   propia, un solo `GX_PixModeSync` por tanda y las capas sin solape.
   Después, vaciar la tabla de códigos del stencil en los borrados

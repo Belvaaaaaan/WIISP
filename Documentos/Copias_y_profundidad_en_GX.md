@@ -194,8 +194,10 @@ Conclusiones:
      byte a la completa, con tiempos de copia.
    - Medida de las huellas de profundidad.
    - Autotest de 4 corridas: con, parcial, parcial + sin A8, una_copia.
-2. **0.6.10:** si la medida lo confirma, el primer vértice canónico con su
-   interruptor.
+2. **0.6.10 (hecha):** la 0.6.9 lo confirmó (en la pelea, entre 45.000 y
+   132.000 triángulos de las capas por tramo llegaban con otro primer
+   vértice); el primer vértice canónico con su interruptor
+   (`gx_vertice_canonico`).
 3. **Para más adelante (velocidad):**
    - Mandar las posiciones en 16 bits con fracción: `fmt_u16` da resultado
      idéntico.

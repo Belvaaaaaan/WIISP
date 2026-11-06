@@ -5,6 +5,20 @@ la 0.5.17.2; antes se marcaban con `//arreglo`). Aquí va, por versión, qué
 se arregló o cambió y una descripción breve. El detalle está en
 `docs/CONTINUAR.md`.
 
+## 0.6.10
+
+El moteado del suelo de DBZ en GX: cada triángulo empieza por su vértice
+canónico.
+
+- `wii/gx_huellas.h`: `hz_canonico` (el vértice menor por y, x y z).
+- `wii/gx_ge.c`: `vc_rotar` en los tres caminos que mandan triángulos a GX
+  (el de referencia, `gx_triangle` y la tanda de `gx_triangles`), con el
+  color plano siguiendo a su vértice; la línea `gx_vertice_canonico` en
+  `[TIEMPOS]`. `prof_profundidad` mide el orden ya rotado.
+- `core/opt.h`, `core/opt.c`: `gx_vertice_canonico` (encendido).
+- `tests/test_huellas.c`, `tools/banco/mutaciones/0.6.10.txt`.
+- `hle/hle.h`, `dist/apps/wiisp/meta.xml`: versión 0.6.10.
+
 ## 0.6.9
 
 La copia parcial del destino de la mezcla doble, sin los índices A8, y la

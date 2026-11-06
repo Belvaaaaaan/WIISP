@@ -216,6 +216,7 @@ static u64 gm_px_copiados, gm_px_enteros;   //Arreglo
 static HzTabla *pz_tabla;   //Arreglo
 static u32 pz_epoca = 1, pz_rango;   //Arreglo
 static int pz_activo, pz_escribe, pz_prueba, pz_sup;   //Arreglo
+static unsigned vc_rotados;   //Arreglo
 static unsigned pz_tri[2], pz_sin_sitio, pz_cat[2][5], pz_estados[2], pz_estados_rotados[2], pz_marca;   //Arreglo
 static float pos_off;
 
@@ -3213,6 +3214,21 @@ static void gm_antes(const int32_t *x, const int32_t *y, int n, int va){
 }
 
 //Arreglo
+static inline void vc_rotar(const GeVertex **v, const GeVertex **c){
+	const int32_t x[3] = { v[0]->x, v[1]->x, v[2]->x }, y[3] = { v[0]->y, v[1]->y, v[2]->y }, z[3] = { v[0]->z, v[1]->z, v[2]->z };
+	const int k = hz_canonico(x, y, z);
+	const GeVertex *tv, *tc;
+	vc_rotados += k != 0;
+	if(k == 1){
+		tv = v[0]; v[0] = v[1]; v[1] = v[2]; v[2] = tv;
+		tc = c[0]; c[0] = c[1]; c[1] = c[2]; c[2] = tc;
+	} else if(k == 2){
+		tv = v[2]; v[2] = v[1]; v[1] = v[0]; v[0] = tv;
+		tc = c[2]; c[2] = c[1]; c[1] = c[0]; c[0] = tc;
+	}
+}
+
+//Arreglo
 static void pz_triangulo(const GeVertex *a, const GeVertex *b, const GeVertex *c){
 	const int32_t x[3] = { a->x, b->x, c->x }, y[3] = { a->y, b->y, c->y }, z[3] = { a->z, b->z, c->z };
 	int primero = 0, k;
@@ -3396,14 +3412,18 @@ static void __attribute__((noinline)) gx_triangle_ref_path(const GeVertex *v0, c
 	}
 	if(rtt_cur && tex_on) rtt_note_triangle(v0, v1, v2);
 	if(gm_activo) gm_triangulo(v0, v1, v2);   //Arreglo
-	if(pz_activo) pz_triangulo(v0, v1, v2);   //Arreglo
 	c = flat ? v2 : NULL;
-	k = tex_on && !through && tex_norm ? gx_tex_scale3(v0, v1, v2) : 1.0f;
-	GX_Begin(GX_TRIANGLES, GX_VTXFMT0, 3);
-	put_vertex(v0, c ? c : v0, k);
-	put_vertex(v1, c ? c : v1, k);
-	put_vertex(v2, c ? c : v2, k);
-	GX_End();
+	{   //Arreglo
+		const GeVertex *vv[3] = { v0, v1, v2 }, *cc[3] = { c ? c : v0, c ? c : v1, c ? c : v2 };   //Arreglo
+		if(opt_on[OPT_GX_VERTICE_CANONICO]) vc_rotar(vv, cc);   //Arreglo
+		if(pz_activo) pz_triangulo(vv[0], vv[1], vv[2]);   //Arreglo
+		k = tex_on && !through && tex_norm ? gx_tex_scale3(v0, v1, v2) : 1.0f;
+		GX_Begin(GX_TRIANGLES, GX_VTXFMT0, 3);
+		put_vertex(vv[0], cc[0], k);   //Arreglo
+		put_vertex(vv[1], cc[1], k);   //Arreglo
+		put_vertex(vv[2], cc[2], k);   //Arreglo
+		GX_End();
+	}   //Arreglo
 	drawn();
 }
 
@@ -3452,17 +3472,21 @@ static void gx_triangle(const GeVertex *v0, const GeVertex *v1, const GeVertex *
 	}
 	if(rtt_cur && tex_on) rtt_note_triangle(v0, v1, v2);
 	if(gm_activo) gm_triangulo(v0, v1, v2);   //Arreglo
-	if(pz_activo) pz_triangulo(v0, v1, v2);   //Arreglo
-	/* Antes de cargar el estado: así no se guarda en la pila para la llamada */
-	GX_Begin(GX_TRIANGLES, GX_VTXFMT0, 3);
-	l.tex_on = tex_on; l.through = through; l.tex_proj = tex_proj;
-	l.inv_tw = inv_tw; l.inv_th = inv_th; l.tex_su = tex_su; l.tex_sv = tex_sv; l.pos_off = pos_off;
-	l.k = tex_on && !through && tex_norm ? gx_tex_scale3(v0, v1, v2) : 1.0f;
 	c = flat ? v2 : NULL;
-	w = gx_vertex_fast(v0, c ? c : v0, &l); put_words(&w);
-	w = gx_vertex_fast(v1, c ? c : v1, &l); put_words(&w);
-	w = gx_vertex_fast(v2, c ? c : v2, &l); put_words(&w);
-	GX_End();
+	{   //Arreglo
+		const GeVertex *vv[3] = { v0, v1, v2 }, *cc[3] = { c ? c : v0, c ? c : v1, c ? c : v2 };   //Arreglo
+		if(opt_on[OPT_GX_VERTICE_CANONICO]) vc_rotar(vv, cc);   //Arreglo
+		if(pz_activo) pz_triangulo(vv[0], vv[1], vv[2]);   //Arreglo
+		/* Antes de cargar el estado: así no se guarda en la pila para la llamada */
+		GX_Begin(GX_TRIANGLES, GX_VTXFMT0, 3);
+		l.tex_on = tex_on; l.through = through; l.tex_proj = tex_proj;
+		l.inv_tw = inv_tw; l.inv_th = inv_th; l.tex_su = tex_su; l.tex_sv = tex_sv; l.pos_off = pos_off;
+		l.k = tex_on && !through && tex_norm ? gx_tex_scale3(v0, v1, v2) : 1.0f;
+		w = gx_vertex_fast(vv[0], cc[0], &l); put_words(&w);   //Arreglo
+		w = gx_vertex_fast(vv[1], cc[1], &l); put_words(&w);   //Arreglo
+		w = gx_vertex_fast(vv[2], cc[2], &l); put_words(&w);   //Arreglo
+		GX_End();
+	}   //Arreglo
 	if(opt_on[OPT_GE_VERIF]) verify_triangle(v0, v1, v2);
 	if(!listo || !tri_listo){
 		drawn();
@@ -3499,15 +3523,17 @@ static void gx_triangles(const GeTriCharola *t, int n){   //Arreglo
 	l.tex_on = tex_on; l.through = through; l.tex_proj = tex_proj;
 	l.inv_tw = inv_tw; l.inv_th = inv_th; l.tex_su = tex_su; l.tex_sv = tex_sv; l.pos_off = pos_off;
 	{
-		const int norm = tex_on && !through && tex_norm, fl = flat;
+		const int norm = tex_on && !through && tex_norm, fl = flat, vc_activo = opt_on[OPT_GX_VERTICE_CANONICO];   //Arreglo
 		for(; i < n; i++){
 			const GeVertex *a = t[i].v[0], *b = t[i].v[1], *c = t[i].v[2], *col = t[i].col;
+			const GeVertex *vv[3] = { a, b, c }, *cc[3] = { fl ? col : a, fl ? col : b, col };   //Arreglo
 			GxVtxWords w;
-			if(pz_activo) pz_triangulo(a, b, c);   //Arreglo
+			if(vc_activo) vc_rotar(vv, cc);   //Arreglo
+			if(pz_activo) pz_triangulo(vv[0], vv[1], vv[2]);   //Arreglo
 			l.k = norm ? gx_tex_scale3(a, b, c) : 1.0f;
-			w = gx_vertex_fast(a, fl ? col : a, &l); put_words(&w);
-			w = gx_vertex_fast(b, fl ? col : b, &l); put_words(&w);
-			w = gx_vertex_fast(c, col, &l); put_words(&w);
+			w = gx_vertex_fast(vv[0], cc[0], &l); put_words(&w);   //Arreglo
+			w = gx_vertex_fast(vv[1], cc[1], &l); put_words(&w);   //Arreglo
+			w = gx_vertex_fast(vv[2], cc[2], &l); put_words(&w);   //Arreglo
 		}
 	}
 	GX_End();
@@ -3890,6 +3916,8 @@ void gx_ge_rtt_report(char *buf, size_t size){
 		        gm_c_motivo[0], gm_c_motivo[1], gm_c_motivo[2], (unsigned long long)gm_filas_copiadas, (unsigned long long)gm_filas_cambiadas,
 		        gm_alfa_prims[0], (unsigned long long)gm_alfa_area[0], gm_alfa_prims[1], (unsigned long long)gm_alfa_area[1], gm_sin_copiar,
 		        (unsigned long long)gm_px_copiados, (unsigned long long)gm_px_enteros);   //Arreglo
+	if(len < size)   //Arreglo
+		len += (size_t)snprintf(buf + len, size - len, "gx_vertice_canonico: %u triangulos rotados para empezar por su vertice canonico\n", vc_rotados);   //Arreglo
 	if(len < size && opt_on[OPT_PROF_PROFUNDIDAD])   //Arreglo
 		len += (size_t)snprintf(buf + len, size - len,   //Arreglo
 		        "prof_profundidad: triangulos que escriben z %u, que no %u (sin sitio en la tabla %u); con prueba de z y escritura: "
@@ -4054,6 +4082,7 @@ void gx_ge_rtt_report(char *buf, size_t size){
 	memset(pz_estados, 0, sizeof(pz_estados));   //Arreglo
 	memset(pz_estados_rotados, 0, sizeof(pz_estados_rotados));   //Arreglo
 	pz_sin_sitio = 0;   //Arreglo
+	vc_rotados = 0;   //Arreglo
 	memset(gm_cuenta, 0, sizeof(gm_cuenta));   //Arreglo
 	rtt_pad_skips = 0;
 	hole_made = hole_filled = hole_skips = hole_rows_dl = hole_rows_up = 0;

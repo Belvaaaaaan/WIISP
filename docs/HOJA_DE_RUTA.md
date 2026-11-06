@@ -472,6 +472,11 @@ rectángulo de lo dibujado desde la copia anterior y sin los índices A8
 medida de si las capas del suelo llegan a GX con el mismo primer vértice
 (investigación en `Documentos/Copias_y_profundidad_en_GX.md`).
 
+Hecha (v0.6.10): `gx_vertice_canonico`: cada triángulo va a GX empezando
+por su vértice menor (por y, x y z), porque en GX la profundidad depende del
+primer vértice y en la PSP no; arregla el moteado de las capas del suelo de
+DBZ que repiten los triángulos del suelo en otro orden.
+
 Primera tanda acordada (todas "más barato", verificables en el PC):
 0.1 `prof_espera`, **skinning rápido** (`ge_skin_rapido`), **matrices al
 cambiar** (`ge_mtx_cache`), **color constante** (`ge_color_const`), 2.1

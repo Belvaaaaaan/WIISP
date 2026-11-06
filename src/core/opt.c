@@ -80,6 +80,7 @@ const OptInfo opt_info[OPT_N] = {
 	[OPT_GX_MASCARA_BITS] = { "gx_mascara_bits", 1, 1 },   //Arreglo
 	[OPT_GX_MEZCLA_PARCIAL] = { "gx_mezcla_parcial", 1, 1 },   //Arreglo
 	[OPT_GX_MEZCLA_SIN_A8] = { "gx_mezcla_sin_a8", 1, 1 },   //Arreglo
+	[OPT_GX_VERTICE_CANONICO] = { "gx_vertice_canonico", 1, 1 },   //Arreglo
 	[OPT_CPU_SIN_EXTRA]  = { "cpu_sin_extra",  1, 1 },
 	[OPT_CPU_PREDEC]     = { "cpu_predec",     1, 1 },
 	[OPT_CPU_VERIFICAR]  = { "cpu_verificar",  1, 0 },

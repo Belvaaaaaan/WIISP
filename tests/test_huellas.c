@@ -44,6 +44,26 @@ void test_huellas(void){
 			if(hz_huella(x, y, z, 3, &pr) == base) choques++;
 		}
 	}
+	{
+		long canon_mal = 0;
+		for(i = 0; i < 20000; i++){
+			int32_t x[3], y[3], z[3];
+			int k, r, pr, base = -1;
+			for(k = 0; k < 3; k++){ x[k] = (int32_t)(rnd() % 64); y[k] = (int32_t)(rnd() % 8); z[k] = (int32_t)(rnd() % 4); }
+			for(r = 0; r < 3; r++){
+				const int32_t rx[3] = { x[r], x[(r + 1) % 3], x[(r + 2) % 3] }, ry[3] = { y[r], y[(r + 1) % 3], y[(r + 2) % 3] },
+				              rz[3] = { z[r], z[(r + 1) % 3], z[(r + 2) % 3] };
+				const int c = hz_canonico(rx, ry, rz), o = (c + r) % 3;
+				const int32_t cx[3] = { rx[c], rx[(c + 1) % 3], rx[(c + 2) % 3] }, cy[3] = { ry[c], ry[(c + 1) % 3], ry[(c + 2) % 3] },
+				              cz[3] = { rz[c], rz[(c + 1) % 3], rz[(c + 2) % 3] };
+				if(base < 0) base = o;
+				else if(x[o] != x[base] || y[o] != y[base] || z[o] != z[base]) canon_mal++;
+				hz_huella(cx, cy, cz, 0, &pr);
+				if(pr != 0 && (cx[pr] != cx[0] || cy[pr] != cy[0] || cz[pr] != cz[0])) canon_mal++;
+			}
+		}
+		CHECK_EQ(canon_mal, 0);
+	}
 	CHECK_EQ(distinta, 0);
 	CHECK_EQ(primero_mal, 0);
 	CHECK(choques < 3);

@@ -1,0 +1,23 @@
+=== hz_canonico: sin mirar el tercer vertice
+@ src/wii/gx_huellas.h
+<<<
+	if(hz_menor(v[2], v[k])) k = 2;
+>>>
+	if(hz_menor(v[2], v[0])) k = 2;
+===
+=== hz_canonico: el mayor en vez del menor
+@ src/wii/gx_huellas.h
+<<<
+	int k = hz_menor(v[1], v[0]) ? 1 : 0;
+>>>
+	int k = hz_menor(v[0], v[1]) ? 1 : 0;
+===
+=== hz_menor: sin la z
+@ src/wii/gx_huellas.h
+<<<
+	return a[2] < b[2];
+}
+>>>
+	return 0;
+}
+===

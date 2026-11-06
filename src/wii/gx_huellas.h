@@ -25,6 +25,13 @@ static inline int hz_menor(const int32_t *a, const int32_t *b){
 	return a[2] < b[2];
 }
 
+static inline int hz_canonico(const int32_t *x, const int32_t *y, const int32_t *z){
+	const int32_t v[3][3] = { { x[0], y[0], z[0] }, { x[1], y[1], z[1] }, { x[2], y[2], z[2] } };
+	int k = hz_menor(v[1], v[0]) ? 1 : 0;
+	if(hz_menor(v[2], v[k])) k = 2;
+	return k;
+}
+
 static inline uint32_t hz_huella(const int32_t *x, const int32_t *y, const int32_t *z, uint32_t superficie, int *primero){
 	int32_t v[3][3];
 	int orden[3] = { 0, 1, 2 }, i, j;
