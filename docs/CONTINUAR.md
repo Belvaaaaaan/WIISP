@@ -4670,6 +4670,35 @@ velocidad de las cuatro en la pelea; los píxeles copiados; y en
 pareja con otro primer vértice (si son muchos, el vértice canónico de la
 0.6.10 debería quitar el moteado).
 
+### Resultado de la 0.6.9 en el Wii (DBZ: con / parcial / parcial_sin_a8 / una_copia)
+
+- Las cuatro se ven igual (dicho por el usuario).
+- `prueba_gx`: la copia por franjas de 4/8/16/68 filas es igual a la entera
+  en RGB8 y RGBA6; la comprobación de arranque, RGBA8 bien y A8 bien.
+  Tiempo por copia RGBA8 (us): 480x272 219, 480x64 52, 480x16 13, 480x4 5,
+  128x128 28, 64x64 7, 16x16 1: el coste crece con el área (~2,4 píxeles
+  por ciclo de GPU), sin un coste fijo apreciable. La copia de antes
+  (480x272 más los índices A8 de 512x272 y `GX_InvalidateTexAll`): 407 us.
+- Velocidad (con / parcial / parcial_sin_a8 / una_copia): el guion entero
+  133,3 / 97,6 / 97,6 / 98,0 s reales (63,2 / 86,2 / 86,2 / 85,9 %); la
+  pelea 3600-4200 24,9 / 39,2 / 39,2 / 39,0 %, 4200-4800 27,4 / 43,7 /
+  43,8 / 43,3 %, el final 21,4 / 34,7 / 34,7 / 34,5 %. **La copia parcial
+  llega al techo de una_copia**; quitar los índices A8 ya no cambia nada
+  (la GPU dejó de ser el cuello de botella). En la 0.6.8, "sin" el arreglo
+  daba 49,8 % en 4200-4800: el arreglo cuesta ahora ~6 puntos en vez de ~22.
+  Fuera de la pelea, igual (±1 %).
+- Píxeles copiados en 4200-4800: 1.139 millones de 6.456 (17,6 %); en la
+  ventana siguiente, 721 de 4.191 (17,2 %). Todas las copias de la mezcla
+  doble pedían los índices A8 (49.147 de 49.147).
+- `prof_profundidad`, triángulos con prueba de z que no escriben z (las
+  capas): en 4200-4800, pareja igual 54.091, **otro primer vértice
+  45.457**, sin pareja 49.030; en la ventana siguiente, igual 73.400,
+  **otro primer vértice 132.641**, sin pareja 23.361. Ninguno con otro
+  rango de z. Queda confirmado: muchas capas llegan a GX con los mismos
+  triángulos que el suelo pero empezando por otro vértice, que es lo que
+  hace fallar la prueba GEQUAL en GX (`wiisp_ztest`) y no en la PSP. Los
+  que escriben z casi nunca tienen pareja rotada (1 y 126).
+
 ### Para el siguiente chat (empezar aquí)
 
 Metodología acordada (detalle en `docs/HOJA_DE_RUTA.md`): primero medir
@@ -4703,11 +4732,9 @@ Metodología acordada (detalle en `docs/HOJA_DE_RUTA.md`): primero medir
   devkitPPC, perfil por función, psq_l emulado, A/B) y para leer los
   registros del Wii (`ventanas.py`): `tools/banco/LEEME.md`. El entorno
   (devkitPPC, qemu, pspautotests, PPSSPP): `tools/setup_entorno.sh`.
-- **Siguiente:** leer el resultado de la 0.6.9 (velocidad de con,
-  parcial, parcial_sin_a8 y una_copia; `prueba_gx` de la copia parcial;
-  `prof_profundidad`). Si las capas del suelo llegan con otro primer
-  vértice, la 0.6.10: el primer vértice canónico con su interruptor
-  (`Documentos/Copias_y_profundidad_en_GX.md`). Para más adelante:
+- **Siguiente:** la 0.6.10, el primer vértice canónico con su interruptor
+  (confirmado por `prof_profundidad` en la 0.6.9; ver
+  `Documentos/Copias_y_profundidad_en_GX.md`). Para más adelante:
   posiciones en 16 bits, tiras, `GX_InvalidateTexRegion` con una zona
   propia, un solo `GX_PixModeSync` por tanda y las capas sin solape.
   Después, vaciar la tabla de códigos del stencil en los borrados
