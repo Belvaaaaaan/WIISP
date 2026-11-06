@@ -4715,7 +4715,9 @@ pareja con otro primer vértice (si son muchos, el vértice canónico de la
 - Pruebas: x86 con ASan 0 fallos (`hz_canonico`: las tres rotaciones de
   20.000 triángulos con empates eligen el mismo vértice); mutaciones
   `0.6.10.txt` 3 de 3 detectadas. A/B con el CLI de GX en las 555 contra
-  la 0.6.9: ver abajo.
+  la 0.6.9: con `gx_vertice_canonico` apagado, 0 distintos; encendido
+  (solo la huella del FIFO), 29 distintos, todos con el mismo número de
+  triángulos y primitivas (solo cambia el orden de los vértices).
 
 Autotest (2 registros, capturas, el guion entero): sin (como la 0.6.9,
 `gx_vertice_canonico 0`) y con. Las dos con `prof_profundidad`. Qué mirar:
